@@ -1,0 +1,5 @@
+project	commit	role
+AmigaXDev	12e55cb4ea4fb4864776265eb2ea9afedae85d2b	setup conventions and shared port playbook
+Vette	b3074ba6784a834864c222db9b4f0ccabd38de03	Macintosh native-instruction port reference; no code copied
+Alone in the Dark	40e0fd1369da143a3dfe527ea1adf08ccf291e80	Macintosh runtime reuse reference; no code copied
+Prince of Persia 2	25e14aada45be33f9942c56b82450539fbe479f8	extraction, AppleDouble/AFI1 metadata, MacBinary HFS installer and MAME input helper adapted; System 7.5.5 drive archive and ADB modem ROM pins shared
