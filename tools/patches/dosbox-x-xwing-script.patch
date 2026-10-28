@@ -1,0 +1,261 @@
+diff --git a/src/hardware/pic.cpp b/src/hardware/pic.cpp
+index dc7d787..12de8c0 100644
+--- a/src/hardware/pic.cpp
++++ b/src/hardware/pic.cpp
+@@ -24,6 +24,8 @@
+ #include "callback.h"
+ #include "logging.h"
+ #include "pic.h"
++
++void XWING_ScriptTick();
+ #include "timer.h"
+ #include "setup.h"
+ #include "control.h"
+@@ -868,6 +870,9 @@ void TIMER_AddTick(void) {
+     if (time_limit_ms != 0 && PIC_Ticks >= time_limit_ms)
+         throw int(1);
+ 
++    /* X-Wing reference input script (src/misc/xwing_script.cpp) */
++    XWING_ScriptTick();
++
+     /* Go through the list of scheduled events and lower their index with 1000 */
+     PICEntry * entry=pic_queue.next_entry;
+     while (entry) {
+diff --git a/src/misc/Makefile.am b/src/misc/Makefile.am
+index e31e63f..dfcdf31 100644
+--- a/src/misc/Makefile.am
++++ b/src/misc/Makefile.am
+@@ -3,4 +3,4 @@ AM_CPPFLAGS = -I$(top_srcdir)/include -I$(top_srcdir)/src "-DRESDIR=\"$(resdir)\
+ resdir = $(datarootdir)/dosbox-x
+ 
+ noinst_LIBRARIES = libmisc.a
+-libmisc_a_SOURCES = clipboard.cpp cross.cpp ethernet.cpp ethernet_pcap.cpp ethernet_slirp.cpp ethernet_ethnet.cpp ethernet_nothing.cpp messages.cpp programs.cpp setup.cpp support.cpp regionalloctracking.cpp savestates.cpp shiftjis.cpp iconvpp.cpp mkdir_p.cpp
++libmisc_a_SOURCES = clipboard.cpp cross.cpp ethernet.cpp ethernet_pcap.cpp ethernet_slirp.cpp ethernet_ethnet.cpp ethernet_nothing.cpp messages.cpp programs.cpp setup.cpp support.cpp regionalloctracking.cpp savestates.cpp shiftjis.cpp iconvpp.cpp mkdir_p.cpp xwing_script.cpp
+diff --git a/src/misc/xwing_script.cpp b/src/misc/xwing_script.cpp
+new file mode 100644
+index 0000000..6710049
+--- /dev/null
++++ b/src/misc/xwing_script.cpp
+@@ -0,0 +1,222 @@
++/* X-Wing reference input script, ticked once per emulated millisecond.
++ *
++ * XWING_SCRIPT names a file of steps, one per line, run in order:
++ *   text <substring>     wait until the 80x25 text screen contains it
++ *   notext <substring>   wait until it no longer does
++ *   mode <hex>           wait until the BIOS video mode (0040:0049) equals it
++ *   delay <ms>           wait emulated milliseconds
++ *   key <name>...        press and release each key (50 ms hold, 100 ms gap)
++ *   swap <n>             insert floppy image n (1-based, imgmount order) in A:
++ *   shot                 take a screenshot of the next frame
++ *   vga <file>           write VGA state: a text header line, 768 DAC bytes (6-bit),
++ *                        then 256 KiB of video memory in DOSBox's plane-interleaved layout
++ *   done                 log DONE and stop the emulator
++ * XWING_SCRIPT_LOG names the log: one line per step with the emulated ms at
++ * which it started and completed. XWING_SCREEN_LOG names a log of the text screen,
++ * written every 250 ms whenever it changed. All timing is emulated, never wall-clock. */
++#include <cstdarg>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <map>
++#include <sstream>
++#include <string>
++#include <vector>
++
++#include "dosbox.h"
++#include "keyboard.h"
++#include "mem.h"
++#include "pic.h"
++#include "vga.h"
++
++void swapInDrive(int drive, unsigned int position);
++void CAPTURE_ScreenShotEvent(bool pressed);
++
++namespace {
++
++struct Step { std::string op, arg; };
++
++bool loaded = false;
++std::vector<Step> steps;
++size_t current = 0;
++bool started = false;
++Bitu step_start = 0;
++std::vector<KBD_KEYS> pending;
++size_t key_index = 0;
++Bitu key_at = 0;
++bool key_down = false;
++FILE *log_file = nullptr;
++FILE *screen_file = nullptr;
++std::string last_screen;
++
++const std::map<std::string, KBD_KEYS> &KeyNames() {
++	static std::map<std::string, KBD_KEYS> names;
++	if (names.empty()) {
++		const char *letters = "abcdefghijklmnopqrstuvwxyz";
++		const KBD_KEYS letter_keys[] = {KBD_a, KBD_b, KBD_c, KBD_d, KBD_e, KBD_f, KBD_g, KBD_h,
++			KBD_i, KBD_j, KBD_k, KBD_l, KBD_m, KBD_n, KBD_o, KBD_p, KBD_q, KBD_r, KBD_s, KBD_t,
++			KBD_u, KBD_v, KBD_w, KBD_x, KBD_y, KBD_z};
++		for (int i = 0; i < 26; i++) names[std::string(1, letters[i])] = letter_keys[i];
++		const KBD_KEYS digit_keys[] = {KBD_0, KBD_1, KBD_2, KBD_3, KBD_4, KBD_5, KBD_6, KBD_7,
++			KBD_8, KBD_9};
++		for (int i = 0; i < 10; i++) names[std::string(1, char('0' + i))] = digit_keys[i];
++		const KBD_KEYS f_keys[] = {KBD_f1, KBD_f2, KBD_f3, KBD_f4, KBD_f5, KBD_f6, KBD_f7,
++			KBD_f8, KBD_f9, KBD_f10, KBD_f11, KBD_f12};
++		for (int i = 0; i < 12; i++) names["f" + std::to_string(i + 1)] = f_keys[i];
++		names["enter"] = KBD_enter; names["space"] = KBD_space; names["esc"] = KBD_esc;
++		names["tab"] = KBD_tab; names["backspace"] = KBD_backspace;
++		names["up"] = KBD_up; names["down"] = KBD_down;
++		names["left"] = KBD_left; names["right"] = KBD_right;
++		names["lshift"] = KBD_leftshift; names["lctrl"] = KBD_leftctrl;
++		names["lalt"] = KBD_leftalt;
++	}
++	return names;
++}
++
++void Log(const char *fmt, ...) {
++	if (!log_file) return;
++	va_list args;
++	va_start(args, fmt);
++	fprintf(log_file, "%lu\t", (unsigned long)PIC_Ticks);
++	vfprintf(log_file, fmt, args);
++	fputc('\n', log_file);
++	fflush(log_file);
++	va_end(args);
++}
++
++[[noreturn]] void Fail(const std::string &why) {
++	Log("FAIL\t%s", why.c_str());
++	E_Exit("XWING SCRIPT / %s", why.c_str());
++}
++
++void Load() {
++	loaded = true;
++	const char *path = getenv("XWING_SCRIPT");
++	if (!path || !*path) return;
++	if (const char *log_path = getenv("XWING_SCRIPT_LOG"))
++		log_file = fopen(log_path, "w");
++	if (const char *screen_path = getenv("XWING_SCREEN_LOG"))
++		screen_file = fopen(screen_path, "w");
++	FILE *f = fopen(path, "r");
++	if (!f) Fail(std::string("cannot open ") + path);
++	char line[512];
++	while (fgets(line, sizeof line, f)) {
++		std::string s(line);
++		while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
++		if (s.empty() || s[0] == '#') continue;
++		const size_t space = s.find(' ');
++		Step step{s.substr(0, space), space == std::string::npos ? "" : s.substr(space + 1)};
++		static const char *ops[] = {"text", "notext", "mode", "delay", "key", "swap", "shot", "vga", "done"};
++		bool known = false;
++		for (const char *op : ops) known = known || step.op == op;
++		if (!known) Fail("unknown step: " + s);
++		if (step.op == "key") {
++			std::istringstream words(step.arg);
++			std::string name;
++			while (words >> name)
++				if (!KeyNames().count(name)) Fail("unknown key: " + name);
++		}
++		steps.push_back(step);
++	}
++	fclose(f);
++	Log("LOADED\t%u steps", (unsigned)steps.size());
++}
++
++std::string Screen() {
++	std::string screen(80 * 25, ' ');
++	for (unsigned i = 0; i < 80 * 25; i++) screen[i] = char(mem_readb(0xB8000 + i * 2));
++	return screen;
++}
++
++bool ScreenContains(const std::string &text) {
++	return Screen().find(text) != std::string::npos;
++}
++
++void LogScreen() {
++	if (!screen_file || PIC_Ticks % 250 != 0) return;
++	const std::string screen = Screen();
++	if (screen == last_screen) return;
++	last_screen = screen;
++	fprintf(screen_file, "@%lu mode=%02x\n", (unsigned long)PIC_Ticks, mem_readb(0x449));
++	for (unsigned row = 0; row < 25; row++) {
++		std::string line = screen.substr(row * 80, 80);
++		for (char &c : line) if ((unsigned char)c < 0x20 || (unsigned char)c > 0x7e) c = '.';
++		fprintf(screen_file, "|%s|\n", line.c_str());
++	}
++	fflush(screen_file);
++}
++
++/* Returns true when the current step has completed. */
++bool Run(const Step &step) {
++	if (step.op == "text") return ScreenContains(step.arg);
++	if (step.op == "notext") return !ScreenContains(step.arg);
++	if (step.op == "mode") return mem_readb(0x449) == strtoul(step.arg.c_str(), nullptr, 16);
++	if (step.op == "delay") return PIC_Ticks - step_start >= strtoul(step.arg.c_str(), nullptr, 10);
++	if (step.op == "swap") {
++		swapInDrive(0, (unsigned)strtoul(step.arg.c_str(), nullptr, 10));
++		return true;
++	}
++	if (step.op == "shot") {
++		CAPTURE_ScreenShotEvent(true);
++		return true;
++	}
++	if (step.op == "vga") {
++		FILE *f = fopen(step.arg.c_str(), "wb");
++		if (!f) Fail("cannot write " + step.arg);
++		const unsigned start = (unsigned(vga.crtc.start_address_high) << 8) | vga.crtc.start_address_low;
++		fprintf(f, "XWVGA ms=%lu mode=%02x seq_memory_mode=%02x crtc_start=%04x display_start=%lx\n",
++			(unsigned long)PIC_Ticks, mem_readb(0x449), vga.seq.memory_mode, start,
++			(unsigned long)vga.config.display_start);
++		for (unsigned i = 0; i < 256; i++) {
++			fputc(vga.dac.rgb[i].red, f); fputc(vga.dac.rgb[i].green, f); fputc(vga.dac.rgb[i].blue, f);
++		}
++		const uint32_t size = vga.mem.memsize < 0x40000 ? vga.mem.memsize : 0x40000;
++		fwrite(vga.mem.linear, 1, size, f);
++		fclose(f);
++		Log("VGA\t%s", step.arg.c_str());
++		return true;
++	}
++	if (step.op == "done") {
++		Log("DONE");
++		throw int(1);
++	}
++	/* key */
++	if (key_index == 0 && !key_down && pending.empty()) {
++		std::istringstream words(step.arg);
++		std::string name;
++		while (words >> name) pending.push_back(KeyNames().at(name));
++		key_at = PIC_Ticks;
++	}
++	if (PIC_Ticks < key_at) return false;
++	if (!key_down) {
++		KEYBOARD_AddKey(pending[key_index], true);
++		key_down = true;
++		key_at = PIC_Ticks + 50;
++		return false;
++	}
++	KEYBOARD_AddKey(pending[key_index], false);
++	key_down = false;
++	key_at = PIC_Ticks + 100;
++	if (++key_index < pending.size()) return false;
++	pending.clear();
++	key_index = 0;
++	return true;
++}
++
++}
++
++void XWING_ScriptTick() {
++	if (!loaded) Load();
++	LogScreen();
++	if (current >= steps.size()) return;
++	const Step &step = steps[current];
++	if (!started) {
++		started = true;
++		step_start = PIC_Ticks;
++		Log("BEGIN\t%u\t%s %s", (unsigned)current + 1, step.op.c_str(), step.arg.c_str());
++	}
++	if (!Run(step)) return;
++	Log("END\t%u", (unsigned)current + 1);
++	current++;
++	started = false;
++}

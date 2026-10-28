@@ -1,9 +1,12 @@
 # X-Wing
 
-Macintosh-to-Amiga port of the X-Wing demo, following Vette!, Alone in the Dark and
-Prince of Persia 2. Current scope is initial setup only: the demo is extracted, installed
-on a fresh System 7.5.5 volume and launched on an emulated 68040 Macintosh. No analysis
-or port work has started; read `docs/open-work.md` first.
+Amiga port of X-Wing. The base is the DOS floppy release 1.0; the Macintosh demo's 68k
+code is the intended donor of native routines, following Vette!, Alone in the Dark,
+Prince of Persia 2 and Secret Weapons of the Luftwaffe. Current scope is reference setup
+only. The DOS release is installed by its own installer and run under a scripted
+DOSBox-X. The Macintosh demo is installed on a fresh System 7.5.5 volume and launched on
+an emulated 68040 Macintosh. No analysis or port work has started; read
+`docs/open-work.md` first.
 
 ## Rules
 
@@ -15,7 +18,8 @@ or port work has started; read `docs/open-work.md` first.
   ROMs, System disks, PRAM, generated code or tables, disassembly, captures, traces,
   saves or emulator state. They live in ignored `tmp/` and `ref/`. Check
   `git status --ignored` before adding new files. Commit names and hashes only.
-- The original Macintosh execution is the ground truth. Preserve original game
+- The original DOS execution is the ground truth; the original Macintosh execution is the
+  ground truth for any donor 68k routine. Preserve original game
   decisions; implement the services it calls. Unknown calls, control flow, code writes,
   device accesses and interrupts are named loud stops, never guessed successes.
 - Correctness needs tests against the original and positive completion signals. A
@@ -34,7 +38,8 @@ or port work has started; read `docs/open-work.md` first.
 - `docs/open-work.md` is the only work queue; remove completed items in their commit.
   Docs describe the current state; history belongs in Git.
 - Names live in `disasm/symbols.csv` once analysis begins. Addresses use (segment,
-  offset) of the 68k CODE resources, never Amiga load addresses. Label evidence
+  offset) of the 68k CODE resources, or offsets relative to the DOS program's load segment
+  and overlay, never Amiga or emulator load addresses. Label evidence
   MEASURED, DERIVED or INFERRED.
 - Owner decisions live in `docs/design.md` and change only with owner authorization.
 
@@ -45,6 +50,7 @@ or port work has started; read `docs/open-work.md` first.
 | `README.md` | setting up a checkout: inputs to supply and the commands |
 | `docs/design.md` | choosing an approach or target; owner decisions |
 | `docs/source-inventory.md` | anything about the supplied archive and its contents |
+| `docs/dos-reference.md` | installing and running the DOS original under DOSBox-X |
 | `docs/mac-reference.md` | booting the original under MAME |
 | `docs/open-work.md` | before starting any work |
 

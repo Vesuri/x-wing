@@ -1,0 +1,34 @@
+# Original INSTALL.EXE from disk 1 into C:\XWING, driven by the text screen.
+# Steps are documented in src/misc/xwing_script.cpp of the patched DOSBox-X.
+text MAIN MENU
+delay 1000
+# Install X-Wing From Floppy Disks (the default selection)
+key enter
+text SELECT A DRIVE FOR INSTALLATION
+# the drive list replaces "One moment, please..." once the drives are scanned
+text a local fixed drive
+delay 500
+key enter
+text PLEASE CHOOSE YOUR INSTALLATION DIRECTORY
+delay 500
+# accept the default C:\XWING
+key enter
+text Please insert the X-Wing Disk 2
+swap 2
+delay 1000
+key enter
+text Please insert the X-Wing Disk 3
+swap 3
+delay 1000
+key enter
+text Please insert the X-Wing Disk 4
+swap 4
+delay 1000
+key enter
+text Please insert the X-Wing Disk 5
+swap 5
+delay 1000
+key enter
+notext Installing files
+text MAIN MENU
+done
