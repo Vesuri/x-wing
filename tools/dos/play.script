@@ -1,0 +1,10 @@
+# make dos-play on the period machine (PLAY_MACHINE) with the clock set: skip the intro,
+# freeze the copy-protection glyphs and answer them, then leave the keyboard to the
+# player. At 8,000 cycles/ms the question is manual page 16's right code, ALTAR.
+mode 13
+delay 5000
+key enter
+delay 20000
+key enter
+delay 3000
+key a l t a r enter

@@ -6,7 +6,8 @@ install    run the original INSTALL.EXE with the five images in A:, verify C:\\X
            keep it as tmp/dos/installed/XWING
 reference  run XWING.EXE from fresh copies of the installation: to the pinned intro
            frames, through the copy-protection check, and a wrong-answer control
-play       open a DOSBox-X window on a fresh copy of the installation
+play       open a DOSBox-X window on a fresh copy of the installation, as a period 386 that
+           answers the copy protection and then leaves the keyboard to the player
 
 Runs never reuse a directory: each gets ref/dosbox/runs/<name>. Inputs are driven by the
 patched DOSBox-X's script (tools/patches), triggered by guest state in emulated time.
@@ -34,8 +35,11 @@ IMAGES = [f'disk{n}.img' for n in range(1, 6)]
 # real-time throttle only: emulated time per instruction is unchanged.
 MACHINE = ['cpu core=normal', 'cpu cputype=386', 'cpu cycles=fixed 30000', 'dosbox memsize=16',
            'dosbox quit warning=false', 'sdl output=surface', 'mixer nosound=true']
-# The copy-protection question depends on the DOS clock, which otherwise starts at the host
-# time. DOS sets the RTC too; both then advance in emulated time.
+# A 386DX-class machine of 1993 for play: 8,000 cycles/ms, 4 MB, Sound Blaster Pro 2.
+PLAY_MACHINE = ['cpu core=normal', 'cpu cputype=386', 'cpu cycles=fixed 8000', 'dosbox memsize=4',
+                'dosbox quit warning=false', 'sdl output=surface', 'sblaster sbtype=sbpro2']
+# The copy-protection question depends on the CPU speed and the DOS clock, which otherwise
+# starts at the host time. DOS sets the RTC too; both then advance in emulated time.
 CLOCK = ['date 02-01-1993', 'time 12:00:00']
 GAME = ['c:', 'cd \\xwing', 'xwing']
 # Reference scenarios: script and the VGA dumps it writes, pinned as <scenario>/<dump>.
@@ -111,9 +115,9 @@ def new_run(kind, name):
     return run
 
 
-def dosbox(run, script, commands, limit_ms, deadline, headless=True):
+def dosbox(run, script, commands, limit_ms, deadline, headless=True, machine=MACHINE):
     """Run the emulator until the script's DONE; anything else is a named failure."""
-    settings = list(MACHINE)
+    settings = list(machine)
     if headless:
         settings += ['cpu turbo=true']
     else:
@@ -216,7 +220,8 @@ def play(name):
     verify_emulator()
     run = new_run('play', name)
     fresh_game(run)
-    process = dosbox(run, None, GAME, 0, 0, headless=False)
+    process = dosbox(run, ROOT / 'tools/dos/play.script', CLOCK + GAME, 0, 0, headless=False,
+                     machine=PLAY_MACHINE)
     print(f'PLAY: DOSBox-X pid {process.pid} on a fresh copy in', run.relative_to(ROOT))
 
 

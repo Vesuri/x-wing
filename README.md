@@ -31,7 +31,7 @@ make verify-input           # both archives and the manual
 make dos-emulator           # build the scripted DOSBox-X
 make dos-install            # five images, original INSTALL.EXE; prints INSTALL PASS
 make dos-reference          # intro frames, copy protection and its control; prints REFERENCE PASS
-make dos-play               # play the DOS game in a DOSBox-X window
+make dos-play               # play on a period 386; the copy protection is answered for you
 make extract-original-data  # Macintosh demo: both forks and Finder data into tmp/runtime-data
 make reference              # fresh volume, configure, restart, launch; prints REFERENCE PASS
 ```

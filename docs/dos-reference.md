@@ -113,9 +113,14 @@ The full reference reproduced the seven pinned hashes in four runs started over 
 three minutes. Without the clock commands, the intro frames reproduced across six runs
 started minutes apart; the commands changed only the title frame's hash.
 
-`make dos-play` opens a DOSBox-X window with sound on a fresh copy of the
-installation, using the same machine settings, unthrottled and without a script. It keeps
-the host clock, so the copy-protection question varies; answer it from the manual.
+`make dos-play` opens a DOSBox-X window with sound on a fresh copy of the installation,
+unthrottled, as a 1993 386DX-class machine (`PLAY_MACHINE`): 8,000 cycles/ms, 4 MB and a
+Sound Blaster Pro 2. It sets the same clock and runs `tools/dos/play.script`. That script
+skips the intro, freezes the copy-protection glyphs and answers, about 30 s after
+start, then leaves the keyboard and mouse to the player. On this machine the question is
+page 16's right code, ALTAR (MEASURED headless: the 8,000-cycle runs of the security and
+control scripts asked it, and only ALTAR was accepted). Input before then can change the
+question.
 
 Each run keeps `session.log`, `dosbox.log`, `script.log`, `screen.log`, `capture/`, the VGA
 dumps and the C: tree in `ref/dosbox/runs/<name>/`. Runs are never reused.

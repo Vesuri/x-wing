@@ -12,7 +12,7 @@ help:
 	@echo 'make dos-disks              extract the five DOS floppy images into tmp/dos/disks'
 	@echo 'make dos-install            run the original installer into tmp/dos/installed'
 	@echo 'make dos-reference          intro, copy protection and its control'
-	@echo 'make dos-play               open a DOSBox-X window on a fresh copy of the game'
+	@echo 'make dos-play               play on a period 386, copy protection answered'
 
 verify-input:
 	@shasum -a 256 -c manifest/originals.sha256
