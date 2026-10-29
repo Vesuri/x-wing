@@ -2,10 +2,11 @@
 
 The DOS floppy release runs under a patched DOSBox-X, driven unattended by a script
 that reacts to guest state in emulated time. `make dos-install` runs the original
-installer; `make dos-reference` runs the game to three pinned intro frames. Success is
+installer; `make dos-reference` runs the game to three pinned intro frames, through the
+copy-protection check to pilot registration, and a wrong-answer control. Success is
 `INSTALL PASS` / `REFERENCE PASS` from `tools/dos_reference.py`. Each needs the script's
 `DONE` and the pinned hashes; a time limit or emulator exit alone is never success. The
-reference stops in the opening crawl. No menu or flight milestone exists yet.
+reference stops at the registration screen. No concourse or flight milestone exists yet.
 
 ## Emulator
 
@@ -63,25 +64,58 @@ turbo runs produced identical trees. The verified tree is kept in
 
 ## Game
 
-`make dos-reference` copies the verified installation into a new run, then runs
-`C:` / `cd \xwing` / `xwing` with `tools/dos/intro.script`. XWING.EXE must start from its
-own directory: started as `xwing\xwing` it cannot open `resource\xwing.lfd` and returns
-to DOS. The script dumps VGA state 5, 20 and 40 s after the first switch to mode 13h. It
-then requires mode 13h to still be set; this fails for the wrong-directory launch, which
-never reaches `DONE`.
+`make dos-reference` runs three scenarios (`SCENARIOS` in the tool), each from a new copy
+of the verified installation in its own run. Each sets the DOS clock to 1 February 1993
+12:00:00 (`date 02-01-1993`, `time 12:00:00`), then runs `C:` / `cd \xwing` / `xwing`.
+XWING.EXE must start from its own directory: started as `xwing\xwing` it cannot open
+`resource\xwing.lfd` and returns to DOS. Every script ends by requiring mode 13h to still
+be set; this fails for the wrong-directory launch, which never reaches `DONE`.
 
 `tools/vga_dump.py` decodes a dump (header, 6-bit DAC, 256 KiB of DOSBox-X's
 plane-interleaved video memory) into the visible 320×200 frame. The pinned hash in
-`manifest/dos-reference.sha256` covers the frame bytes plus the 8-bit palette. MEASURED
-contents: the LucasArts logo with "LucasArts Entertainment Company", the opening crawl's
-first lines, and the crawl further on. The display uses chain-4 mode 13h at start address
-0. The three hashes reproduced across six runs, unthrottled and turbo, including runs
-started minutes apart.
-The DOS date still comes from the host clock; no later milestone tests whether it
-matters.
+`manifest/dos-reference.sha256`, named `<scenario>/<dump>`, covers the frame bytes plus the
+8-bit palette. All frames use chain-4 mode 13h at start address 0.
+
+### Intro
+
+`tools/dos/intro.script` presses nothing and dumps VGA state 5, 20 and 40 s after the
+first switch to mode 13h. MEASURED contents: the LucasArts logo with "LucasArts
+Entertainment Company", the opening crawl's first lines, and the crawl further on.
+Without the clock commands, the second frame catches the crawl's first lines at a
+different point (rows 165–199 differ); the program evidently times them from a clock
+whose phase depends on the start time.
+
+Keys during the intro (MEASURED): Esc opens the Options dialog (music, sound, transitions,
+spoken text, Exit to DOS); Space skips to the next scene; Enter skips the whole intro to
+the copy-protection dialog.
+
+### Copy protection
+
+After the intro, a "Copy Protection" dialog over the registration room cycles triples of
+glyphs with "Press to Continue". A key press freezes one triple and shows "See Manual
+Page n" with a text field and OK / Exit to DOS. The answer is the code-name printed under
+the same glyphs in a corner of that page ([source inventory](source-inventory.md#manual)).
+
+The triple chosen depends on the DOS clock (MEASURED). With the host clock, runs with the
+same script started at different host times got pages 4, 8 and two different frames
+again; two runs started in the same host second got the same page. With the clock set,
+every run so far has asked the same question.
+
+`tools/dos/security.script` presses Enter 5 s after mode 13h, Enter 20 s later, and dumps
+the question 3 s after that: page 16, glyphs matching the left corner's EHAPAH. It types
+`EHAPAH` and Enter. 3 s later the dialog is gone and the registration screen shows the
+protocol droid and an empty pilot-name field. `tools/dos/security-control.script` is the
+same run answering ALTAR, page 16's other code. The tool requires the control's question
+frame to equal the security run's and its answered frame to differ. The control's answered
+frame equals its question frame: the dialog stays and the field is cleared.
+
+The full reference reproduced the seven pinned hashes in four runs started over nearly
+three minutes. Without the clock commands, the intro frames reproduced across six runs
+started minutes apart; the commands changed only the title frame's hash.
 
 `make dos-play` opens a DOSBox-X window with sound on a fresh copy of the
-installation, using the same machine settings, unthrottled and without a script.
+installation, using the same machine settings, unthrottled and without a script. It keeps
+the host clock, so the copy-protection question varies; answer it from the manual.
 
 Each run keeps `session.log`, `dosbox.log`, `script.log`, `screen.log`, `capture/`, the VGA
 dumps and the C: tree in `ref/dosbox/runs/<name>/`. Runs are never reused.

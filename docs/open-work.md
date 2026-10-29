@@ -7,9 +7,9 @@ In playbook order. Only reference setup has been done.
    including how Macintosh 68k routines may be transplanted into the DOS base.
 2. Make the DOS reference loop reach named milestones past the intro and capture evidence.
    Acceptance: a bounded run reaches the concourse menu and a first flight frame, both
-   identified by guest state. It writes framebuffers read from video memory and an
-   interrupt, file and port trace, and reproduces their pinned hashes. A control shows
-   whether the host date reaches the game.
+   identified by guest state, past pilot registration, which the reference already
+   reaches. It writes framebuffers read from video memory and an interrupt, file and port
+   trace, and reproduces their pinned hashes.
 3. Map the DOS program statically and live.
    Acceptance: `XWING.EXE` and the two overlay formats are decoded. The runtime image is
    validated against the reference. The CPU mode, overlay mechanism, interrupt, DOS, EMS

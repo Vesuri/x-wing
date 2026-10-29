@@ -11,7 +11,7 @@ help:
 	@echo 'make dos-emulator           build the scripted DOSBox-X (tools/patches)'
 	@echo 'make dos-disks              extract the five DOS floppy images into tmp/dos/disks'
 	@echo 'make dos-install            run the original installer into tmp/dos/installed'
-	@echo 'make dos-reference          run the DOS game to the pinned intro frames'
+	@echo 'make dos-reference          intro, copy protection and its control'
 	@echo 'make dos-play               open a DOSBox-X window on a fresh copy of the game'
 
 verify-input:

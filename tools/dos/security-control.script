@@ -1,0 +1,15 @@
+# Control for security.script: the same run answering ALTAR, page 16's right code.
+# The dialog must stay and clear the field.
+mode 13
+# Enter skips the intro
+delay 5000
+key enter
+delay 20000
+key enter
+delay 3000
+vga question.vga
+key a l t a r enter
+delay 3000
+vga answered.vga
+mode 13
+done

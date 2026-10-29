@@ -1,7 +1,7 @@
 # Source inventory
 
-The owner supplied `000110_x-wing.7z`, the DOS floppy release, and `xwingdemo.sea__1.hqx`,
-the Macintosh X-Wing demo.
+The owner supplied `000110_x-wing.7z`, the DOS floppy release, its manual
+`X-Wing-Manual.pdf`, and `xwingdemo.sea__1.hqx`, the Macintosh X-Wing demo.
 
 ## DOS floppy release
 
@@ -21,6 +21,18 @@ the Macintosh X-Wing demo.
 
 `make dos-disks` and `make dos-install` ([DOS reference](dos-reference.md)) pin the
 images and the installed tree. Nothing else has been examined.
+
+### Manual
+
+| Property | Value | Evidence |
+|---|---|---|
+| File | `X-Wing-Manual.pdf`, 1,443,985 bytes, SHA-256 `d4596c98604a51d27d48a3aa7fa6aaac61b5f08ff129a391e7cdf0774e993a61` | MEASURED |
+| Contents | "Starfighter Pilot Manual": the cover and 8 two-page scans covering pages 2–17; no text layer; pages 18–20 and the back cover are absent | MEASURED |
+| Copy protection | each page from 3 to 17 has a code-name under three glyphs in both bottom corners, 30 in all ("Security Check", page 3) | MEASURED |
+
+The game shows one glyph triple and its page number and asks for the code-name
+([DOS reference](dos-reference.md#copy-protection)). Whether it also asks for codes on the
+missing pages is not known.
 
 ## Macintosh demo
 

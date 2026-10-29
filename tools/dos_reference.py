@@ -4,7 +4,8 @@
 disks      verify the pinned 7z and extract its five 1.44 MB images into tmp/dos/disks
 install    run the original INSTALL.EXE with the five images in A:, verify C:\\XWING and
            keep it as tmp/dos/installed/XWING
-reference  run XWING.EXE from a fresh copy of the installation to the pinned intro frames
+reference  run XWING.EXE from fresh copies of the installation: to the pinned intro
+           frames, through the copy-protection check, and a wrong-answer control
 play       open a DOSBox-X window on a fresh copy of the installation
 
 Runs never reuse a directory: each gets ref/dosbox/runs/<name>. Inputs are driven by the
@@ -33,6 +34,14 @@ IMAGES = [f'disk{n}.img' for n in range(1, 6)]
 # real-time throttle only: emulated time per instruction is unchanged.
 MACHINE = ['cpu core=normal', 'cpu cputype=386', 'cpu cycles=fixed 30000', 'dosbox memsize=16',
            'dosbox quit warning=false', 'sdl output=surface', 'mixer nosound=true']
+# The copy-protection question depends on the DOS clock, which otherwise starts at the host
+# time. DOS sets the RTC too; both then advance in emulated time.
+CLOCK = ['date 02-01-1993', 'time 12:00:00']
+GAME = ['c:', 'cd \\xwing', 'xwing']
+# Reference scenarios: script and the VGA dumps it writes, pinned as <scenario>/<dump>.
+SCENARIOS = {'intro': ('intro.script', ['logo.vga', 'title.vga', 'crawl.vga']),
+             'security': ('security.script', ['question.vga', 'answered.vga']),
+             'control': ('security-control.script', ['question.vga', 'answered.vga'])}
 
 
 def verify_emulator():
@@ -177,28 +186,37 @@ def reference(name, print_manifest):
     from vga_dump import frame, parse
     import hashlib
     verify_emulator()
-    run = new_run('reference', name)
-    fresh_game(run)
-    done = dosbox(run, ROOT / 'tools/dos/intro.script', ['c:', 'cd \\xwing', 'xwing'], 120_000, 300)
-    actual = {}
-    for dump in ('logo.vga', 'title.vga', 'crawl.vga'):
-        pixels, palette = frame(*parse((run / dump).read_bytes()))
-        actual[dump] = hashlib.sha256(pixels + palette).hexdigest()
+    base = name or 'reference-' + time.strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:8]
+    actual, runs = {}, []
+    for scenario, (script, dumps) in SCENARIOS.items():
+        run = new_run('reference', f'{base}-{scenario}')
+        fresh_game(run)
+        dosbox(run, ROOT / 'tools/dos' / script, CLOCK + GAME, 120_000, 300)
+        runs.append(run)
+        for dump in dumps:
+            pixels, palette = frame(*parse((run / dump).read_bytes()))
+            actual[f'{scenario}/{dump}'] = hashlib.sha256(pixels + palette).hexdigest()
     if print_manifest:
         for dump, digest in actual.items():
             print(digest + '  ' + dump)
         return
+    where = ', '.join(str(run.relative_to(ROOT)) for run in runs)
+    if actual['control/question.vga'] != actual['security/question.vga']:
+        raise ValueError(f'REFERENCE / CONTROL ASKED A DIFFERENT QUESTION; see {where}')
+    if actual['control/answered.vga'] == actual['security/answered.vga']:
+        raise ValueError(f'REFERENCE / WRONG ANSWER ACCEPTED; see {where}')
     if actual != pins(ROOT / 'manifest/dos-reference.sha256'):
-        raise ValueError(f'REFERENCE / FRAME MISMATCH; see {run.relative_to(ROOT)}')
-    print(f'REFERENCE PASS: intro logo, title and crawl frames match at {done} ms emulated;',
-          'run in', run.relative_to(ROOT))
+        changed = sorted(k for k in actual if actual[k] != pins(ROOT / 'manifest/dos-reference.sha256').get(k))
+        raise ValueError(f'REFERENCE / FRAME MISMATCH: {", ".join(changed)}; see {where}')
+    print('REFERENCE PASS: intro frames, copy-protection question and registration screen match;',
+          'the wrong-answer control keeps the dialog; runs in', where)
 
 
 def play(name):
     verify_emulator()
     run = new_run('play', name)
     fresh_game(run)
-    process = dosbox(run, None, ['c:', 'cd \\xwing', 'xwing'], 0, 0, headless=False)
+    process = dosbox(run, None, GAME, 0, 0, headless=False)
     print(f'PLAY: DOSBox-X pid {process.pid} on a fresh copy in', run.relative_to(ROOT))
 
 
