@@ -1,21 +1,32 @@
 # Open work
 
-In playbook order. Only reference setup has been done.
+Steps of the [port plan](port-plan.md), in order; P3–P9 follow there. Only reference setup
+has been done.
 
-1. Choose the Amiga target and confirm the approach with the owner.
-   Acceptance: target CPU, chipset, memory and release decisions are in `docs/design.md`,
-   including how Macintosh 68k routines may be transplanted into the DOS base.
-2. Make the DOS reference loop reach named milestones past the intro and capture evidence.
-   Acceptance: a bounded run reaches the concourse menu and a first flight frame, both
-   identified by guest state, past pilot registration, which the reference already
-   reaches. It writes framebuffers read from video memory and an interrupt, file and port
-   trace, and reproduces their pinned hashes.
-3. Map the DOS program statically and live.
-   Acceptance: `XWING.EXE` and the two overlay formats are decoded. The runtime image is
-   validated against the reference. The CPU mode, overlay mechanism, interrupt, DOS, EMS
-   and device surface are inventoried. The Secret Weapons of the Luftwaffe translator's
-   fit is assessed.
-4. Make the Macintosh reference reach named milestones and map its 68k CODE.
+1. P0: owner decisions and repo rules.
+   Acceptance: the Amiga target (CPU, chipset, Chip/Fast RAM floor), sound scope,
+   copy-protection handling in the port and Mac donor scope are in `docs/design.md`.
+   SWOTL's standing translator rules are in `AGENTS.md`. Its phase gates and translator
+   decisions are copied as X-Wing docs, each decision marked kept or changed. SWOTL's
+   commit is pinned in `manifest/references.tsv`. The generic lessons AmigaXDev lacks are
+   upstreamed there.
+2. P1: reference loop on SWOTL's tracer.
+   Acceptance:
+   - SWOTL's DOSBox-X patches and `pc_run.py` are adapted.
+   - Runs are unattended and byte-exact with pinned BIOS ticks.
+   - Every software interrupt is logged with registers in and out.
+   - Modules are attributed through X-Wing's overlay manager and the music drivers.
+   - The root and overlay images are reproduced from the files plus a loader model.
+   - The milestones in the plan are reached by guest state, through the heaviest combat
+     scene and exit to DOS.
+3. P2: static and live map.
+   Acceptance: the overlay manager is modelled and checked over every trace. The census in
+   the plan (opcodes, EMS, self-modifying code, indirect tables, hooked vectors, ports,
+   music driver interface, VGA use) is recorded with counts. Static map and traces agree;
+   zero executed bytes are unclassified; `docs/external-surface.md` exists. The Secret
+   Weapons of the Luftwaffe translator's fit is confirmed or the gaps listed.
+4. Make the Macintosh reference reach named milestones and map its 68k CODE (for P8's
+   donors).
    Acceptance: a bounded run reaches a positively identified game state by guest state,
    writes a framebuffer read from video memory and a trap log, and reproduces their pinned
    hashes. The CODE resources are classified and the trap surface inventoried, ready for a

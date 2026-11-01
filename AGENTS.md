@@ -49,6 +49,7 @@ an emulated 68040 Macintosh. No analysis or port work has started; read
 |---|---|
 | `README.md` | setting up a checkout: inputs to supply and the commands |
 | `docs/design.md` | choosing an approach or target; owner decisions |
+| `docs/port-plan.md` | the steps, what is copied from Secret Weapons of the Luftwaffe and why |
 | `docs/source-inventory.md` | anything about the supplied archive and its contents |
 | `docs/dos-reference.md` | installing and running the DOS original under DOSBox-X |
 | `docs/mac-reference.md` | booting the original under MAME |

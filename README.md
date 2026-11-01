@@ -38,4 +38,4 @@ make reference              # fresh volume, configure, restart, launch; prints R
 
 See [source inventory](docs/source-inventory.md), [DOS reference](docs/dos-reference.md),
 [Macintosh reference](docs/mac-reference.md),
-[design](docs/design.md), [open work](docs/open-work.md) and [agent rules](AGENTS.md).
+[design](docs/design.md), [port plan](docs/port-plan.md), [open work](docs/open-work.md) and [agent rules](AGENTS.md).

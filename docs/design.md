@@ -6,6 +6,7 @@
 |---|---|
 | Port X-Wing to the Amiga | Requested |
 | Base | The DOS floppy release 1.0 (320×200), owner decision 2026-10-28 |
+| Approach | Translate the DOS program offline to 68020 assembly as Secret Weapons of the Luftwaffe did, copying and adapting its translator, oracles, runtime, Amiga platform and release tooling rather than rewriting them (owner direction 2026-11-01); steps in [port plan](port-plan.md) |
 | Macintosh 68k demo | Donor of native 68k routines for parts that correspond to the DOS program, in the way Secret Weapons of the Luftwaffe used Their Finest Hour (owner direction, 2026-10-26); method and scope not decided |
 | Current scope | Reference setup only: the DOS release installed and run under DOSBox-X, and the Macintosh demo run on an emulated 68040 Macintosh; no analysis |
 | Reference machines | DOS: scripted DOSBox-X, 386 at fixed 30,000 cycles/ms ([DOS reference](dos-reference.md)). Macintosh: Quadra 700 (68040) under MAME, System 7.5.5 |
