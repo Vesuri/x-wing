@@ -6,6 +6,14 @@ platform layer. SWOTL's translator, oracles, harnesses, runtime, platform code a
 tooling are copied at a pinned commit and adapted; nothing they already do is rewritten.
 Steps are SWOTL's hard phase gates in order. `docs/open-work.md` carries the current step.
 
+Owner decisions (2026-11-01, [design](design.md)) that shape the steps:
+- **CPU:** 68030 minimum, 68040 recommended.
+- **Memory:** 8 MB Fast RAM is the target. The version started without WHDLoad uses as
+  little memory as it can.
+- **Sound:** AdLib for music and everything else. Sound Blaster PCM comes later (P10).
+- **Copy protection:** bypassed in the port.
+- **Mac 68k donors:** an optional route in the speed phase (P8).
+
 SWOTL is `Secret Weapons of Luftwaffe`, pinned at `658fc602e94f773456e06ff0ef1631981905967e`
 (release 0.93). Paths below are SWOTL paths unless they start with `X-Wing:`.
 
@@ -38,40 +46,55 @@ commits), much of it undoing early choices. X-Wing makes these choices on day on
 | The overlay manager is not SWOTL's Phoenix PLINK: no Phoenix copyright, different messages ("Cannot find/Open error/Read error on overlay file") | MEASURED | Reverse and model a new manager; `tools/plink_check.py` is rewritten |
 | `FRONTEND.OVL` holds 186+ instructions: 396 `enter n,0` and 965 `leave; ret` byte patterns (about 8 and 33 expected by chance); `FLIGHT.OVL` 64 and 1 | MEASURED patterns; opcode use INFERRED | SWOTL's decoder rejects 0Fh, C0h/C1h, 68h/6Ah, C8h/C9h (`translator/decode.py`); add 186/286 forms |
 | Six MZ music drivers (`ADLIB`, `ROLAND`, `GMIDI` and their `_W` variants, 19–26 KB) loaded at run time; `.LFD` music resources | MEASURED; iMUSE and the `_W` digital variants INFERRED | One more module class to translate, as SWOTL translated SPAZ |
-| Digitised speech and effects ("Spoken Text" option) through the Sound Blaster | MEASURED option; SB use INFERRED | SWOTL has no DSP, DMA or SB IRQ model: new runtime work |
+| Digitised speech and effects ("Spoken Text" option) through the Sound Blaster | MEASURED option; SB use INFERRED | SWOTL has no DSP, DMA or SB IRQ model: new runtime work, deferred to P10 |
 | 896K of EMS used | installer, MEASURED | EMS cost decision is critical |
-| Copy-protection question depends on the DOS clock and CPU speed | MEASURED ([DOS reference](dos-reference.md)) | Pinned clock in the reference; the port runs the original check |
+| Copy-protection question depends on the DOS clock and CPU speed | MEASURED ([DOS reference](dos-reference.md)) | Pinned clock in the reference, which answers from the manual; the port bypasses the check (P6) |
 | Microsoft C 1990 run-time, as SWOTL | MEASURED | SWOTL's `annotations/runtime.csv` names transfer by signature |
-| Macintosh demo's 68k CODE | [Macintosh reference](mac-reference.md) | Donor of native routines, as TFH's slave routines were for SWOTL (R35–F3b) |
+| Macintosh demo's 68k CODE | [Macintosh reference](mac-reference.md) | Optional donor of native routines in P8, as TFH's slave routines were for SWOTL (R35–F3b) |
 
-Memory (INFERRED): SWOTL turned about 406K of x86 into 1.36 MB of 68k code and used 1.06 MiB of
-guest RAM. At the same ratio X-Wing needs about 3.5 MB of code, 1 MiB of guest RAM and at
-least 896K of EMS store: about 6 MB of Fast RAM before caches. Its 8 MiB Fast floor is
-therefore tight; the target decision (P0) settles it.
+## Memory
+
+The original ran in 2 MB: 640K conventional memory plus 896K of EMS. SWOTL turned about
+406K of x86 into 1.36 MB of 68k code and used 1.06 MiB of guest RAM. At that ratio X-Wing
+needs about 3.5 MB of code, 1 MiB of guest RAM and 896K of EMS store: about 6 MB of Fast
+RAM before data and caches (INFERRED). That fits the 8 MB target with little margin. The
+version started without WHDLoad takes only what it uses. Every build reports its Chip and
+Fast high-water mark from P5 on (SWOTL `tools/hunk_size.py`), so growth is visible when it
+happens.
+
+Ways to use less, each measured before it is adopted:
+- **Overlay code per residency:** load an overlay's translated code only while the guest
+  has that overlay resident. FRONTEND and FLIGHT are both large; P2 shows whether they are
+  ever resident together. SWOTL keeps all overlay code resident (D2).
+- **Smaller code:** the cost model counts code bytes, so size and speed point the same way.
+  Use SWOTL's `outline` annotations for cold paths.
+- **Exact guest memory:** EMS store and guest RAM sized to what the game allocates and
+  reaches, not to the full 1 MiB space.
+- **Effect samples:** prerendered effects take Chip RAM (465 KB in SWOTL); price them
+  against live synthesis in P7.
 
 ## Steps
 
 Each step lists what is copied, what is adapted, what is new, and the gate. A step's
 gate passes before the next step's work is committed.
 
-### P0. Owner decisions and repo rules
+### P0. Repo rules and AmigaXDev lessons
 
-- Owner: Amiga target (CPU, chipset, Chip/Fast RAM floor; SWOTL: A1200, 68020, AGA,
-  8 MiB Fast, 68030 recommended), sound scope (AdLib music and effects, SB digital,
-  Roland/GM out?), copy-protection handling in the port, Mac donor scope.
-- Copy into X-Wing's `AGENTS.md`: SWOTL's standing translator rules (guest code only as
-  translator output, runtime named by surface item, HLE table, hard phase gates, loud stops,
-  "never compare the port with itself") and validation-scope rules.
+- Copy into X-Wing's `AGENTS.md`:
+  - SWOTL's standing translator rules: guest code only as translator output, runtime named
+    by surface item, the HLE table, hard phase gates, loud stops, "never compare the port
+    with itself";
+  - its validation-scope rules.
 - Copy `docs/phases.md` (gates 1–8) and `docs/translator-design.md` (D1–D16) as X-Wing
   docs. Each decision is marked kept or changed for X-Wing (D2 overlays, D8 interrupts, D9
   display, D10 sound change).
 - Record SWOTL's commit in `X-Wing:manifest/references.tsv`. Copied files keep a one-line
   provenance header naming SWOTL and the commit.
-- Upstream to AmigaXDev the generic lessons it lacks: asynchronous IRQ instead of polls,
+- Upstream to AmigaXDev the generic lessons it lacked: asynchronous IRQ instead of polls,
   EMS paging cost, the SMC cell cache, heavy-scene profiles, memory contract before mass
   generation. Then `make share`.
 
-Gate: owner decisions in `docs/design.md`; rules and copied docs committed.
+Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
 
 ### P1. Reference loop (gate 1)
 
@@ -92,7 +115,9 @@ Gate: owner decisions in `docs/design.md`; rules and copied docs committed.
     (pilot proving ground, historical combat, tour of duty, film room, tech room), first
     training flight, a first mission flight, the heaviest combat scene found (Star
     Destroyer battle), a film-room replay, saving a pilot, exit to DOS.
-  - Sound on: SB with AdLib, as installed.
+  - Sound: AdLib only until P10. DOSBox-X runs without a Sound Blaster and with OPL at
+    388h. The census confirms that the game then selects `ADLIB.IMS` and never touches the
+    DSP. Sound Blaster references are recorded in P10.
 - Gate:
   - Unattended runs repeat byte-exactly.
   - `events.csv` has `svc`/`svc_ret` for every software interrupt.
@@ -167,27 +192,35 @@ Gate: owner decisions in `docs/design.md`; rules and copied docs committed.
 
 ### P6. Whole game (gate 6)
 
-- Translate root, both overlays and the selected IMS driver.
+- Translate root, both overlays and `ADLIB.IMS`.
 - Runtime surfaces complete, exit path included.
 - Lockstep clean over every milestone on the host and on FS-UAE (`make test-amiga`).
-- The copy-protection check runs as translated original code.
-- Gate: all milestones in lockstep; zero unclassified; `indirect-coverage` reviewed.
+- Copy-protection bypass:
+  - P2 locates the check routine and the state its result decides.
+  - The bypass is one `annotations/hle.csv` entry: the guest range, the reason (owner
+    decision 2026-11-01) and the oracle. The check's code is still translated.
+  - Oracle: from the bypass on, the port's state equals the reference's after the correct
+    answer, apart from bytes listed with evidence as the dialog's own. Lockstep continues
+    from there, and the wrong-answer control still diverges.
+- Gate: all milestones in lockstep; zero unclassified; `indirect-coverage` reviewed; the
+  bypass oracle passes.
 
-### P7. Sound
+### P7. AdLib sound
 
 - Copy:
   - `src/platform/amiga/fm_paula.c`, `Audio.cpp` and `fm_effect_run.s`;
   - `src/runtime/sfx.c` (effect capture by running the original driver);
   - `tools/opl_render.cpp` and `fm_check.cpp` (Nuked OPL oracle);
   - the `t-fm*` gates.
-- New: an SB DSP, DMA and IRQ model feeding Paula samples, with its oracle the
-  reference's captured DSP stream.
-- Price the worst-case effect and speech before choosing live or prerendered playback.
-- Gate: OPL register streams and DSP streams match the reference per milestone; the FM
-  quality gates pass.
+- Adapt: the re-hoster to the OPL use of `ADLIB.IMS` (music) and the game's FM effects.
+- Price the worst-case effect before choosing live or prerendered playback, Chip RAM
+  included.
+- Gate: OPL register streams match the reference per milestone; the FM quality gates pass.
 
 ### P8. Speed (gate 7)
 
+- Measurement machine: the 68030 model; a 68040 run checks the recommended machine.
+  Frame-time targets are set with the owner when the first meter numbers exist.
 - Copy before any step: `tools/cost_meter.py`, `cost_model.json`, `profile_report.py`,
   `profile_tree.py`, `ab_runs.py`, the `BENCH` fixture method and `docs/perf-method.md`.
   Pin the FS-UAE build.
@@ -195,8 +228,10 @@ Gate: owner decisions in `docs/design.md`; rules and copied docs committed.
 - Translator rewrites already in SWOTL (`region`, `reuse`, `compact`, `reglive`, REP fast
   paths, `align`, `outline`) are on from the start; new work is priced first.
 - Native routines only through `annotations/hle.csv`, with owner authorization per
-  routine. Mac 68k donors are matched to DOS routines by a correspondence table and
+  routine.
+- Optional route, Mac 68k donors: matched to DOS routines by a correspondence table and
   validated against the DOS oracle, as TFH's routines were (`docs/native-compute.md`).
+  Taken only where the meter shows the translated routine costs more than the donor.
 - Gate: each step keeps fidelity gates green and moves the meter by a measured amount.
 
 ### P9. Release (gate 8)
@@ -210,10 +245,21 @@ Gate: owner decisions in `docs/design.md`; rules and copied docs committed.
 - Adapt: the installer reads the user's five floppies (SHA-256 pinned). It unpacks
   `XWING.001`–`.005`, a format not yet identified, natively or by documented means.
 - Gate:
-  - the CPU matrix (020, 030, 030+MMU, 040, 060) with CACR checks;
+  - the CPU matrix (030, 030+MMU, 040, 060) with CACR checks;
+  - WHDLoad on 8 MB Fast; the version started without WHDLoad measured down to its minimum
+    Fast RAM, which the ReadMe states;
   - save, exit and input scenarios;
   - the archive allowlist and the original-bytes scan;
   - a real-hardware pass for mouse, analog and digital joystick.
+
+### P10. Sound Blaster PCM
+
+- Record Sound Blaster references: the same milestones with an SB16 at 220h, IRQ 7, DMA 1,
+  plus the speech and digitised-effect scenes. The tracer logs DSP commands and DMA blocks.
+- Translate the `_W` driver the game selects with a Sound Blaster.
+- New: a DSP, DMA and IRQ model whose blocks play as Paula samples. Its oracle is the
+  captured DSP stream.
+- Gate: DSP command and sample streams match per milestone; AdLib gates unchanged.
 
 ## Working rules for speed of delivery
 
@@ -233,3 +279,4 @@ Gate: owner decisions in `docs/design.md`; rules and copied docs committed.
 | P3–P5 | 8 h | 1–2 days | Copied translator; 186/286 forms added |
 | P6 | 2 days | 1–2 weeks | Larger surface, SB, more milestones |
 | P7–P9 | 3 weeks | 1–2 weeks | Day-one choices remove most of SWOTL's rework; X-Wing's 3D is heavier |
+| P10 | none | 3–5 days | New DSP, DMA and IRQ model; one more driver |

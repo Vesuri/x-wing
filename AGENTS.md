@@ -1,12 +1,12 @@
 # X-Wing
 
-Amiga port of X-Wing. The base is the DOS floppy release 1.0; the Macintosh demo's 68k
-code is the intended donor of native routines, following Vette!, Alone in the Dark,
-Prince of Persia 2 and Secret Weapons of the Luftwaffe. Current scope is reference setup
-only. The DOS release is installed by its own installer and run under a scripted
-DOSBox-X. The Macintosh demo is installed on a fresh System 7.5.5 volume and launched on
-an emulated 68040 Macintosh. No analysis or port work has started; read
-`docs/open-work.md` first.
+Amiga port of X-Wing. The base is the DOS floppy release 1.0, translated offline to 68020
+assembly with Secret Weapons of the Luftwaffe's translator and runtime, copied and adapted
+(`docs/port-plan.md`). The Macintosh demo's 68k code is an optional donor of native routines
+in the speed phase. Current scope is reference setup only. The DOS release is installed by
+its own installer and run under a scripted DOSBox-X. The Macintosh demo is installed on a
+fresh System 7.5.5 volume and launched on an emulated 68040 Macintosh. No analysis or port
+work has started; read `docs/open-work.md` first.
 
 ## Rules
 

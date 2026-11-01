@@ -1,7 +1,7 @@
 # X-Wing
 
 Amiga port of LucasArts' X-Wing. The base is the 1993 DOS floppy release 1.0; the
-Macintosh demo's 68k code is the intended donor of native routines, following Vette!,
+Macintosh demo's 68k code is an optional donor of native routines, following Vette!,
 Alone in the Dark, Prince of Persia 2 and Secret Weapons of the Luftwaffe. Only reference
 setup exists. The DOS release is installed by its original installer and run unattended
 under a scripted DOSBox-X. The Macintosh demo is installed on a fresh System 7.5.5 volume
