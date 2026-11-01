@@ -19,22 +19,23 @@ SWOTL is `Secret Weapons of Luftwaffe`, pinned at `658fc602e94f773456e06ff0ef163
 
 ## What SWOTL's history says to do differently
 
-SWOTL produced pixels from generated code 28 hours after its first commit and was playable
-after 3 days. Most of the remaining 23 days before 0.90 went to speed (about half of all
-commits), much of it undoing early choices. X-Wing makes these choices on day one:
+SWOTL drew its first picture from generated code 28 hours after its first commit
+(`3ceb41a`), and had keyboard, mouse and a host-run flight on day 4. Most of the 23 days
+from there to 0.90 (dated 28 October) went to speed, about 40% of all commits, much of it
+undoing early choices. X-Wing makes these choices on day one:
 
 | Day-one choice | What SWOTL did late | SWOTL evidence |
 |---|---|---|
-| Memory contract v2: byte-reversed guest RAM, biased segment bases, SP/BP mirrored as offset ^ 7FFFh, undefined upper register words | Little-endian RAM with swaps, zero-extended registers; redesigned after release (R1b, R4, R5) | `docs/speed-plan.md` §5, commits 10-09 to 10-11 |
-| Asynchronous timer interrupt: the guest INT 08h handler runs from the CIA-B tick when guest IF is set, proved disjoint by `translator/irq.py`; sync points exist only in the test harness | Loop-head polls cost 8.6–11.7% of CPU and blocked six native routines; removed by irq-plan I1–I11 | `docs/irq-plan.md`, `5bec0b6`, `f790ab0` |
-| EMS map as cheap as a PC page-table change: long-word copies, identical remaps skipped, or no copy at all | Byte-wise 2×16 KB copies were 25% of CPU in bomber scenes, found on 10-23 | `e19a510` (F1, −27.7%) |
+| Memory contract v2: byte-reversed guest RAM, biased segment bases, SP/BP mirrored as offset ^ 7FFFh, undefined upper register words | Little-endian RAM with swaps, zero-extended registers, flags in memory. Block-local speed steps under that contract yielded 1.19% from a 19.9% group. Redesigned on days 8–10, after mass generation (R1b −1.9%, R4 −2.6%, R5 −2.0%), re-plumbing the harness | `docs/speed-plan.md` §5, `276a0dd`, `f8da724`, `714d61e` |
+| Asynchronous timer interrupt: the guest INT 08h handler runs from the CIA-B tick when guest IF is set, proved disjoint by `translator/irq.py`; sync points exist only in the test harness | Polls at 2,096 loop heads: 5.15% of the meter's cycles, and native routines needed exact-poll scopes that kept several unpriceable (R39, R43). Removed by irq-plan I1–I11: frames 330 → 300 ms (−9.1%) | `docs/irq-plan.md`, `f790ab0` |
+| EMS map as cheap as a PC page-table change: long-word copies, identical remaps skipped, or no copy at all | Two byte-wise 16 KB copies per map, 240K cycles each: about 25% of the cycles in close-bomber windows, found by the flyby profile on 10-23 | `docs/speed-plan.md` F0, `e19a510` (F1, −27.7%) |
 | Full machine takeover; dirty rows from the graphics code's own A000h stores; present at the game's per-frame call; two Chip bitmaps with their own copper lists | Display rebuilt four times (WritePixelArray8, timed c2p, dirty rows, double buffer, frame boundary) | `749b4ba`, `90ae46d`, `a86b15c`, `deec51c` |
 | Deterministic cost meter and fixed-work bench before any speed step; price in code bytes and memory accesses (cycles ≈ 1.09·bytes + 2.27·reads + 3.07·writes) | Round 1 judged on frame times: trajectory modes and ±0.7% layout noise made verdicts noise | `docs/speed-plan.md` §5–6, M1 `b9b6374` |
 | Profile several heavy scenes from the start, not the opening frames | 2.5 weeks tuned on one fixture | flyby profile `4838add` |
 | Worst-case sound effect priced first; effects prerendered at start-up by running the original driver | Live FM synthesis; one cannon shot cost ~19 M cycles; prerendering came after release | `b87259e`, `8f963ac` |
 | Exit to DOS, save files and every input device are milestones before the first release | EMS release (AH=45h), mode 3 on exit, mouse per request, joystick axes all fixed after 0.90 | `c3b06de`, `a1ddde0`, `4f2e480` |
 | Emulator builds pinned before the first baseline | FS-UAE x86_64 → arm64 invalidated every number | `f10fde2` |
-| Gates chosen by what changed; Unicorn never hooked per instruction | Full gates 66–82 min; per-instruction hooks 291 s vs 43 s | `d4d254e`, `9d7600d` |
+| Gates chosen by what changed; Unicorn never hooked per instruction | Serial checks: `make test` 22:50 → 4:38 in parallel; Unicorn's count hook made a host run 291 s instead of 43 s; change-scoped gates only from day 19 | `9d7600d`, `d4d254e` |
 | Self-modifying code regions found in the map; cached cell walk with exact invalidation; every indirect transfer into them range-checked | Cell walk, then counted runs, then cell cache; a `call dx` crash after two minutes of play | `0d781dc`, `ccfa585`, `0020902`, `df529b7` |
 
 ## X-Wing facts that change the work
