@@ -32,8 +32,9 @@ work has started; read `docs/open-work.md` first.
   by name. `~/.local` and `~/.local/share/amiga` are the allowed conventions.
 - Pin inputs by SHA-256 or commit in `manifest/` and verify them before use. Leave the
   originals untouched; a differing output moves to `.replaced/`, never deleted.
-- Before implementing a service, inspect Vette!, Alone in the Dark and Prince of
-  Persia 2 and reuse their code through AmigaXDev's shared helpers.
+- Before implementing a service, copy it from Secret Weapons of the Luftwaffe where it
+  exists there (`docs/port-plan.md`). Otherwise inspect Vette!, Alone in the Dark and
+  Prince of Persia 2 and reuse their code through AmigaXDev's shared helpers.
 - Shell scripts must work with macOS `/bin/bash` 3.2.
 - `docs/open-work.md` is the only work queue; remove completed items in their commit.
   Docs describe the current state; history belongs in Git.
@@ -43,6 +44,46 @@ work has started; read `docs/open-work.md` first.
   MEASURED, DERIVED or INFERRED.
 - Owner decisions live in `docs/design.md` and change only with owner authorization.
 
+## Translator rules
+
+Copied from Secret Weapons of the Luftwaffe's standing rules at the commit pinned in
+`manifest/references.tsv`.
+
+- Guest code reaches the Amiga only as translator output. Never hand-port a guest routine
+  to C or assembly, never edit generated files and never fix output by hand: fix the
+  translator or `annotations/` and regenerate.
+- Hand-written code is the runtime and platform layer only, named by the surface item it
+  implements (DOS service, port, interrupt, device), never by guest address. Replacing a
+  guest routine natively, the copy-protection bypass included, needs an
+  `annotations/hle.csv` entry with its reason and oracle.
+- Phase gates in `docs/phases.md` are hard. A milestone counts only if its pixels come
+  from generated code.
+- Unknown control flow, code writes, ports and interrupts fail loudly.
+- Tests settle correctness: x86 semantics against Unicorn, generated 68k on the host 68k
+  core, the whole game in lockstep with DOSBox-X. Never compare the port with itself.
+- Reusable scripts live in `tools/` and are named in the doc that uses them. The method
+  behind every committed number is in a committed tool or its commit message. A script
+  stays in `tmp/` only if nothing committed names or relies on it.
+
+## Validation scope
+
+Copied from Secret Weapons of the Luftwaffe, as above.
+
+- Run only the gates relevant to the changed code and its affected callers, consumers and
+  shared contracts. State the selected checks and why before running them.
+- Translator or shared runtime changes: the affected differential, guard and sabotage
+  tests and the relevant original-game host and replay fixtures. Broaden when shared
+  memory, flags, control flow, interrupts or other cross-cutting contracts change.
+- Audio-only changes: the FM waveform, quality, envelope and allocation checks, backend
+  integration where affected, and their sabotage. Build and smoke the Amiga image for
+  platform changes. Do not rerun translator, DOS, file, input or whole-game suites for
+  isolated audio synthesis.
+- Docs-only changes: consistency and diff checks. Build and release changes: the affected
+  builds, image audits and launch and package checks.
+- Keep every selected check, oracle and tolerance. Scope by dependencies, never by
+  whether a test passes. Run the full gate suite only when the impact spans its suites or
+  the owner asks. Green results for unchanged inputs stand.
+
 ## Project docs
 
 | Document | Read when |
@@ -50,6 +91,8 @@ work has started; read `docs/open-work.md` first.
 | `README.md` | setting up a checkout: inputs to supply and the commands |
 | `docs/design.md` | choosing an approach or target; owner decisions |
 | `docs/port-plan.md` | the steps, what is copied from Secret Weapons of the Luftwaffe and why |
+| `docs/phases.md` | before committing work of a new phase: the hard gates |
+| `docs/translator-design.md` | translator, runtime or test contract; each SWOTL decision kept or changed |
 | `docs/source-inventory.md` | anything about the supplied archive and its contents |
 | `docs/dos-reference.md` | installing and running the DOS original under DOSBox-X |
 | `docs/mac-reference.md` | booting the original under MAME |

@@ -3,5 +3,5 @@ AmigaXDev	12e55cb4ea4fb4864776265eb2ea9afedae85d2b	setup conventions and shared 
 Vette	b3074ba6784a834864c222db9b4f0ccabd38de03	Macintosh native-instruction port reference; no code copied
 Alone in the Dark	40e0fd1369da143a3dfe527ea1adf08ccf291e80	Macintosh runtime reuse reference; no code copied
 Prince of Persia 2	25e14aada45be33f9942c56b82450539fbe479f8	extraction, AppleDouble/AFI1 metadata, MacBinary HFS installer and MAME input helper adapted; System 7.5.5 drive archive and ADB modem ROM pins shared
-Secret Weapons of Luftwaffe	12c6e74ba548708441b19675ba67d84b8907f608	DOSBox-X tag and build_dosbox_x.sh adapted; headless DOSBox-X conventions
+Secret Weapons of Luftwaffe	658fc602e94f773456e06ff0ef1631981905967e	release 0.93; translator, runtime, Amiga platform and release tooling copied and adapted per docs/port-plan.md; standing rules, docs/phases.md and docs/translator-design.md copied; DOSBox-X tag and build_dosbox_x.sh adapted; headless DOSBox-X conventions
 DOSBox-X	4f19017c5f565dc40d01fede0f1382892e7243d7	dosbox-x-v2026.08.31, patched by tools/patches for the DOS reference
