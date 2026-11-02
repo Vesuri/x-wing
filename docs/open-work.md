@@ -3,16 +3,13 @@
 Steps of the [port plan](port-plan.md), in order; P3–P10 follow there. Reference setup and
 the repo rules (P0) are in place.
 
-1. P1: reference loop on SWOTL's tracer.
+1. P1: the two milestones not yet reached ([DOS reference](dos-reference.md#not-yet-reached)).
+   The rest of P1 is in place: `make dos-reference` passes 17 pinned milestones.
    Acceptance:
-   - SWOTL's DOSBox-X patches and `pc_run.py` are adapted.
-   - Runs are unattended and byte-exact with pinned BIOS ticks, on an AdLib-only machine
-     (no Sound Blaster) on which the game selects `ADLIB.IMS`.
-   - Every software interrupt is logged with registers in and out.
-   - Modules are attributed through X-Wing's overlay manager and the music drivers.
-   - The root and overlay images are reproduced from the files plus a loader model.
-   - The milestones in the plan are reached by guest state, through the heaviest combat
-     scene and exit to DOS.
+   - A film-room replay: a flight is ended and its film played back in the film room.
+   - A Star Destroyer battle, or the heaviest combat scene a reachable pilot state allows,
+     chosen by a measured cost rather than instructions per frame, which the frame cap
+     makes constant.
 2. P2: static and live map.
    Acceptance: the overlay manager is modelled and checked over every trace. The census in
    the plan (opcodes, EMS, self-modifying code, indirect tables, hooked vectors, ports,

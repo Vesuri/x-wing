@@ -1,0 +1,92 @@
+Copied from Secret Weapons of the Luftwaffe tools/patches/dosbox-x-swotl-irq0-backlog.patch at 658fc602e94f773456e06ff0ef1631981905967e;
+SWOTL/swotl renamed XWING/xwing. X-Wing's changes are in dosbox-x-xwing-game.patch.
+--- a/src/hardware/pic.cpp
++++ b/src/hardware/pic.cpp
+@@ -114,6 +114,8 @@
+ static PIC_Controller pics[2];
+ static PIC_Controller& master = pics[0];
+ static PIC_Controller& slave  = pics[1];
++unsigned xwing_irq0_backlog = 0;
++bool xwing_irq0_owed = false;   /* the pending IRQ0 was deliverable at an instruction */
+ Bitu PIC_Ticks = 0;
+ Bitu PIC_IRQCheck = 0; //Maybe make it a bool and/or ensure 32bit size (x86 dynamic core seems to assume 32 bit variable size)
+ Bitu PIC_IRQCheckPending = 0; //Maybe make it a bool and/or ensure 32bit size (x86 dynamic core seems to assume 32 bit variable size)
+@@ -423,6 +425,7 @@
+     Bitu t = irq>7 ? (irq - 8): irq;
+     PIC_Controller * pic=&pics[irq>7 ? 1 : 0];
+ 
++    if (irq == 0 && !(master.irr & 1)) xwing_irq0_owed = false;   /* XWING_POLLS: a new request */
+     pic->raise_irq(t);
+ }
+ 
+@@ -444,6 +447,12 @@
+ 
+     Bitu t = irq>7 ? (irq - 8): irq;
+     PIC_Controller * pic=&pics[irq>7 ? 1 : 0];
++    /* XWING_POLLS: a pending IRQ0 that only the gate held is kept, not dropped;
++     * others merge as without the gate */
++    if (xwing_irq_gate && irq == 0 && (master.irr & 1) && xwing_irq0_owed) {
++        ++xwing_irq0_backlog;
++        xwing_irq0_owed = false;
++    }
+     pic->lower_irq(t);
+ }
+ 
+@@ -537,6 +546,23 @@
+ static void inline master_startIRQ(Bitu i){
+     master.start_irq(i);
+     CPU_HW_Interrupt(master.vector_base + i);
++}
++
++/* XWING_POLLS: raise one held IRQ0 again once its request bit is free. */
++void XWING_Irq0Refill(void) {
++    if (!xwing_irq0_backlog || (master.irr & 1)) return;
++    --xwing_irq0_backlog;
++    xwing_irq0_owed = false;
++    master.lower_irq(0);
++    master.raise_irq(0);
++    /* at once (not after PIC_irq_delay_ns): every owed tick before the sync access */
++    if (master.irr & master.imrr & master.isrr & 1) PIC_IRQCheck = 1;
++}
++
++/* XWING_POLLS, before each instruction with IF set: the ungated machine would
++ * take a pending, unmasked IRQ0 not in service here. */
++void XWING_Irq0Check(void) {
++    if (master.irr & master.imrr & master.isrr & 1) xwing_irq0_owed = true;
+ }
+ 
+ void PIC_runIRQs(void) {
+--- a/src/misc/xwing_trace.cpp
++++ b/src/misc/xwing_trace.cpp
+@@ -821,9 +821,13 @@
+ }
+ 
+ bool XWING_IrqPoint(const uint32_t linear) {
+-	if (!xwing_active || !GETFLAG(IF) || !PIC_IRQCheck) return false;
++	if (!xwing_active || !GETFLAG(IF)) return false;
++	XWING_Irq0Check();
++	if (!PIC_IRQCheck && !xwing_irq0_backlog) return false;
+ 	const Location here = Locate(linear);
+ 	if (!IsPoll(here)) return false;
++	XWING_Irq0Refill();
++	if (!PIC_IRQCheck) return false;
+ 	irq_vector = -1;
+ 	xwing_irq_open = true;
+ 	PIC_runIRQs();
+--- a/include/xwing_trace.h
++++ b/include/xwing_trace.h
+@@ -8,6 +8,14 @@
+ extern bool xwing_active;
+ /* XWING_POLLS: hardware interrupts only through XWING_IrqPoint (pic.cpp gate). */
+ extern bool xwing_irq_gate, xwing_irq_open;
++/* IRQ0 edges that only the gate held while one was pending (pic.cpp
++ * PIC_DeActivateIRQ; owed: it was deliverable at an instruction, XWING_Irq0Check):
++ * each is raised again by XWING_Irq0Refill, so the gate merges no PIT tick the
++ * ungated machine would have taken. */
++extern unsigned xwing_irq0_backlog;
++extern bool xwing_irq0_owed;
++void XWING_Irq0Refill(void);
++void XWING_Irq0Check(void);
+ /* Before an instruction: true if a hardware interrupt was taken instead. */
+ bool XWING_IrqPoint(uint32_t linear);
+ 

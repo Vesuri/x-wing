@@ -1,0 +1,26 @@
+# Original INSTALL.EXE from C:\XWING: "Set Sound Board Configuration" -> "AdLib and
+# compatibles", then Exit, declining the READ.ME. Leaving the installer writes LANDRU.CFG
+# and OPTIONS.CFG. Steps are documented in src/misc/xwing_script.cpp of the patched DOSBox-X.
+text MAIN MENU
+delay 1000
+key down
+delay 500
+key enter
+text SOUND CARD MENU
+delay 1000
+# No Sound is first; AdLib and compatibles second
+key down
+delay 500
+key enter
+text Sound Card Setting:        AdLib
+delay 1000
+# Exit is the fifth main-menu item
+key down down down down
+delay 500
+key enter
+text Do you wish to read it now?
+delay 500
+key n
+notext Do you wish to read it now?
+delay 3000
+done

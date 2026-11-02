@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-reference dos-play
+.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -11,7 +11,9 @@ help:
 	@echo 'make dos-emulator           build the scripted DOSBox-X (tools/patches)'
 	@echo 'make dos-disks              extract the five DOS floppy images into tmp/dos/disks'
 	@echo 'make dos-install            run the original installer into tmp/dos/installed'
-	@echo 'make dos-reference          intro, copy protection and its control'
+	@echo 'make dos-configure          select AdLib in the installer; tmp/dos/configured/XWING'
+	@echo 'make dos-reference          run and check every milestone (reference/milestones.csv)'
+	@echo 'make dos-run RUN=n ARGS=..  one traced run (tools/pc_run.py) in ref/dosbox/runs/n'
 	@echo 'make dos-play               play on a period 386, copy protection answered'
 
 verify-input:
@@ -35,8 +37,14 @@ dos-disks: verify-input
 dos-install: dos-disks
 	@$(ENV) python3 tools/dos_reference.py install
 
+dos-configure:
+	@$(ENV) python3 tools/dos_reference.py configure
+
 dos-reference:
-	@$(ENV) python3 tools/dos_reference.py reference
+	@$(ENV) python3 tools/reference.py
+
+dos-run:
+	@$(ENV) python3 tools/pc_run.py $(RUN) $(ARGS)
 
 dos-play:
 	@$(ENV) python3 tools/dos_reference.py play

@@ -21,7 +21,7 @@ if [ "${1:-}" = "--reset" ]; then
 	git reset -q --hard "$COMMIT"
 	git clean -fdxq
 fi
-if git diff --quiet HEAD -- . ':!*.in' && [ ! -e src/misc/xwing_script.cpp ]; then
+if git diff --quiet HEAD -- . ':!*.in' && [ ! -e src/misc/xwing_trace.cpp ]; then
 	while read -r patch; do
 		git apply "$REPO/tools/patches/$patch"
 	done < "$REPO/tools/patches/ORDER"

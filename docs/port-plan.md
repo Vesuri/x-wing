@@ -49,7 +49,7 @@ undoing early choices. X-Wing makes these choices on day one:
 | Six MZ music drivers (`ADLIB`, `ROLAND`, `GMIDI` and their `_W` variants, 19–26 KB) loaded at run time; `.LFD` music resources | MEASURED; iMUSE and the `_W` digital variants INFERRED | One more module class to translate, as SWOTL translated SPAZ |
 | Digitised speech and effects ("Spoken Text" option) through the Sound Blaster | MEASURED option; SB use INFERRED | SWOTL has no DSP, DMA or SB IRQ model: new runtime work, deferred to P10 |
 | 896K of EMS used | installer, MEASURED | EMS cost decision is critical |
-| Copy-protection question depends on the DOS clock and CPU speed | MEASURED ([DOS reference](dos-reference.md)) | Pinned clock in the reference, which answers from the manual; the port bypasses the check (P6) |
+| Copy-protection question depends on the DOS clock and CPU speed | MEASURED ([DOS reference](dos-reference.md#copy-protection)) | Pinned BIOS ticks in the reference, which answers from the manual; the port bypasses the check (P6) |
 | Microsoft C 1990 run-time, as SWOTL | MEASURED | SWOTL's `annotations/runtime.csv` names transfer by signature |
 | Macintosh demo's 68k CODE | [Macintosh reference](mac-reference.md) | Optional donor of native routines in P8, as TFH's slave routines were for SWOTL (R35–F3b) |
 

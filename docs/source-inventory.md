@@ -20,7 +20,8 @@ The owner supplied `000110_x-wing.7z`, the DOS floppy release, its manual
 | Stated requirements | DOS 3.1+, VGA or MCGA, 550K main memory; uses EMS, not XMS | installer, `READ.ME` |
 
 `make dos-disks` and `make dos-install` ([DOS reference](dos-reference.md)) pin the
-images and the installed tree. Nothing else has been examined.
+images and the installed tree; `make dos-configure` adds the AdLib configuration. The
+overlay segment table and loader model are in [DOS reference](dos-reference.md#loader-model-and-image-proof).
 
 ### Manual
 

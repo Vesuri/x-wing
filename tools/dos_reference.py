@@ -4,8 +4,8 @@
 disks      verify the pinned 7z and extract its five 1.44 MB images into tmp/dos/disks
 install    run the original INSTALL.EXE with the five images in A:, verify C:\\XWING and
            keep it as tmp/dos/installed/XWING
-reference  run XWING.EXE from fresh copies of the installation: to the pinned intro
-           frames, through the copy-protection check, and a wrong-answer control
+configure  run the installed INSTALL.EXE on the AdLib-only reference machine to select AdLib,
+           verify the tree and keep it as tmp/dos/configured/XWING
 play       open a DOSBox-X window on a fresh copy of the installation, as a period 386 that
            answers the copy protection and then leaves the keyboard to the player
 
@@ -21,48 +21,30 @@ import tempfile
 import time
 import uuid
 
+from dosbox_x import DOSBOX, verify as verify_emulator
 from extract_original_data import ROOT, hashes, install as keep_output, pins, sha256
 
 ARCHIVE_NAME = 'tmp/originals/000110_x-wing.7z'
 DISKS = ROOT / 'tmp/dos/disks'
 INSTALLED = ROOT / 'tmp/dos/installed'
+CONFIGURED = ROOT / 'tmp/dos/configured'
 RUNS = ROOT / 'ref/dosbox/runs'
-SOURCE = Path(os.environ.get('XWING_DOSBOX_X_SRC', Path.home() / '.local/src/xwing-dosbox-x'))
-COMMIT = '4f19017c5f565dc40d01fede0f1382892e7243d7'
-DOSBOX = SOURCE / 'src/dosbox-x'
 IMAGES = [f'disk{n}.img' for n in range(1, 6)]
 # A 386 at a fixed 30,000 cycles/ms; the installer rates it FAST. Turbo removes the
 # real-time throttle only: emulated time per instruction is unchanged.
 MACHINE = ['cpu core=normal', 'cpu cputype=386', 'cpu cycles=fixed 30000', 'dosbox memsize=16',
            'dosbox quit warning=false', 'sdl output=surface', 'mixer nosound=true']
+# The reference machine with AdLib only (reference/dosbox-x.conf), on which the installer
+# detects AdLib and the game selects ADLIB.IMS.
+ADLIB_MACHINE = MACHINE + ['sblaster sbtype=none', 'sblaster oplmode=opl2']
 # A 386DX-class machine of 1993 for play: 8,000 cycles/ms, 4 MB, Sound Blaster Pro 2.
 PLAY_MACHINE = ['cpu core=normal', 'cpu cputype=386', 'cpu cycles=fixed 8000', 'dosbox memsize=4',
                 'dosbox quit warning=false', 'sdl output=surface', 'sblaster sbtype=sbpro2']
-# The copy-protection question depends on the CPU speed and the DOS clock, which otherwise
-# starts at the host time. DOS sets the RTC too; both then advance in emulated time.
+# For play: the copy-protection question depends on the CPU speed and the DOS clock, which
+# otherwise starts at the host time. DOS sets the RTC too; both then advance in emulated time.
+# The reference runs (tools/pc_run.py) pin the BIOS tick count instead.
 CLOCK = ['date 02-01-1993', 'time 12:00:00']
 GAME = ['c:', 'cd \\xwing', 'xwing']
-# Reference scenarios: script and the VGA dumps it writes, pinned as <scenario>/<dump>.
-SCENARIOS = {'intro': ('intro.script', ['logo.vga', 'title.vga', 'crawl.vga']),
-             'security': ('security.script', ['question.vga', 'answered.vga']),
-             'control': ('security-control.script', ['question.vga', 'answered.vga'])}
-
-
-def verify_emulator():
-    head = subprocess.run(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], capture_output=True,
-                          text=True).stdout.strip()
-    if head != COMMIT:
-        raise ValueError('DOSBOX-X / SOURCE IS NOT THE PINNED TAG; run make dos-emulator')
-    for patch in (ROOT / 'tools/patches/ORDER').read_text().split():
-        check = subprocess.run(['git', '-C', str(SOURCE), 'apply', '-R', '--check',
-                                str(ROOT / 'tools/patches' / patch)], capture_output=True)
-        if check.returncode:
-            raise ValueError(f'DOSBOX-X / {patch} NOT APPLIED; run make dos-emulator')
-    newest = max(p.stat().st_mtime for p in (SOURCE / 'src/misc/xwing_script.cpp',
-                                            SOURCE / 'src/hardware/pic.cpp'))
-    if not DOSBOX.is_file() or DOSBOX.stat().st_mtime < newest:
-        raise ValueError('DOSBOX-X / BINARY MISSING OR OLDER THAN ITS SOURCE; run make dos-emulator')
-
 
 def verify_disks():
     expected = pins(ROOT / 'manifest/dos-disks.sha256')
@@ -94,12 +76,15 @@ def extract_disks():
     print(f'DISKS PASS: {len(IMAGES)} images verified in', DISKS.relative_to(ROOT))
 
 
-def verify_installed(directory):
+def verify_installed(directory, configured=False):
     actual = hashes(directory)
     expected = pins(ROOT / 'manifest/dos-installed.sha256')
+    if configured:
+        expected.update(pins(ROOT / 'manifest/dos-configured.sha256'))
     if actual != expected:
         changed = sorted(k for k in actual.keys() | expected.keys() if actual.get(k) != expected.get(k))
-        raise ValueError('INSTALLED / SHA-256 OR FILE SET MISMATCH: ' + ', '.join(changed[:20]))
+        what = 'CONFIGURED' if configured else 'INSTALLED'
+        raise ValueError(f'{what} / SHA-256 OR FILE SET MISMATCH: ' + ', '.join(changed[:20]))
     return actual
 
 
@@ -181,39 +166,32 @@ def install_game(name, print_manifest):
           f'{len(result)} files verified in', INSTALLED.relative_to(ROOT))
 
 
-def fresh_game(run):
-    verify_installed(INSTALLED / 'XWING')
-    shutil.copytree(INSTALLED / 'XWING', run / 'c/XWING', copy_function=shutil.copy2)
-
-
-def reference(name, print_manifest):
-    from vga_dump import frame, parse
-    import hashlib
+def configure_game(name, print_manifest):
     verify_emulator()
-    base = name or 'reference-' + time.strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:8]
-    actual, runs = {}, []
-    for scenario, (script, dumps) in SCENARIOS.items():
-        run = new_run('reference', f'{base}-{scenario}')
-        fresh_game(run)
-        dosbox(run, ROOT / 'tools/dos' / script, CLOCK + GAME, 120_000, 300)
-        runs.append(run)
-        for dump in dumps:
-            pixels, palette = frame(*parse((run / dump).read_bytes()))
-            actual[f'{scenario}/{dump}'] = hashlib.sha256(pixels + palette).hexdigest()
+    run = new_run('configure', name)
+    fresh_game(run)
+    dosbox(run, ROOT / 'tools/dos/configure.script', GAME[:2] + ['install'], 120_000, 300,
+           machine=ADLIB_MACHINE)
+    output = run / 'c/XWING'
     if print_manifest:
-        for dump, digest in actual.items():
-            print(digest + '  ' + dump)
+        installed = pins(ROOT / 'manifest/dos-installed.sha256')
+        for name, digest in hashes(output).items():
+            if installed.get(name) != digest:
+                print(digest + '  ' + name)
         return
-    where = ', '.join(str(run.relative_to(ROOT)) for run in runs)
-    if actual['control/question.vga'] != actual['security/question.vga']:
-        raise ValueError(f'REFERENCE / CONTROL ASKED A DIFFERENT QUESTION; see {where}')
-    if actual['control/answered.vga'] == actual['security/answered.vga']:
-        raise ValueError(f'REFERENCE / WRONG ANSWER ACCEPTED; see {where}')
-    if actual != pins(ROOT / 'manifest/dos-reference.sha256'):
-        changed = sorted(k for k in actual if actual[k] != pins(ROOT / 'manifest/dos-reference.sha256').get(k))
-        raise ValueError(f'REFERENCE / FRAME MISMATCH: {", ".join(changed)}; see {where}')
-    print('REFERENCE PASS: intro frames, copy-protection question and registration screen match;',
-          'the wrong-answer control keeps the dialog; runs in', where)
+    result = verify_installed(output, configured=True)
+    staged = Path(tempfile.mkdtemp(prefix='configured-', dir=ROOT / 'tmp'))
+    shutil.copytree(output, staged / 'XWING', copy_function=shutil.copy2)
+    keep_output(staged, CONFIGURED)
+    verify_installed(CONFIGURED / 'XWING', configured=True)
+    print(f'CONFIGURE PASS: AdLib selected; {len(result)} files verified in',
+          CONFIGURED.relative_to(ROOT))
+
+
+def fresh_game(run, configured=False):
+    source = (CONFIGURED if configured else INSTALLED) / 'XWING'
+    verify_installed(source, configured)
+    shutil.copytree(source, run / 'c/XWING', copy_function=shutil.copy2)
 
 
 def play(name):
@@ -227,7 +205,7 @@ def play(name):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    parser.add_argument('command', choices=['disks', 'install', 'reference', 'play'])
+    parser.add_argument('command', choices=['disks', 'install', 'configure', 'play'])
     parser.add_argument('--name', help='run directory name under ref/dosbox/runs')
     parser.add_argument('--print-manifest', action='store_true',
                         help='print the output hashes instead of verifying them')
@@ -236,8 +214,8 @@ def main():
         extract_disks()
     elif args.command == 'install':
         install_game(args.name, args.print_manifest)
-    elif args.command == 'reference':
-        reference(args.name, args.print_manifest)
+    elif args.command == 'configure':
+        configure_game(args.name, args.print_manifest)
     else:
         play(args.name)
 

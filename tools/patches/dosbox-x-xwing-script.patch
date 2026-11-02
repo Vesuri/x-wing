@@ -1,19 +1,19 @@
 diff --git a/src/hardware/pic.cpp b/src/hardware/pic.cpp
-index dc7d787..12de8c0 100644
+index 9f6451f..232ae20 100644
 --- a/src/hardware/pic.cpp
 +++ b/src/hardware/pic.cpp
-@@ -24,6 +24,8 @@
- #include "callback.h"
+@@ -25,6 +25,8 @@
  #include "logging.h"
  #include "pic.h"
+ #include "xwing_trace.h"
 +
 +void XWING_ScriptTick();
  #include "timer.h"
  #include "setup.h"
  #include "control.h"
-@@ -868,6 +870,9 @@ void TIMER_AddTick(void) {
-     if (time_limit_ms != 0 && PIC_Ticks >= time_limit_ms)
+@@ -898,6 +900,9 @@ void TIMER_AddTick(void) {
          throw int(1);
+     }
  
 +    /* X-Wing reference input script (src/misc/xwing_script.cpp) */
 +    XWING_ScriptTick();
@@ -22,15 +22,15 @@ index dc7d787..12de8c0 100644
      PICEntry * entry=pic_queue.next_entry;
      while (entry) {
 diff --git a/src/misc/Makefile.am b/src/misc/Makefile.am
-index e31e63f..dfcdf31 100644
+index dd4fab3..9974c12 100644
 --- a/src/misc/Makefile.am
 +++ b/src/misc/Makefile.am
 @@ -3,4 +3,4 @@ AM_CPPFLAGS = -I$(top_srcdir)/include -I$(top_srcdir)/src "-DRESDIR=\"$(resdir)\
  resdir = $(datarootdir)/dosbox-x
  
  noinst_LIBRARIES = libmisc.a
--libmisc_a_SOURCES = clipboard.cpp cross.cpp ethernet.cpp ethernet_pcap.cpp ethernet_slirp.cpp ethernet_ethnet.cpp ethernet_nothing.cpp messages.cpp programs.cpp setup.cpp support.cpp regionalloctracking.cpp savestates.cpp shiftjis.cpp iconvpp.cpp mkdir_p.cpp
-+libmisc_a_SOURCES = clipboard.cpp cross.cpp ethernet.cpp ethernet_pcap.cpp ethernet_slirp.cpp ethernet_ethnet.cpp ethernet_nothing.cpp messages.cpp programs.cpp setup.cpp support.cpp regionalloctracking.cpp savestates.cpp shiftjis.cpp iconvpp.cpp mkdir_p.cpp xwing_script.cpp
+-libmisc_a_SOURCES = clipboard.cpp cross.cpp ethernet.cpp ethernet_pcap.cpp ethernet_slirp.cpp ethernet_ethnet.cpp ethernet_nothing.cpp messages.cpp programs.cpp setup.cpp support.cpp regionalloctracking.cpp savestates.cpp shiftjis.cpp iconvpp.cpp mkdir_p.cpp xwing_trace.cpp
++libmisc_a_SOURCES = clipboard.cpp cross.cpp ethernet.cpp ethernet_pcap.cpp ethernet_slirp.cpp ethernet_ethnet.cpp ethernet_nothing.cpp messages.cpp programs.cpp setup.cpp support.cpp regionalloctracking.cpp savestates.cpp shiftjis.cpp iconvpp.cpp mkdir_p.cpp xwing_trace.cpp xwing_script.cpp
 diff --git a/src/misc/xwing_script.cpp b/src/misc/xwing_script.cpp
 new file mode 100644
 index 0000000..6710049

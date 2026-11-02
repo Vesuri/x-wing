@@ -1,1 +1,14 @@
+dosbox-x-xwing-trace.patch
+dosbox-x-xwing-mouse.patch
+dosbox-x-xwing-sound.patch
+dosbox-x-xwing-time-limit.patch
+dosbox-x-xwing-read-data.patch
+dosbox-x-xwing-date.patch
+dosbox-x-xwing-host-clock.patch
+dosbox-x-xwing-release-visits.patch
+dosbox-x-xwing-key-chords.patch
+dosbox-x-xwing-rep-chunks.patch
+dosbox-x-xwing-joystick.patch
+dosbox-x-xwing-irq0-backlog.patch
+dosbox-x-xwing-game.patch
 dosbox-x-xwing-script.patch
