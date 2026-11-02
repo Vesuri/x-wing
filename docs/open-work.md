@@ -8,8 +8,8 @@ the repo rules (P0) are in place.
    Acceptance:
    - A film-room replay: a flight is ended and its film played back in the film room.
    - A Star Destroyer battle, or the heaviest combat scene a reachable pilot state allows,
-     chosen by a measured cost rather than instructions per frame, which the frame cap
-     makes constant.
+     chosen by a measured cost. Instructions per frame rank scenes only if the flight does
+     not pace its frames, which is not yet known.
 2. P2: static and live map.
    Acceptance: the overlay manager is modelled and checked over every trace. The census in
    the plan (opcodes, EMS, self-modifying code, indirect tables, hooked vectors, ports,

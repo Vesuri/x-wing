@@ -240,8 +240,15 @@ question depends on the clock and on when the key arrives:
     18.2 billion instructions (about 607 emulated seconds) into the game, in two runs.
 - **A Star Destroyer battle.** A new pilot can open only the first mission of each
   Historical Combat craft and of Tour I. None of them holds a Star Destroyer. Instructions
-  per frame cannot rank scenes: about 506,000 in every flight measured, because the frame
-  rate is timer-capped at this CPU speed.
+  per frame over 50–100 frames after the first snapshot (MEASURED): maze about 644,000,
+  X-Wing mission 1 about 506,000, Tour I mission 1 about 499,000. Whether the flight paces
+  its frames is not known:
+  - it never reads the retrace status (3DAh) or the timer ports;
+  - `ADLIB.IMS` sets PIT channel 0 to divisor 1000h (about 291 Hz) and hooks INT 8, which
+    chains to the BIOS at 18.2 Hz.
+  A run at another CPU speed would settle it. Runs at 15,000 and 60,000 cycles/ms did not
+  reach the flight, even with the menu key counts scaled by the speed. The key triggers
+  count visits, and the visit counts do not transfer across speeds.
 
 ## Play
 
