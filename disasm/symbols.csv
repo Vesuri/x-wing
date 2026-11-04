@@ -1,0 +1,16 @@
+module,offset,name,kind,evidence,note
+XWING.EXE,0x0460a,mz_entry,code,MEASURED,MZ entry 0406h:05AAh
+XWING.EXE,0x041dc,ovl_manager,code,MEASURED,"AX = descriptor index; loads the segment and its parents (docs/overlay-manager.md)"
+XWING.EXE,0x04172,ovl_evict,code,MEASURED,"clears a segment's resident bit; refuses a locked one"
+XWING.EXE,0x043ea,ovl_open_file,code,MEASURED,"opens the segment's file unless it is the open one"
+XWING.EXE,0x044ea,ovl_thunk_handler,code,MEASURED,"reads the index after the thunk's far jump, calls ovl_manager"
+XWING.EXE,0x04519,ovl_descriptor,code,MEASURED,"BX = 09FFh + 12h * AX"
+XWING.EXE,0x04529,ovl_zero_fill,code,MEASURED,"zero-fills a segment's memory beyond its read size"
+XWING.EXE,0x04a5f,ovl_descriptors,data,MEASURED,"27 records of 12h bytes at 0406h:09FFh; count at 0406h:09FBh"
+XWING.EXE,0x04d47,ovl_thunks,data,MEASURED,"241 thunks of 10 bytes: call 048Ah; jmp far; dw index"
+XWING.EXE,0x048cc,ovl_ems_cache,data,MEASURED,"0406h:086Ch: EMS cache flag, 0 in every trace"
+ADLIB.IMS,0x00000,imuse_driver_entry,code,MEASURED,"the only entry the game far-calls (43 sites)"
+ADLIB.IMS,0x00a1b,imuse_timer_isr,code,MEASURED,"INT 08h handler installed by AX=2508h; PIT channel 0 divisor 1000h"
+FLIGHT.OVL,0x25a57,flight_cell_run,code,MEASURED,"self-modified run of mov byte [bx+w],al cells (annotations/self-modifying.csv)"
+FRONTEND.OVL,0x1808c,frontend_mouse_poll,code,MEASURED,"INT 33h AX=0003h in the frontend's busy loops (milestone site `menu` is the next instruction)"
+FLIGHT.OVL,0x1b7d0,flight_mouse_poll,code,MEASURED,"INT 33h AX=0003h once per flight frame (milestone site `frame` is the next instruction)"

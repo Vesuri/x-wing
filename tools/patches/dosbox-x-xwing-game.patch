@@ -1,5 +1,5 @@
 X-Wing's changes on top of the Secret Weapons of the Luftwaffe patches: XWING.EXE entry and size, no PLINK probe,
-the 1993-02-01 clock, music drivers loaded by INT 21h AX=4B03 mapped as modules, events.csv.gz.
+the 1993-02-01 clock, music drivers loaded by INT 21h AX=4B03 mapped as modules, events.csv.gz, overlay manager events, code writes with their target at the time of the write.
 diff --git a/include/xwing_trace.h b/include/xwing_trace.h
 index 1498e72..04a2de0 100644
 --- a/include/xwing_trace.h
@@ -42,7 +42,7 @@ index 84bda8c..ff30cf2 100644
      fixed.tm_hour = 12;
      fixed.tm_isdst = -1;
 diff --git a/src/misc/xwing_trace.cpp b/src/misc/xwing_trace.cpp
-index 3ad2a3b..fe9096b 100644
+index 3ad2a3b..2516712 100644
 --- a/src/misc/xwing_trace.cpp
 +++ b/src/misc/xwing_trace.cpp
 @@ -1,9 +1,11 @@
@@ -60,7 +60,7 @@ index 3ad2a3b..fe9096b 100644
   *
   * XWING_SNAPSHOTS=name@MODULE+HEX[#N],...  dump state on the Nth execution
   * XWING_EXIT_AFTER=name                    exit(0) after that snapshot
-@@ -51,9 +53,10 @@ extern void XWING_MouseInput(int dx, int dy, int buttons);
+@@ -51,10 +53,18 @@ extern void XWING_MouseInput(int dx, int dy, int buttons);
  
  namespace {
  
@@ -72,9 +72,27 @@ index 3ad2a3b..fe9096b 100644
 +constexpr uint16_t ROOT_ENTRY_IP = 0x05aa;
 +constexpr uint32_t ROOT_IMAGE_BYTES = 264117;
  constexpr uint32_t PARAGRAPHS = 0x10000 + 0x1000;
++uint16_t root_module = 0;
++/* Overlay manager (root segment 0406h, MEASURED): the thunk handler (IP 048Ah) and the
++ * manager body after its AX = -1 test (IP 0182h, AX = descriptor index). */
++constexpr uint32_t OVL_THUNK_HANDLER = 0x044ea;
++constexpr uint32_t OVL_MANAGER = 0x041e2;
++constexpr uint32_t OVL_DESCRIPTORS = 0x04a5f; /* 0406h:09FFh, 12h bytes each */
++constexpr uint32_t OVL_EMS_FLAG = 0x048cc;    /* 0406h:086Ch */
  
  struct Module {
-@@ -174,21 +177,6 @@ uint64_t poll_digest = 0xcbf29ce484222325ull;  /* FNV-1a of the poll file */
+ 	std::string name;
+@@ -110,7 +120,8 @@ Location last_int_source{0, 0};
+ std::map<std::tuple<uint8_t, uint8_t, uint16_t, Location, Location>, uint64_t> interrupts;
+ std::map<std::tuple<bool, uint8_t, uint16_t, uint32_t, Location>, uint64_t> ports;
+ std::map<std::tuple<bool, uint8_t, Location, uint32_t>, uint64_t> vga_accesses;
+-std::map<std::tuple<Location, uint32_t, uint8_t>, uint64_t> code_writes;
++/* (writer, target linear, width, target at the time of the write) -> count */
++std::map<std::tuple<Location, uint32_t, uint8_t, Location>, uint64_t> code_writes;
+ std::map<uint16_t, OpenFile> files;
+ FILE *events = nullptr;
+ FILE *read_data = nullptr;
+@@ -174,21 +185,6 @@ uint64_t poll_digest = 0xcbf29ce484222325ull;  /* FNV-1a of the poll file */
  struct PendingService { uint32_t ret_linear; uint16_t ss, sp; uint8_t vector; };
  std::vector<PendingService> services;
  
@@ -96,7 +114,19 @@ index 3ad2a3b..fe9096b 100644
  std::string Path(const std::string &file) { return out_dir + "/" + file; }
  
  std::string BaseName(const char *path) {
-@@ -379,15 +367,6 @@ void WriteOutputs() {
+@@ -371,23 +367,16 @@ void WriteOutputs() {
+ 		fclose(f);
+ 	}
+ 	if (auto *f = fopen(Path("code-writes.csv").c_str(), "w")) {
+-		fputs("writer_module,writer_offset,target_linear,width,count\n", f);
++		fputs("writer_module,writer_offset,target_linear,width,count,target_module,target_offset\n", f);
+ 		for (const auto &item : code_writes) {
+ 			WriteLocation(f, std::get<0>(item.first));
+-			fprintf(f, ",0x%05x,%u,%llu\n", std::get<1>(item.first), std::get<2>(item.first),
++			fprintf(f, ",0x%05x,%u,%llu,", std::get<1>(item.first), std::get<2>(item.first),
+ 			        (unsigned long long)item.second);
++			WriteLocation(f, std::get<3>(item.first));
++			fputc('\n', f);
  		}
  		fclose(f);
  	}
@@ -112,7 +142,7 @@ index 3ad2a3b..fe9096b 100644
  	if (auto *f = fopen(Path("summary.txt").c_str(), "w")) {
  		fprintf(f, "load_seg=0x%04x\ninstructions=%llu\nedges=%zu\n", load_seg,
  		        (unsigned long long)icount, edges.size());
-@@ -401,7 +380,7 @@ void WriteOutputs() {
+@@ -401,7 +390,7 @@ void WriteOutputs() {
      joystick_ports = nullptr;
  	if (rep_chunks) fclose(rep_chunks);
  	rep_chunks = nullptr;
@@ -121,7 +151,7 @@ index 3ad2a3b..fe9096b 100644
  	events = nullptr;
  	if (opl) fclose(opl);
  	opl = nullptr;
-@@ -544,7 +523,9 @@ void Configure() {
+@@ -544,7 +533,9 @@ void Configure() {
  	}
  	read_data = fopen(Path("reads.bin").c_str(), "wb");
  	if (!read_data) E_Exit("XWING: cannot open reads.bin");
@@ -132,7 +162,13 @@ index 3ad2a3b..fe9096b 100644
  	if (events) fputs("icount,kind,module,offset,detail\n", events);
  	if (const char *v = getenv("XWING_OPL"); v && *v && strcmp(v, "0") != 0) {
  		opl = fopen(Path("opl.csv").c_str(), "w");
-@@ -626,8 +607,8 @@ void Arm() {
+@@ -621,13 +612,14 @@ bool Hit(Trigger &t, const Location &here) {
+ void Arm() {
+ 	load_seg = (uint16_t)(SegValue(cs) - ROOT_ENTRY_CS);
+ 	const uint16_t root = ModuleId("XWING.EXE");
++	root_module = root;
+ 	modules[root].loads++;
+ 	const char *ticks = getenv("XWING_BIOS_TICKS");
  	mem_writed(0x46c, ticks ? (uint32_t)strtoul(ticks, nullptr, 0) : 0);
  	mem_writeb(0x470, 0);
  	/* Recorded file-close metadata must not depend on the host calendar. */
@@ -143,7 +179,7 @@ index 3ad2a3b..fe9096b 100644
  	dos.date.day = 1;
  	MapRange((uint32_t)load_seg << 4, ROOT_IMAGE_BYTES, root, 0);
      if (joystick_ports) {
-@@ -638,59 +619,11 @@ void Arm() {
+@@ -638,59 +630,11 @@ void Arm() {
          JOYSTICK_Button(0, 1, false);
      }
  	xwing_active = true;
@@ -204,7 +240,35 @@ index 3ad2a3b..fe9096b 100644
  bool IsPoll(const Location &here) {
  	if (!here.module) return false;
  	if (poll_cache.size() <= here.module) poll_cache.resize(modules.size(), nullptr);
-@@ -733,7 +666,6 @@ void XWING_Instruction(const uint32_t linear) {
+@@ -711,6 +655,27 @@ void ServiceReturn(const uint32_t linear) {
+ 	services.pop_back();
+ }
+ 
++/* Overlay manager events (docs/overlay-manager.md): `ovl_thunk` at the thunk handler with
++ * the thunk and its far caller; `ovl_call` at each manager call with the descriptor index,
++ * its resident bit and the EMS cache flag. */
++void OverlayEvent(const uint32_t offset) {
++	const uint32_t root = (uint32_t)load_seg << 4;
++	const uint32_t sp = SegPhys(ss) + (uint16_t)reg_esp;
++	if (offset == OVL_THUNK_HANDLER) {
++		const uint16_t thunk = (uint16_t)(mem_readw(sp) - 3);
++		const uint32_t ret = ((uint32_t)mem_readw(sp + 4) << 4) + mem_readw(sp + 2);
++		const Location caller = Locate(ret);
++		Event("ovl_thunk", "thunk=0x%05x index=%u caller=%s+0x%05x", 0x4060 + thunk,
++		      (unsigned)mem_readw(root + 0x4060 + thunk + 8),
++		      modules[caller.module].name.c_str(), caller.offset);
++		return;
++	}
++	const uint16_t index = (uint16_t)reg_eax;
++	const uint8_t flags = mem_readb(root + OVL_DESCRIPTORS + 0x12u * index + 7);
++	Event("ovl_call", "index=%u resident=%u flags=0x%02x ems=0x%02x", (unsigned)index,
++	      (unsigned)((flags >> 1) & 1), (unsigned)flags, (unsigned)mem_readb(root + OVL_EMS_FLAG));
++}
++
+ } // namespace
+ 
+ void XWING_Instruction(const uint32_t linear) {
+@@ -733,7 +698,6 @@ void XWING_Instruction(const uint32_t linear) {
  	if (prev_valid) edges.insert((prev_packed << 32) | packed);
  	prev_packed = packed;
  	prev_valid = true;
@@ -212,7 +276,25 @@ index 3ad2a3b..fe9096b 100644
  	if (probe_log && here.module && probe_offsets.count(here.offset))
  		for (const auto &pr : probes) {
  			if (pr.offset != here.offset || modules[here.module].name != pr.module) continue;
-@@ -913,7 +845,6 @@ void XWING_DosRead(const uint16_t handle, const uint32_t buffer, const uint32_t
+@@ -743,6 +707,8 @@ void XWING_Instruction(const uint32_t linear) {
+ 				fprintf(probe_log, "%s%04x", i ? " " : "", (unsigned)mem_readw(sp + 4 + 2 * i));
+ 			fputc('\n', probe_log);
+ 		}
++	if (here.module == root_module && (here.offset == OVL_MANAGER || here.offset == OVL_THUNK_HANDLER))
++		OverlayEvent(here.offset);
+ 	ServiceReturn(linear);
+ 	if (poll_gate && IsPoll(here)) ++poll_hits[here];
+ 
+@@ -817,7 +783,7 @@ void XWING_MemoryAccess(const bool write, const uint32_t address, const uint8_t
+ 	if (!is_vga && !code) return;
+ 	const auto source = CurrentLocation();
+ 	if (is_vga) ++vga_accesses[std::make_tuple(write, width, source, (address - 0xa0000u) & ~0xffu)];
+-	if (code) ++code_writes[std::make_tuple(source, address, width)];
++	if (code) ++code_writes[std::make_tuple(source, address, width, Locate(address))];
+ }
+ 
+ bool XWING_IrqPoint(const uint32_t linear) {
+@@ -913,7 +879,6 @@ void XWING_DosRead(const uint16_t handle, const uint32_t buffer, const uint32_t
  	if (IsCodeFile(name)) {
  		const uint16_t id = ModuleId(name);
  		if (file_pos == 0) modules[id].loads++;
@@ -220,7 +302,7 @@ index 3ad2a3b..fe9096b 100644
  		MapRange(buffer, actual, id, (int32_t)file_pos);
  	} else {
  		MapRange(buffer, actual, 0, 0);
-@@ -936,13 +867,21 @@ void XWING_DosSeek(const uint16_t handle, const uint8_t mode, const uint32_t res
+@@ -936,13 +901,21 @@ void XWING_DosSeek(const uint16_t handle, const uint8_t mode, const uint32_t res
  	      handle, mode, result);
  }
  

@@ -1,7 +1,8 @@
 # Open work
 
-Steps of the [port plan](port-plan.md), in order; P3–P10 follow there. Reference setup and
-the repo rules (P0) are in place.
+Steps of the [port plan](port-plan.md), in order; P4–P10 follow there. The repo rules (P0),
+the reference loop (P1, but for the two milestones below) and the static and live map (P2)
+are in place.
 
 1. P1: the two milestones not yet reached ([DOS reference](dos-reference.md#not-yet-reached)).
    The rest of P1 is in place: `make dos-reference` passes 17 pinned milestones.
@@ -10,12 +11,13 @@ the repo rules (P0) are in place.
    - A Star Destroyer battle, or the heaviest combat scene a reachable pilot state allows,
      chosen by a measured cost. Instructions per frame rank scenes only if the flight does
      not pace its frames, which is not yet known.
-2. P2: static and live map.
-   Acceptance: the overlay manager is modelled and checked over every trace. The census in
-   the plan (opcodes, EMS, self-modifying code, indirect tables, hooked vectors, ports,
-   music driver interface, VGA use) is recorded with counts. Static map and traces agree;
-   zero executed bytes are unclassified; `docs/external-surface.md` exists. The Secret
-   Weapons of the Luftwaffe translator's fit is confirmed or the gaps listed.
+2. P3: x86 semantics on SWOTL's translator.
+   Acceptance: `translator/` copied whole with its x86 tests. The decoder, IR and
+   interpreter accept the 80186 forms the census found
+   ([external surface](external-surface.md#translator-fit)): `enter`, `leave`, `push imm`,
+   `imul r,rm,imm`, shifts by an immediate. The Capstone
+   cross-check and the Unicorn differential are clean over every opcode present; sabotage
+   plants are caught.
 3. Optional, for P8's donor route: make the Macintosh reference reach named milestones and
    map its 68k CODE.
    Acceptance: a bounded run reaches a positively identified game state by guest state,

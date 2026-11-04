@@ -23,7 +23,9 @@ DOSBox-X tag `dosbox-x-v2026.08.31` (`4f19017c`) is built by `make dos-emulator`
   - no PLINK probe;
   - the 1993-02-01 DOS date and host file clock;
   - music drivers loaded by INT 21h AX=4B03 mapped as modules;
-  - the event log written through gzip.
+  - the event log written through gzip;
+  - overlay manager events, `ovl_thunk` and `ovl_call` ([overlay manager](overlay-manager.md));
+  - code writes logged with their target module and offset at the time of the write.
 - **`dosbox-x-xwing-script.patch`:** the text-screen script used for the installer and for
   play.
 
@@ -136,7 +138,9 @@ Outputs in `trace/`:
   frontend, so the log reaches about 170 MB of gzip per emulated minute.
 - `reads.bin`: the bytes of every DOS read.
 - `modules.csv`, `executed-<module>.bin`, `edges.csv`.
-- `interrupts.csv`, `ports.csv`, `vga.csv`, `code-writes.csv`.
+- `interrupts.csv`, `ports.csv`, `vga.csv`;
+- `code-writes.csv`: CPU writes into paragraphs that have executed, with the target's module
+  and offset when written.
 - `residency.csv`, `summary.txt`.
 
 `tools/trace_summary.py` summarises a trace and `tools/snap_png.py` renders a snapshot's
