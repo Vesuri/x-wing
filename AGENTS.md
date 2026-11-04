@@ -7,7 +7,9 @@ in the speed phase. Current scope is reference setup only. The DOS release is in
 its own installer and run under a scripted DOSBox-X. The Macintosh demo is installed on a
 fresh System 7.5.5 volume and launched on an emulated 68040 Macintosh. The DOS reference
 runs are traced with Secret Weapons of the Luftwaffe's tracer and reach pinned milestones.
-The static and live map of the DOS program is in place; no translation has started. Read
+The static and live map of the DOS program is in place. SWOTL's translator is copied;
+its decoder, IR and interpreter cover X-Wing's x86 code and pass gate 3. No 68k code is
+generated yet. Read
 `docs/open-work.md` first.
 
 ## Rules
@@ -100,6 +102,7 @@ Copied from Secret Weapons of the Luftwaffe, as above.
 | `docs/mac-reference.md` | booting the original under MAME |
 | `docs/overlay-manager.md` | X-Wing's overlay manager, its model and check |
 | `docs/external-surface.md` | interrupts, ports, VGA, EMS, the music driver and the translator fit |
+| `docs/x86-notes.md` | x86 real-mode facts the decoder, IR and lowering rely on; Unicorn quirks |
 | `docs/open-work.md` | before starting any work |
 
 ## Shared guidance

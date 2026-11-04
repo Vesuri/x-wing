@@ -1,0 +1,2258 @@
+"""Lower one decoded 8086 instruction to 68020 (Motorola syntax, vasm) under the
+register contract of docs/translator-design.md §Generated code contract.
+
+Registers: d0 AX, d1 CX, d2 DX, d3 BX, d4 SP, d5 BP, a4 SI, a5 DI hold 16-bit
+values in their low words, upper words undefined (speed-plan R4: a consumer of
+32 bits zero-extends first, `read_zx`); SP and BP
+are mirrored (MIRROR: the register holds offset ^ 7FFFh). Guest RAM is reversed
+(D1): a6 = TOP, the guest byte at linear L lives at TOP - L, so a little-endian
+word is a native word at TOP - L - 1; the state block is above TOP. a1/a2/a3 =
+ES/SS/DS base a6 - seg*16 - 7FFFh: the byte at offset o is (7FFFh - o, base),
+or (0,base,Xn.w) with Xn = o ^ 7FFFh, the word one byte lower. d6, d7, a0
+scratch; a7 native stack.
+
+Guest flags (state block): G_FL low byte = 68k CCR image of CF (C), OF (V),
+ZF (Z), SF (N) (X is not guest state); PF = even parity of G_PF; AF = bit 4
+of G_AF; DF/IF/TF bytes; G_FX = FLAGS bits 12-15. A flag setter stores the
+flags `need` names (live after it, from translator/flags.py) and may leave
+them in the CCR for the next instruction (`fuse`), which then reads `ccr_in`
+instead of the state block.
+
+Semantics follow translator/sem.py (386 real mode); the tests compare the
+output against Unicorn x86-16, independently of the IR.
+"""
+
+from __future__ import annotations
+
+import re
+from collections import Counter
+from dataclasses import dataclass, field
+
+from .compact import compact
+from .decode import Far, Imm, Insn, Mem, Reg, Rel
+from .ir import FLAG_KINDS, STATUS
+
+GREG = {"ax": "d0", "cx": "d1", "dx": "d2", "bx": "d3", "sp": "d4", "bp": "d5", "si": "a4",
+        "di": "a5"}
+HALF = {"al": ("ax", 0), "cl": ("cx", 0), "dl": ("dx", 0), "bl": ("bx", 0),
+        "ah": ("ax", 8), "ch": ("cx", 8), "dh": ("dx", 8), "bh": ("bx", 8)}
+MIRROR = frozenset({"sp", "bp"})   # held as offset ^ 7FFFh (D1)
+SEGBASE = {"es": "a1", "ss": "a2", "ds": "a3"}
+SEGSLOT = {"es": "G_ES", "ss": "G_SS", "ds": "G_DS"}
+SZ = {8: "b", 16: "w"}
+CCR_BIT = {"CF": 1, "OF": 2, "ZF": 4, "SF": 8}
+CC68 = {"o": "vs", "no": "vc", "b": "cs", "ae": "cc", "e": "eq", "ne": "ne", "be": "ls",
+        "a": "hi", "s": "mi", "ns": "pl", "l": "lt", "ge": "ge", "le": "le", "g": "gt"}
+CC_READS = {"o": {"OF"}, "no": {"OF"}, "b": {"CF"}, "ae": {"CF"}, "e": {"ZF"}, "ne": {"ZF"},
+            "be": {"CF", "ZF"}, "a": {"CF", "ZF"}, "s": {"SF"}, "ns": {"SF"},
+            "p": {"PF"}, "np": {"PF"}, "l": {"SF", "OF"}, "ge": {"SF", "OF"},
+            "le": {"SF", "OF", "ZF"}, "g": {"SF", "OF", "ZF"}}
+ALLC = {"CF", "OF", "ZF", "SF"}
+# Flags the 68k CCR holds with x86 meaning right after the lowered operation
+# ("X": the X bit equals CF).
+CCR_OK = {"add": ALLC | {"X"}, "adc": ALLC | {"X"}, "sub": ALLC | {"X"}, "sbb": ALLC | {"X"},
+          "cmp": ALLC, "logic": ALLC, "inc": {"OF", "ZF", "SF"}, "dec": {"OF", "ZF", "SF"},
+          "neg": ALLC | {"X"}, "shl": ALLC | {"X"}, "sar": ALLC | {"X"},
+          "shr": {"CF", "ZF", "SF", "X"}}
+# State block above guest RAM (a6 = TOP, odd: words at a6+odd are aligned).
+STATE_EQU = (("G_FL", 15), ("G_PF", 14), ("G_AF", 13), ("G_DF", 12), ("G_IF", 11),
+             ("G_TF", 10), ("G_IRQ", 9), ("G_FX", 7), ("G_ES", 5), ("G_SS", 3), ("G_DS", 1))
+LOADSEG = 0x0822  # load segment of every reference run (docs/source-inventory.md)
+RET_BYTE = 0xC3   # the RET planted in self-modified cells (smc.py)
+# A closed whitelist proves X preservation; unknown instructions kill it.
+KEEPS_X = {"move", "movea", "moveq", "lea", "ror", "rol", "and", "or", "eor", "eori", "not",
+           "cmp", "cmpa", "cmpi", "tst", "btst", "bset", "bclr", "ext", "exg", "swap", "nop",
+           "sne", "seq", "smi", "spl", "bfins"}
+D6 = re.compile(r"\bd6\b")
+
+
+class LowerError(Exception):
+    pass
+
+
+def keeps_x(line: str) -> bool:
+    """The 68k line leaves X as it was."""
+    line = line.strip()
+    return line.split()[0].split(".")[0] in KEEPS_X and \
+        ("ccr" not in line or line.startswith("move.w ccr,"))
+
+
+def hx(v: int) -> str:
+    return f"${v:x}" if v > 9 else str(v)
+
+
+def sx(v: int) -> str:
+    """Signed displacement."""
+    return f"-{hx(-v)}" if v < 0 else hx(v)
+
+
+@dataclass
+class Opnd:
+    """A memory operand: the byte and the word at the same guest offset."""
+    b: str
+    w: str
+
+    def at(self, width: int) -> str:
+        return self.b if width == 8 else self.w
+
+
+@dataclass
+class Ctx:
+    """What the lowering of one instruction needs from its module (or a test)."""
+    cs: str                                   # 68k expression of the run-time CS
+    label: str                                # this instruction's label
+    need: set = field(default_factory=set)    # status flags to store in the state block
+    live: set = field(default_factory=lambda: set(STATUS))  # status flags live after
+    ccr_in: set = field(default_factory=set)  # flags valid in the CCR at entry
+    x_in: bool = False                       # preceding instruction proved X = guest CF
+    keep_x: bool = False                      # the next instruction takes CF from X (carry pair)
+    dead_dx: bool = False                    # proved overwritten before read in this block
+    fuse: bool = False                        # try to leave `need`-free flags in the CCR
+    reloc: frozenset = frozenset()            # byte positions of relocated segment words
+    near: object = None                       # ip -> label | None (None: test exit)
+    far: object = None                        # (seg, off) -> label | None
+    near_targets: tuple = ()                  # known targets of an indirect near transfer
+    smc_targets: tuple = ()                   # (first IP, last IP, walk label): D16 regions
+    code_regions: tuple = ()                  # cell caches a CS store may reach (emit.code_regions)
+    seg_limit: int = 0                        # lowest segment reaching no cell cache (0: none, D3)
+    seg_repeat: bool = False                  # segment load usually repeats its value (R30)
+    complete: bool = False                    # near_targets is a proved switch table
+    far_targets: tuple = ()                   # known (seg, off) targets of an indirect far one
+    manager: bool = False                     # PLINK manager call: return skips `dw id`
+    program: bool = False                     # program mode (return checks, runtime calls)
+    vram: bool = False                        # graphics driver: stores to A000h mark rows (D9)
+    driver_call: bool = False                 # PLINK thunk jump into the graphics driver (D9)
+    ret_mismatch: str = "rt_ret_mismatch"     # a return check's mismatch branch (emit.py: local)
+    far_ret_mismatch: str = "rt_ret_far_mismatch"
+    bp_direct: bool = False                   # guarded copy: [bp+d] direct (region.py, R6)
+    rep_hook: tuple[int, str] | None = None  # diagnostic-only slice check and exact restart
+    retry: str = ""                           # where a divide error re-executes (default: label)
+
+
+class Lowering:
+    def __init__(self, insn: Insn, ctx: Ctx):
+        self.i, self.c = insn, ctx
+        self.out: list[str] = []
+        self.cold: list[str] = []  # out-of-line code placed after the run (no fall-through)
+        self.ccr_only: set = set()  # live flags only the CCR holds at entry (flags.plan, R14d)
+        self.ccr: set = set()      # flags valid in the CCR at the end
+        self.stats = Counter()
+        self.nl = 0
+        self.x_cf = ctx.x_in
+        self.cf_result = False
+        self.af = insn.op in ("add", "adc", "sub", "sbb", "cmp", "inc", "dec", "neg")
+
+    # -- emission ---------------------------------------------------------
+    def e(self, line: str) -> None:
+        if not keeps_x(line):
+            self.x_cf = False
+        self.out.append("\t" + line)
+
+    def local(self) -> str:
+        self.nl += 1
+        return f".{self.nl}"
+
+    def at(self, label: str) -> None:
+        self.out.append(f"{label}:")
+
+    # -- constants, registers, memory --------------------------------------
+    def imm(self, o: Imm, pos: int | None = None) -> str:
+        v = o.value & (0xFF if o.width == 8 else 0xFFFF)
+        if pos is not None and pos in self.c.reloc:
+            return f"LOADSEG+{hx(v)}"
+        return hx(v)
+
+    def reloc_at_end(self) -> bool:
+        return self.i.size - 2 in self.c.reloc
+
+    def check_reloc(self, allowed: set[int]) -> None:
+        bad = set(self.c.reloc) - allowed
+        if bad:
+            raise LowerError(f"relocated word at +{sorted(bad)} of {self.i}")
+
+    def seg_base(self, seg: str) -> str:
+        if seg == "cs":
+            self.e(f"lea (-({self.c.cs})*16-$7fff,a6),a0")
+            return "a0"
+        return SEGBASE[seg]
+
+    def sub_const(self, d: int, r: str) -> None:
+        """r.w -= d (16-bit)."""
+        d &= 0xFFFF
+        if 1 <= d <= 8:
+            self.e(f"subq.w #{d},{r}")
+        elif d >= 0xFFF8:
+            self.e(f"addq.w #{0x10000 - d},{r}")
+        elif d:
+            self.e(f"sub.w #{hx(d)},{r}")
+
+    def mirror_d7(self, m: Mem) -> None:
+        """d7.w := the operand's offset ^ 7FFFh (16-bit wrap kept)."""
+        regs = [r for r in (m.base, m.index) if r]
+        mirrored = [r for r in regs if r in MIRROR]
+        if mirrored:
+            self.e(f"move.w {GREG[mirrored[0]]},d7")
+            d = m.disp
+        else:
+            self.e(f"move.w #{hx((0x7FFF - m.disp) & 0xFFFF)},d7")
+            d = 0
+        for r in regs:
+            if r not in MIRROR:
+                self.e(f"sub.w {GREG[r]},d7")
+        self.sub_const(d, "d7")
+
+    def ea(self, m: Mem, seg: str | None = None) -> Opnd:
+        """A memory operand (a word at offset FFFFh is two consecutive linear
+        bytes). Uses d7 for computed offsets and a0 for CS."""
+        base = self.seg_base(seg or m.seg)
+        regs = [r for r in (m.base, m.index) if r]
+        if not regs:
+            v = 0x7FFF - (m.disp & 0xFFFF)
+            return Opnd(f"({sx(v)},{base})", f"({sx(v - 1)},{base})")
+        if regs[0] in MIRROR and len(regs) == 1 and not m.disp & 0xFFFF:
+            r = GREG[regs[0]]
+            return Opnd(f"0({base},{r}.w)", f"-1({base},{r}.w)")
+        if self.c.bp_direct and direct_disp(m):
+            d = signed(m.disp)      # exact under the region guard (bp_offsets)
+            return Opnd(f"({sx(-d)},{base},d5.w)", f"({sx(-d - 1)},{base},d5.w)")
+        self.mirror_d7(m)
+        return Opnd(f"0({base},d7.w)", f"-1({base},d7.w)")
+
+    def lea(self, m: Mem) -> str:
+        """Put the operand's address (a word's lower host byte) in a0."""
+        self.e(f"lea {self.ea(m).at(m.width)},a0")
+        return "a0"
+
+    def getreg(self, r: str, dst: str) -> None:
+        """Guest register into data register `dst`: 16-bit ones in the low word, 8-bit
+        ones in the low byte (other bits unspecified). Keeps X."""
+        if r in HALF:
+            full, sh = HALF[r]
+            if sh:
+                self.e(f"move.w {GREG[full]},{dst}")
+                self.e(f"ror.w #8,{dst}")
+            else:
+                self.e(f"move.l {GREG[full]},{dst}")
+        else:
+            self.e(f"move.l {GREG[r]},{dst}")
+            if r in MIRROR:
+                self.e(f"eori.w #$7fff,{dst}")
+
+    def putreg(self, r: str, src: str) -> None:
+        """Data register `src` (low byte/word) into a guest register."""
+        if r in HALF:
+            full, sh = HALF[r]
+            g = GREG[full]
+            if sh:
+                # Bit-field offsets count from bit 31: bits 15..8 are AH etc.
+                # Keeps X and every other register bit. Callers never export
+                # this write's CCR as guest flags (arithmetic saves them first).
+                self.e(f"bfins {src},{g}{{16:8}}")
+            else:
+                self.e(f"move.b {src},{g}")
+        elif GREG[r][0] == "a":
+            self.e(f"movea.l {src},{GREG[r]}")
+        else:
+            self.e(f"move.w {src},{GREG[r]}")
+            if r in MIRROR:
+                self.e(f"eori.w #$7fff,{GREG[r]}")
+
+    def read(self, o, dst: str, pos: int | None = None) -> None:
+        """Operand value into the low byte/word of data register `dst` (upper bits
+        unspecified)."""
+        w = o.width
+        if isinstance(o, Reg):
+            if o.name in SEGBASE or o.name == "cs":
+                self.getseg(o.name, dst)
+            else:
+                self.getreg(o.name, dst)
+        elif isinstance(o, Imm):
+            self.e(f"move.l #{self.imm(o, pos)},{dst}")
+        elif isinstance(o, Mem):
+            self.e(f"move.{SZ[w]} {self.ea(o).at(w)},{dst}")
+        else:
+            raise LowerError(f"read {o}")
+
+    def read_zx(self, o, dst: str) -> None:
+        """16-bit operand value into data register `dst`, zero-extended (for a
+        consumer of all 32 bits: segment bases, the cell walk's entry IP)."""
+        if isinstance(o, Imm) or isinstance(o, Reg) and o.name == "cs":
+            self.read(o, dst)
+            return
+        self.e(f"moveq #0,{dst}")
+        if isinstance(o, Mem):
+            self.e(f"move.w {self.ea(o).w},{dst}")
+        elif o.name in SEGBASE:
+            self.e(f"move.w {SEGSLOT[o.name]}(a6),{dst}")
+        else:
+            self.e(f"move.w {GREG[o.name]},{dst}")
+            if o.name in MIRROR:
+                self.e(f"eori.w #$7fff,{dst}")
+
+    def write(self, o, src: str) -> None:
+        """Data register `src` into a register or memory operand (src clobbered)."""
+        if isinstance(o, Reg):
+            if o.name in SEGBASE:
+                self.putseg(o.name, src)
+            else:
+                self.putreg(o.name, src)
+        elif isinstance(o, Mem):
+            if src == "d7" and (o.base or o.index or o.seg == "cs"):
+                self.e("move.l d7,d6")
+                src = "d6"
+            self.e(f"move.{SZ[o.width]} {src},{self.ea(o).at(o.width)}")
+        else:
+            raise LowerError(f"write {o}")
+
+    def getseg(self, s: str, dst: str) -> None:
+        if s == "cs":
+            self.e(f"move.l #{self.c.cs},{dst}")
+        else:
+            self.e(f"move.w {SEGSLOT[s]}(a6),{dst}")
+
+    def putseg(self, s: str, src: str, clean: bool = False) -> None:
+        """Segment register from the low word of `src` (`clean`: zero-extended).
+        A value whose window reaches a cell cache drops the caches (D3, smc.py),
+        out of line; the last lines of the instruction, so the label is safe."""
+        if not clean:
+            self.e(f"and.l #$ffff,{src}")
+        self.e(f"move.w {src},{SEGSLOT[s]}(a6)")
+        if self.c.seg_limit:
+            k = sum(1 for x in self.cold if x.startswith(f"{self.c.label}_sx"))
+            cold, back = f"{self.c.label}_sx{k}", f"{self.c.label}_sr{k}"
+            self.e(f"cmp.w #{hx(self.c.seg_limit)},{src}")
+            self.e(f"bcs {cold}")
+            self.at(back)
+            self.cold += [f"{cold}:", "\tjsr smc_expose", f"\tbra {back}"]
+            self.stats["segment check (cell cache)"] += 1
+        self.e(f"lsl.l #4,{src}")
+        self.e(f"lea -$7fff(a6),{SEGBASE[s]}")
+        self.e(f"suba.l {src},{SEGBASE[s]}")
+
+    def putseg_repeat(self, s: str, src: str, clean: bool, value: str | None = None) -> None:
+        """R30 (annotations/seg-repeat.csv): a load of the value the segment holds
+        changes nothing (its base and the cell caches follow the value, D3), so
+        compare first; the store, the cell-cache check and the base go out of
+        line. `value`: a guest register holding the new value, copied into `src`
+        there."""
+        k = sum(1 for x in self.cold if x.startswith(f"{self.c.label}_gx"))
+        cold, back = f"{self.c.label}_gx{k}", f"{self.c.label}_gr{k}"
+        self.e(f"cmp.w {SEGSLOT[s]}(a6),{value or src}")
+        self.e(f"bne {cold}")
+        self.at(back)
+        hot, self.out = self.out, [f"{cold}:"]
+        if value:
+            self.e(f"moveq #0,{src}")
+            self.e(f"move.w {value},{src}")
+        self.putseg(s, src, clean or bool(value))
+        self.e(f"bra {back}")
+        self.cold += self.out
+        self.out = hot
+        self.stats["segment load compared first"] += 1
+
+    def push(self, src: str | None = None, const: str | None = None) -> None:
+        """Push a word: a register, a memory operand or a constant."""
+        self.e("addq.w #2,d4")
+        self.e(f"move.w {'#' + const if const is not None else src},-1(a2,d4.w)")
+
+    def push_far(self, cs: str, ip: str) -> None:
+        """R29: CS then IP as one long (CS at the lower host address); a push
+        across SS:0 (d4.w overflows) stores the two words out of line."""
+        k = sum(1 for x in self.cold if x.startswith(f"{self.c.label}_pf"))
+        cold, back = f"{self.c.label}_pf{k}", f"{self.c.label}_pr{k}"
+        self.e("addq.w #4,d4")
+        self.e(f"bvs {cold}")
+        self.e(f"move.l #(({cs})<<16)|{ip},-3(a2,d4.w)")
+        self.at(back)
+        self.cold += [f"{cold}:", "\tsubq.w #2,d4", f"\tmove.w #{cs},-1(a2,d4.w)",
+                      "\taddq.w #2,d4", f"\tmove.w #{ip},-1(a2,d4.w)", f"\tbra {back}"]
+        self.stats["far push as one long"] += 1
+
+    def pop(self, dst: str) -> None:
+        self.e(f"move.w -1(a2,d4.w),{dst}")
+        self.e("subq.w #2,d4")
+
+    def pop_far(self) -> None:
+        """R33: packed CS:IP in d7. Overflow guards SP wrapping between
+        the word pops; the slow path retains each original word access."""
+        k = sum(x.startswith(f"{self.c.label}_rf") for x in self.cold)
+        cold, back = f"{self.c.label}_rf{k}", f"{self.c.label}_rr{k}"
+        self.e("subq.w #4,d4")
+        self.e(f"bvs {cold}")
+        self.e("move.l 1(a2,d4.w),d7")
+        self.at(back)
+        self.cold += [f"{cold}:", "\taddq.w #4,d4",
+                      "\tmove.w -1(a2,d4.w),d7", "\tsubq.w #2,d4",
+                      "\tmove.w -1(a2,d4.w),d6", "\tsubq.w #2,d4",
+                      "\tswap d7", "\tmove.w d6,d7", "\tswap d7", f"\tbra {back}"]
+        self.stats["far pop as one long"] += 1
+
+    # -- flags --------------------------------------------------------------
+    def kills(self, kind: str) -> set:
+        d, u = FLAG_KINDS[kind]
+        return set(d) | set(u)
+
+    def store_ccr(self, flags: set, defined: set) -> None:
+        """Store the CCR-held `flags` (subset of ALLC) in G_FL. A full store is
+        used when every live CCR flag is redefined here."""
+        flags = flags & ALLC
+        if not flags:
+            return
+        keep = {f for f in ALLC if f in self.c.live and f not in defined}
+        if not keep:
+            self.e("move.w ccr,G_FL(a6)")
+            self.stats["flag store"] += 1
+            return
+        m = sum(CCR_BIT[f] for f in flags)
+        self.e("move.w ccr,d7")
+        self.e(f"and.b #{hx(m)},d7")
+        self.e(f"and.b #{hx(~m & 0xFF)},G_FL+1(a6)")
+        self.e("or.b d7,G_FL+1(a6)")
+        self.ccr = set()
+        self.stats["flag merge"] += 1
+
+    def put_bits(self, bits: int, src: str = "d7") -> None:
+        """Merge CCR-image bits `bits` of data register `src` into G_FL."""
+        self.e(f"and.b #{hx(bits)},{src}")
+        self.e(f"and.b #{hx(~bits & 0xFF)},G_FL+1(a6)")
+        self.e(f"or.b {src},G_FL+1(a6)")
+        self.ccr = set()
+        self.stats["flag merge"] += 1
+
+    def finish_flags(self, kind: str, ok: set, res: str | None = None,
+                     extra: set = frozenset()) -> None:
+        """After the 68k op: store `need` ∩ defined; leave the CCR as `ok` if fusable.
+        `res`: data register holding the result (for PF); `extra`: needed flags the
+        caller computes itself."""
+        self.x_cf = "X" in ok
+        self.cf_result = self.x_cf
+        defined = self.kills(kind)
+        need = self.c.need & FLAG_KINDS[kind][0]
+        self.ccr = set(ok)
+        self.store_ccr((need & ok) - set(extra), defined)
+        if "PF" in need:
+            self.e(f"move.b {res},G_PF(a6)")
+            self.ccr = set()
+            self.stats["PF store"] += 1
+        if need >= set(STATUS):
+            self.stats["full-flag materialization"] += 1
+        if not self.c.fuse:
+            self.ccr = set()
+
+    def af_pre(self, a: str, b: str) -> None:
+        """AF of a+b / a-b: G_AF := a ^ b before the op, ^ result after (af_post)."""
+        if "AF" in self.c.need and self.af:
+            self.e(f"move.b {a},G_AF(a6)")
+            if b.startswith("#"):
+                self.e(f"eor.b #({b[1:]})&$ff,G_AF(a6)")
+            else:
+                self.e(f"eor.b {b},G_AF(a6)")
+            self.stats["AF store"] += 1
+
+    def af_post(self, r: str) -> None:
+        if "AF" in self.c.need and self.af:
+            self.e(f"eor.b {r},G_AF(a6)")
+            self.ccr = set()
+
+    def load_ccr(self, reads: set) -> None:
+        """Make the CCR hold guest CF/OF/ZF/SF for a reader."""
+        if not reads <= self.c.ccr_in:
+            self.e("move.w G_FL(a6),ccr")
+            self.stats["flag load"] += 1
+
+    def set_x(self) -> None:
+        """X := CF (for addx/subx/roxl/roxr), Z := 1. Uses d7."""
+        if not {"X", "CF"} <= self.c.ccr_in:
+            self.e("move.b G_FL+1(a6),d7")
+            self.e("lsr.b #1,d7")
+            self.stats["flag load"] += 1
+
+    def branch_cc(self, cc: str, target: str) -> None:
+        if cc in ("p", "np"):
+            self.e("jsr __getpf")
+            self.e(f"tst.b d7")
+            self.e(f"{'bne' if cc == 'p' else 'beq'} {target}")
+        else:
+            self.load_ccr(CC_READS[cc])
+            self.e(f"b{CC68[cc]} {target}")
+
+    # -- dispatch ------------------------------------------------------------
+    def run(self) -> list[str]:
+        i = self.i
+        op = i.op
+        fn = getattr(self, "op_" + op, None)
+        if fn is None:
+            if op in ("add", "adc", "sub", "sbb", "cmp", "and", "or", "xor", "test"):
+                fn = self.alu
+            elif op in ("rol", "ror", "rcl", "rcr", "shl", "shr", "sar"):
+                fn = self.shift
+            elif op in ("movs", "cmps", "stos", "lods", "scas"):
+                fn = self.string
+            elif op in ("daa", "das", "aaa", "aas"):
+                fn = self.bcd
+            else:
+                raise LowerError(f"no lowering for {i}")
+        if op not in ("mov", "push", "callf", "jmpf"):
+            self.check_reloc(set())
+        if self.c.vram and op not in STRING_OPS:
+            for m in mem_dests(i):
+                self.vram_mark(m)
+        fn()
+        if "CF" in writes(i)[1] and not self.cf_result:
+            self.x_cf = False
+        if self.c.code_regions:
+            for m in mem_dests(i):
+                if m.seg == "cs":
+                    self.code_store(m)
+        self.out, compact_stats = compact(self.out)
+        self.stats.update(compact_stats)
+        return self.out
+
+    # -- D3 cell caches: CS stores that may reach a self-modified region -----
+    def code_store(self, m: Mem) -> None:
+        """After a CS-segment store: where it may reach a cell cache's bytes, the
+        region's store hook (smc.py `_wb`/`_ww`, d6.w = 1 + region offset of the
+        byte, of a word's second byte), out of line; a byte `mov` plants or
+        restores the RET inline. The last lines of the instruction (global
+        labels). Clobbers the CCR and X."""
+        regs = [r for r in (m.base, m.index) if r]
+        if self.i.op == "xchg" and any(isinstance(o, Reg) and o.name in regs
+                                       for o in self.i.operands):
+            raise LowerError(f"{self.i}: CS store hook after its address register changes")
+        word = int(m.width == 16)
+        hook = "_ww" if word else "_wb"
+        hooked = False
+        for k, (delta, n, lab) in enumerate(self.c.code_regions):
+            if not regs:
+                if any(0 <= (m.disp & 0xFFFF) + delta + j < n for j in range(1 + word)):
+                    raise LowerError(f"{self.i}: a fixed CS store into cached cells is not lowered")
+                continue
+            if delta > 0 or n - delta > 0x10000:
+                raise LowerError(f"{self.i}: cached cells across its CS window are not lowered")
+            cold, back = f"{self.c.label}_hk{k}", f"{self.c.label}_hr{k}"
+            self.getreg(regs[0], "d6")
+            disp = m.disp
+            if len(regs) == 2:
+                if regs[1] in MIRROR:       # held as 7FFFh - x
+                    self.e(f"sub.w {GREG[regs[1]]},d6")
+                    disp += 0x7FFF
+                else:
+                    self.e(f"add.w {GREG[regs[1]]},d6")
+            self.sub_const(-(disp + delta + word + 1), "d6")    # exact: the region lies inside
+            self.e(f"cmp.w #{hx(n + word + 1)},d6")
+            src = self.i.operands[1] if self.i.op == "mov" and not word else None
+            self.e(f"{'bcc' if isinstance(src, (Imm, Reg)) else 'bcs'} "
+                   f"{back if isinstance(src, (Imm, Reg)) else cold}")
+            if isinstance(src, Imm) and src.value & 0xFF == RET_BYTE:    # the RET planted
+                self.e(f"lea {lab}_cov-1,a0")
+                self.e("move.b (a0,d6.w),d7")
+                self.e(f"beq {back}")                   # not cached
+                self.e(f"cmp.w #-1,{lab}_plant")
+                self.e(f"bne {cold}")                   # dropped, or one is planted
+                self.e("subq.b #1,d7")
+                self.e(f"beq {cold}")                   # inside a cell
+                self.e(f"move.w d6,{lab}_plant")
+            elif isinstance(src, (Imm, Reg)):           # the planted cell's first byte back
+                self.e(f"cmp.w {lab}_plant,d6")
+                self.e(f"bne {cold}")
+                # Index zero is the byte before the region, not a planted
+                # cell; it also equals the dropped-cache tag and zero padding.
+                self.e("tst.w d6")
+                self.e(f"beq {back}")
+                if isinstance(src, Imm):
+                    self.e(f"moveq #{(src.value & 0xFF) - ((src.value & 0x80) << 1)},d7")
+                else:
+                    self.getreg(src.name, "d7")
+                self.e(f"lea {lab}_cov-1,a0")
+                self.e("cmp.b (a0,d6.w),d7")
+                self.e(f"bne {cold}")
+                self.e(f"move.w #-1,{lab}_plant")
+            self.at(back)
+            self.cold += [f"{cold}:", f"\tjsr {lab}{hook}", f"\tbra {back}"]
+            self.stats["code store hook"] += 1
+            hooked = True
+        if hooked:
+            self.ccr = set()
+            self.x_cf = False
+
+    # -- D9 display: the graphics driver's stores to video memory ------------
+    def vram_mark(self, m: Mem) -> None:
+        """Before a store to `m` in the graphics driver: if its segment is
+        A000h, rt_vram_mark widens the changed rows (d7 = offset, d6 = bytes)."""
+        if m.seg == "cs":
+            return
+        skip = self.local()
+        self.e(f"cmp.w #$a000,{SEGSLOT[m.seg]}(a6)")
+        self.e(f"bne.s {skip}")
+        self.offset_d7(m)
+        self.e(f"moveq #{m.width // 8},d6")
+        self.e("jsr rt_vram_mark")
+        self.at(skip)
+        self.stats["video store mark"] += 1
+
+    def vram_mark_string(self, step: int) -> None:
+        """Before `stos`/`movs` (ES:DI, CX elements under REP): the bytes the
+        instruction will write, in the direction of `step`."""
+        skip = self.local()
+        self.e("cmp.w #$a000,G_ES(a6)")
+        self.e(f"bne.s {skip}")
+        n = abs(step)
+        if self.i.rep:
+            self.e("moveq #0,d6")
+            self.e("move.w d1,d6")
+            self.e(f"beq.s {skip}")
+            if n == 2:
+                self.e("add.l d6,d6")
+        else:
+            self.e(f"moveq #{n},d6")
+        self.e("move.l a5,d7")
+        if step < 0:            # DF = 1: the lowest byte written is DI + n - bytes
+            self.e("sub.l d6,d7")
+            self.e(f"addq.l #{n},d7")
+        self.e("jsr rt_vram_mark")
+        self.at(skip)
+        self.stats["video store mark"] += 1
+
+    # -- ALU -----------------------------------------------------------------
+    def src_operand(self, o, *, areg: bool, mem: bool, scratch: str = "d7",
+                    pos: int | None = None) -> str:
+        """Second operand as a 68k source: data register, #imm, an address register
+        (`areg`), the memory operand itself (`mem`; words are native, D1) or
+        `scratch` it was loaded into."""
+        if isinstance(o, Imm):
+            return f"#{self.imm(o, pos)}"
+        if isinstance(o, Reg):
+            if o.name in HALF:
+                full, sh = HALF[o.name]
+                if not sh:
+                    return GREG[full]
+            elif o.name not in MIRROR and (GREG[o.name][0] == "d" or areg):
+                return GREG[o.name]
+            self.getreg(o.name, scratch)
+            return scratch
+        if mem:
+            return self.ea(o).at(o.width)
+        self.read(o, scratch)
+        return scratch
+
+    def dest_reg(self, a) -> str | None:
+        """68k register operated on in place: 16-bit data register or low byte."""
+        if isinstance(a, Reg):
+            if a.name in HALF:
+                full, sh = HALF[a.name]
+                return None if sh else GREG[full]
+            if GREG[a.name][0] == "d" and a.name not in MIRROR:
+                return GREG[a.name]
+        return None
+
+    def load_dest(self, a, dst: str) -> None:
+        """Destination operand into `dst` (a0 holds a memory operand's address). Keeps X."""
+        if isinstance(a, Mem):
+            self.e(f"move.{SZ[a.width]} (a0),{dst}")
+        else:
+            self.getreg(a.name, dst)
+
+    def store_dest(self, a, src: str) -> None:
+        """Write `src` back to the destination; clears self.ccr if that clobbers it."""
+        if isinstance(a, Mem):
+            self.e(f"move.{SZ[a.width]} {src},(a0)")
+            self.ccr = set()
+        elif a.name in HALF or a.name in MIRROR:
+            self.putreg(a.name, src)
+            self.ccr = set()
+        else:
+            self.e(f"movea.l {src},{GREG[a.name]}")
+
+    def alu(self) -> None:
+        i = self.i
+        op, w = i.op, i.width
+        a, b = i.operands
+        sz = SZ[w]
+        kind = {"add": "add", "adc": "adc", "sub": "sub", "sbb": "sbb", "cmp": "cmp",
+                "and": "logic", "or": "logic", "xor": "logic", "test": "logic"}[op]
+        m68 = {"add": "add", "sub": "sub", "cmp": "cmp", "and": "and", "or": "or", "xor": "eor",
+               "test": "and", "adc": "addx", "sbb": "subx"}[op]
+        writes = op not in ("cmp", "test")
+        need = self.c.need & FLAG_KINDS[{"cmp": "sub"}.get(kind, kind)][0]
+        flagkind = {"cmp": "sub"}.get(kind, kind)
+        ok = CCR_OK[kind]
+        logic = m68 in ("and", "or", "eor")
+        af = "AF" in need
+        if op in ("adc", "sbb"):
+            self.carry_op(m68, kind, a, b, w)
+            return
+        if isinstance(a, Reg) and HALF.get(a.name, ("", 0))[1] and self.high_byte(op, a, b, need):
+            return
+        if op in ("or", "and", "test") and areg(a) and isinstance(b, Reg) and b.name == a.name:
+            # R14g: SI/DI with itself: the value stays; move.w sets the logic flags
+            if need or self.c.fuse:
+                self.e(f"move.w {GREG[a.name]},d6")
+                self.finish_flags("logic", ok, "d6")
+            return
+        if op == "cmp" and {"PF", "AF"} & need:
+            m68, ok = "sub", CCR_OK["sub"]  # the result is needed: subtract a copy
+        if isinstance(a, Reg) and a.name in MIRROR and self.mirrored_alu(op, a, b, need):
+            return
+        if op in ("add", "sub") and areg(a) and self.flags_dead(kind):
+            self.areg_add(op, GREG[a.name], b)
+            return
+        r = self.dest_reg(a)
+        if r and (writes or m68 == "cmp"):
+            # in place on a data register
+            s = self.src_operand(b, areg=not (logic or af), mem=m68 != "eor" and not af)
+            self.af_pre(r, s)
+            self.e(f"{m68}.{sz} {s},{r}")
+            self.finish_flags(flagkind, ok, r)
+            self.af_post(r)
+            return
+        if (isinstance(a, Mem) and not ({"AF", "PF"} & need) and op != "test"
+                and (writes or isinstance(b, Imm))):
+            # in place on memory (words are native, D1)
+            s = self.src_operand(b, areg=False, mem=False, scratch="d6")
+            self.e(f"{m68}.{sz} {s},{self.ea(a).at(w)}")
+            self.finish_flags(flagkind, ok)
+            return
+        # on a copy in d6
+        if isinstance(a, Mem) and not writes:
+            # R14c: cmp/test of memory: the operand straight into d6, then the source
+            self.e(f"move.{sz} {self.ea(a).at(w)},d6")
+            s = self.src_operand(b, areg=not (logic or af), mem=False)
+            ones = (1 << w) - 1
+            if op == "test" and isinstance(b, Imm) and b.value & ones == ones:
+                s = None    # TEST m,FFh/FFFFh: the move set the logic flags
+        else:
+            if isinstance(a, Mem):
+                self.lea(a)
+            s = self.src_operand(b, areg=not (logic or af), mem=False)
+            self.load_dest(a, "d6")
+        self.af_pre("d6", s)
+        if s is not None:
+            self.e(f"{m68}.{sz} {s},d6")
+        self.finish_flags(flagkind, ok, "d6")
+        self.af_post("d6")
+        if writes:
+            self.store_dest(a, "d6")
+
+    def flags_dead(self, kind: str) -> bool:
+        """No flag of `kind` stored, left in the CCR or carried in X: the 68k op
+        may set none."""
+        return not self.c.need & FLAG_KINDS[kind][0] and not self.c.fuse and not self.c.keep_x
+
+    def areg_add(self, op: str, r: str, b) -> None:
+        """add/sub on SI/DI with dead flags, in place on the address register (only
+        its low word is the guest value, R4)."""
+        if isinstance(b, Imm):
+            v = (b.value if op == "add" else -b.value) & 0xFFFF
+            if 1 <= v <= 8:
+                self.e(f"addq.w #{v},{r}")
+            elif v >= 0xFFF8:
+                self.e(f"subq.w #{0x10000 - v},{r}")
+            elif v:
+                self.e(f"lea {sx(v - 0x10000 if v & 0x8000 else v)}({r}),{r}")
+        else:
+            s = self.src_operand(b, areg=True, mem=True)
+            self.e(f"{'adda' if op == 'add' else 'suba'}.w {s},{r}")
+        self.stats["SI/DI in place"] += 1
+
+    def mirrored_alu(self, op: str, a: Reg, b, need: set) -> bool:
+        """add sub xor or and on a mirrored register, and or/and/test of it
+        with itself, leaving exact flags in the CCR: add/sub/xor update the
+        mirror in place (inverse op; XOR commutes with it) and set the flags on
+        a native copy in d6; or/and write the copy back, then TST restores
+        their logic flags; or/and/test r,r leave the value unchanged."""
+        r = GREG[a.name]
+        kind = {"add": "add", "sub": "sub"}.get(op, "logic")
+        if op in ("or", "and", "test") and isinstance(b, Reg) and b.name == a.name:
+            self.e(f"move.w {r},d6")
+            self.e("eori.w #$7fff,d6")
+            self.finish_flags("logic", CCR_OK["logic"], "d6")
+            return True
+        if op not in ("add", "sub", "xor", "or", "and"):
+            return False
+        s = self.src_operand(b, areg=op in ("add", "sub") and "AF" not in need, mem=False)
+        inv = {"add": "sub", "sub": "add", "xor": "eor"}.get(op)
+        flags = bool(need) or self.c.fuse
+        if inv and not flags:
+            self.e(f"{inv}.w {s},{r}")
+            self.ccr = set()
+            return True
+        self.e(f"move.w {r},d6")
+        self.e("eori.w #$7fff,d6")
+        self.af_pre("d6", s)
+        if inv:
+            self.e(f"{inv}.w {s},{r}")
+            self.e(f"{ {'xor': 'eor'}.get(op, op)}.w {s},d6")
+        else:
+            self.e(f"{op}.w {s},d6")
+            self.e(f"move.w d6,{r}")
+            self.e(f"eori.w #$7fff,{r}")
+            if not flags:
+                self.ccr = set()
+                return True
+            self.e("tst.w d6")
+        self.finish_flags(kind, CCR_OK[kind], "d6")
+        self.af_post("d6")
+        return True
+
+    def high_byte(self, op: str, a: Reg, b, need: set) -> bool:
+        """R14a: AH-DH idioms on the word without moving the byte down. SUB/XOR
+        r,r: the byte cleared, flags (CF OF SF 0, ZF PF 1, AF 0) from `moveq #0`;
+        OR/AND/TEST r,r: the value stays, logic flags of the byte from a masked
+        copy; AND/OR/XOR r,imm with dead flags: the word op with the shifted
+        immediate."""
+        r = GREG[HALF[a.name][0]]
+        same = isinstance(b, Reg) and b.name == a.name
+        flags = bool(need) or self.c.fuse or self.c.keep_x
+        if same and op in ("sub", "xor"):
+            self.e(f"and.w #$ff,{r}")
+            if flags:
+                self.e("moveq #0,d6")
+                if "AF" in need and op == "sub":
+                    self.e("move.b d6,G_AF(a6)")    # keeps the CCR: N Z V C of 0
+                    self.stats["AF store"] += 1
+                self.finish_flags({"sub": "sub"}.get(op, "logic"), ALLC, "d6")
+            return True
+        if same and op in ("or", "and", "test") and "PF" not in need:
+            if flags:
+                self.e(f"move.w {r},d6")
+                self.e("and.w #$ff00,d6")
+                self.finish_flags("logic", ALLC)
+            return True
+        if isinstance(b, Imm) and op in ("and", "or", "xor") and not flags:
+            v = (b.value & 0xFF) << 8
+            m68 = {"and": "and", "or": "or", "xor": "eor"}[op]
+            self.e(f"{m68}.w #{hx(v | 0xFF if op == 'and' else v)},{r}")
+            return True
+        return False
+
+    def keep_x(self, mark: int) -> bool:
+        """R28: X held guest CF at out[mark] and the operand setup after it changed
+        X. Keep it in d6 across the setup: `subx.b d6,d6` (0 or FFh, X unchanged)
+        first, `add.b d6,d6` (X from bit 7) before the setup's first use of d6,
+        when that use writes d6 without reading it, no earlier line of the
+        instruction uses d6 and every line from there keeps X."""
+        setup = self.out[mark:]
+        j = next((n for n, x in enumerate(setup) if D6.search(x)), len(setup))
+        if any(D6.search(x) for x in self.out[:mark]) or not all(x.startswith("\t") for x in setup):
+            return False
+        if j < len(setup):
+            op, _, args = setup[j].strip().partition(" ")
+            if not op.startswith("move") or not args.endswith(",d6") or D6.search(args[:-3]):
+                return False
+        if not all(map(keeps_x, setup[j:])):
+            return False
+        self.out[mark + j:mark + j] = ["\tadd.b d6,d6"]
+        self.out.insert(mark, "\tsubx.b d6,d6")
+        self.x_cf = True
+        self.stats["carry X kept across setup"] += 1
+        return True
+
+    def carry_op(self, m68, kind, a, b, w) -> None:
+        """adc sbb: addx/subx need X = CF and Z preset to 1. Order: addresses and the
+        source first (they may change X), then X from the state block or kept
+        across them (R28), then X-safe moves of the destination."""
+        sz = SZ[w]
+        mark, x_in = len(self.out), self.x_cf
+        if isinstance(a, Mem):
+            self.lea(a)
+        s = self.src_operand(b, areg=False, mem=False, scratch="d6")
+        if s.startswith("#"):
+            self.e(f"move.l {s},d6")
+            s = "d6"
+        if self.x_cf or x_in and self.keep_x(mark):
+            self.stats["carry X reused"] += 1
+        else:
+            self.e("move.b G_FL+1(a6),d7")
+            self.e("lsr.b #1,d7")
+            self.stats["flag load"] += 1
+        r = self.dest_reg(a)
+        if r is None:
+            r = "d7"
+            self.load_dest(a, "d7")
+        self.af_pre(r, s)
+        ok = CCR_OK[kind]
+        if "ZF" in self.c.need:
+            self.e("ori.b #4,ccr")  # addx/subx only clear Z
+        else:
+            ok = ok - {"ZF"}
+        self.e(f"{m68}.{sz} {s},{r}")
+        self.finish_flags(kind, ok, r)
+        self.af_post(r)
+        if r == "d7":
+            self.store_dest(a, "d7")
+
+    def unary(self, m68: str, kind: str | None) -> None:
+        """inc dec neg not on any operand."""
+        i = self.i
+        a = i.operands[0]
+        sz = SZ[i.width]
+        need = self.c.need
+        ok = CCR_OK.get(kind, set())
+        opnd = {"addq": "#1,", "subq": "#1,", "neg": "", "not": ""}[m68]
+        if m68 in ("addq", "subq") and areg(a) and self.flags_dead(kind):
+            self.e(f"{m68}.w #1,{GREG[a.name]}")
+            self.stats["SI/DI in place"] += 1
+            return
+        if isinstance(a, Reg) and a.name in MIRROR and m68 != "neg":
+            # NOT commutes with the mirror; inc/dec invert in place, their
+            # flags (if any) set on a native copy in d6
+            r = GREG[a.name]
+            inv = {"addq": "subq", "subq": "addq", "not": "not"}[m68]
+            flags = kind and (need & FLAG_KINDS[kind][0] or self.c.fuse)
+            if flags:
+                self.e(f"move.w {r},d6")
+                self.e("eori.w #$7fff,d6")
+                self.af_pre("d6", "#1")
+            self.e(f"{inv}.w {opnd}{r}")
+            if flags:
+                self.e(f"{m68}.w {opnd}d6")
+                self.finish_flags(kind, ok, "d6")
+                self.af_post("d6")
+            else:
+                self.ccr = set()
+            return
+        if isinstance(a, Reg) and (a.name in HALF and not HALF[a.name][1]
+                                   or a.name in GREG and GREG[a.name][0] == "d"
+                                   and a.name not in MIRROR):
+            r = GREG[HALF[a.name][0]] if a.name in HALF else GREG[a.name]
+            if kind:
+                if kind == "neg":
+                    if "AF" in need:
+                        self.e(f"move.b {r},G_AF(a6)")
+                        self.stats["AF store"] += 1
+                else:
+                    self.af_pre(r, "#1")
+            self.e(f"{m68}.{sz} {opnd}{r}")
+            if kind:
+                self.finish_flags(kind, ok, r)
+                self.af_post(r)
+            return
+        if isinstance(a, Mem) and not ({"AF", "PF"} & need):
+            self.e(f"{m68}.{sz} {opnd}{self.ea(a).at(i.width)}")
+            if kind:
+                self.finish_flags(kind, ok)
+            return
+        if isinstance(a, Mem):
+            self.lea(a)
+            self.e(f"move.{sz} (a0),d6")
+        else:
+            self.getreg(a.name, "d6")
+        if kind == "neg":
+            if "AF" in need:
+                self.e("move.b d6,G_AF(a6)")
+                self.stats["AF store"] += 1
+        elif kind:
+            self.af_pre("d6", "#1")
+        self.e(f"{m68}.{sz} {opnd}d6")
+        if kind:
+            self.finish_flags(kind, ok, "d6")
+            self.af_post("d6")
+        if isinstance(a, Mem):
+            self.e(f"move.{sz} d6,(a0)")
+            self.ccr = set()
+        elif a.name in HALF or a.name in MIRROR:
+            self.putreg(a.name, "d6")
+            self.ccr = set()
+        else:
+            self.e(f"movea.l d6,{GREG[a.name]}")
+
+    def op_inc(self):
+        self.unary("addq", "inc")
+
+    def op_dec(self):
+        self.unary("subq", "dec")
+
+    def op_neg(self):
+        self.unary("neg", "neg")
+
+    def op_not(self):
+        self.unary("not", None)
+
+    # -- shifts and rotates --------------------------------------------------
+    def shift(self) -> None:
+        i = self.i
+        op, w = i.op, i.width
+        a, cnt = i.operands
+        sz = SZ[w]
+        m68 = {"shl": "asl", "shr": "lsr", "sar": "asr", "rol": "rol", "ror": "ror",
+               "rcl": "roxl", "rcr": "roxr"}[op]
+        rot = op in ("rol", "ror", "rcl", "rcr")
+        need = self.c.need & FLAG_KINDS[op][0]
+        skip = None
+        if isinstance(a, Mem):
+            self.lea(a)
+        if op in ("rcl", "rcr"):
+            if self.x_cf:
+                self.stats["carry X reused"] += 1
+            else:
+                self.e("move.b G_FL+1(a6),d6")
+                self.e("lsr.b #1,d6")  # X := CF; subsequent operand moves keep X
+                self.stats["flag load"] += 1
+        if isinstance(cnt, Reg):
+            skip = self.local()
+            self.e("moveq #$1f,d7")
+            self.e("and.b d1,d7")
+            self.e(f"beq {skip}")
+            count = "d7"
+        else:
+            count = "#1"
+        r = self.dest_reg(a) or "d6"
+        if r == "d6":
+            self.load_dest(a, "d6")
+        self.e(f"{m68}.{sz} {count},{r}")
+        self.x_cf = isinstance(cnt, Imm) and op in ("shl", "shr", "sar", "rcl", "rcr")
+        self.cf_result = self.x_cf
+        computed = {"OF"} & need if op not in ("shl", "sar") else set()
+        if rot or computed or isinstance(cnt, Reg):
+            self.c.fuse = False
+        store = (need - computed) | ({"CF"} if rot and computed else set())
+        ok = {"CF"} if rot else CCR_OK[op]
+        self.ccr = set(ok)
+        self.store_ccr(store & ok, self.kills(op))
+        if "PF" in need:
+            self.e(f"move.b {r},G_PF(a6)")
+            self.ccr = set()
+            self.stats["PF store"] += 1
+        if computed:
+            top = w - 1
+            if op == "shr":  # count 1: OF = msb(a) = bit w-2 of the result
+                self.e(f"btst #{w - 2},{r}")
+                self.e("sne d7")
+            elif op in ("rol", "rcl"):  # OF = msb(r) ^ CF (CF stored above)
+                lab = self.local()
+                self.e("move.b G_FL+1(a6),d7")
+                self.e(f"btst #{top},{r}")
+                self.e(f"beq {lab}")
+                self.e("not.b d7")
+                self.at(lab)
+                self.e("add.b d7,d7")
+            else:  # ror rcr: OF = msb(r) ^ bit w-2 of r
+                self.e(f"move.{sz} {r},d7")
+                self.e(f"add.{sz} d7,d7")
+                self.e(f"eor.{sz} {r},d7")
+                self.e("smi d7")
+            self.put_bits(2)
+            self.stats["OF compute"] += 1
+        if need >= set(STATUS) - {"AF"}:
+            self.stats["full-flag materialization"] += 1
+        if not self.c.fuse:
+            self.ccr = set()
+        if r == "d6":
+            self.store_dest(a, "d6")
+        if skip:
+            self.at(skip)
+            self.ccr = set()
+
+    # -- multiply / divide ---------------------------------------------------
+    def op_mul(self):
+        self.muldiv("mul")
+
+    def op_imul(self):
+        self.muldiv("imul")
+
+    def op_div(self):
+        self.muldiv("div")
+
+    def op_idiv(self):
+        self.muldiv("idiv")
+
+    def mul_flags(self, test: list[str]) -> None:
+        """CF = OF = (`test` leaves NE); SF ZF AF PF undefined, so a full store."""
+        if not self.c.need & {"CF", "OF"}:
+            return
+        for t in test:
+            self.e(t)
+        self.e("sne d7")
+        self.e("move.w d7,G_FL(a6)")
+        self.stats["flag store"] += 1
+
+    def muldiv_source(self, o, div: bool) -> str:
+        """Word operand for `mulu`/`divu`: memory (multiply only) or AX-BX
+        straight, else read into d6. A divide builds DX:AX in d2, so DX is read.
+        Absolute offsets FFFEh and FFFFh are read into d6 too: vasm does not
+        widen `mulu`'s (d16,An) to a 32-bit displacement, at FFFFh or under the
+        sabotage plants' one-byte displacement shifts at FFFEh."""
+        if isinstance(o, Mem) and not div and (o.base or o.index or o.disp & 0xFFFF < 0xFFFE):
+            return self.ea(o).w
+        if isinstance(o, Reg) and o.name in ("ax", "cx", "dx", "bx") and not (div and o.name == "dx"):
+            return GREG[o.name]
+        self.read(o, "d6")
+        return "d6"
+
+    def muldiv(self, op: str) -> None:
+        i = self.i
+        w = i.width
+        signed = op in ("imul", "idiv")
+        if w == 16:
+            src = self.muldiv_source(i.operands[0], op in ("div", "idiv"))
+        else:
+            self.read(i.operands[0], "d6")
+        if w == 8:
+            self.e("ext.w d6" if signed else "and.w #$ff,d6")
+        if op in ("mul", "imul"):
+            if w == 8:
+                if op == "mul":
+                    self.e("and.w #$ff,d0")
+                    self.e("mulu.w d6,d0")
+                    self.mul_flags(["move.w d0,d7", "lsr.w #8,d7"])
+                else:
+                    self.e("ext.w d0")
+                    self.e("muls.w d6,d0")
+                    self.mul_flags(["move.b d0,d7", "ext.w d7", "cmp.w d0,d7"])
+            else:
+                self.e(f"{'muls' if signed else 'mulu'}.w {src},d0")
+                if not self.c.dead_dx or op == "mul" and self.c.need & {"CF", "OF"}:
+                    self.e("move.l d0,d2")
+                    self.e("swap d2")
+                else:
+                    self.stats["dead DX result omitted"] += 1
+                if op == "mul":
+                    self.mul_flags(["tst.w d2"])
+                else:
+                    self.mul_flags(["move.w d0,d7", "ext.l d7", "cmp.l d0,d7"])
+            self.ccr = set()
+            return
+        # R14i: the divide error out of line (`cold`, placed after the run), so
+        # the normal path falls through
+        fault = f"{self.c.label}_dz"
+        div = "divs" if signed else "divu"
+        if w == 8:
+            if signed:
+                self.e("move.w d0,d7")
+                self.e("ext.l d7")
+            else:
+                self.e("moveq #0,d7")
+                self.e("move.w d0,d7")
+            self.e("tst.w d6")
+            self.e(f"beq {fault}")
+            self.e(f"{div}.w d6,d7")
+            self.e(f"bvs {fault}")
+            if signed:
+                self.e("move.b d7,d6")
+                self.e("ext.w d6")
+                self.e("cmp.w d7,d6")
+                self.e(f"bne {fault}")
+            else:
+                self.e("cmp.w #$ff,d7")
+                self.e(f"bhi {fault}")
+            self.e("move.b d7,d0")
+            self.e("swap d7")
+            self.e("lsl.w #8,d7")
+            self.e("move.b d0,d7")
+            self.e("move.w d7,d0")
+        else:
+            # DX:AX in d2; an overflowing divu/divs leaves it unchanged
+            self.e("swap d2")
+            self.e("move.w d0,d2")
+            self.e(f"tst.w {src}")
+            self.e(f"beq {fault}")
+            self.e(f"{div}.w {src},d2")
+            self.e(f"bvs {fault}")
+            self.e("move.w d2,d0")
+            if not self.c.dead_dx:
+                self.e("swap d2")
+            else:
+                self.stats["dead DX result omitted"] += 1
+        hot, self.out = self.out, [f"{fault}:"]
+        if w == 16:
+            self.e("swap d2")
+        self.exit_fault(0)
+        self.cold, self.out = self.out, hot
+        self.ccr = set()
+
+    # -- data movement ---------------------------------------------------------
+    def op_mov(self):
+        i = self.i
+        a, b = i.operands
+        w = i.width
+        pos = i.size - 2 if isinstance(b, Imm) and w == 16 else None
+        self.check_reloc({pos} if pos is not None else set())
+        if isinstance(a, Reg) and a.name in SEGBASE:
+            if not self.c.seg_repeat:
+                self.read_zx(b, "d7")
+                self.putseg(a.name, "d7", clean=True)
+            elif isinstance(b, Reg) and b.name in GREG and GREG[b.name][0] == "d" \
+                    and b.name not in MIRROR:
+                self.putseg_repeat(a.name, "d7", False, GREG[b.name])
+            else:
+                self.read(b, "d7")
+                self.putseg_repeat(a.name, "d7", False)
+            return
+        if isinstance(b, Reg) and b.name in SEGBASE:
+            # straight into the word destination (no zero-extension, R4)
+            src = f"{SEGSLOT[b.name]}(a6)"
+            if isinstance(a, Mem):
+                self.e(f"move.w {src},{self.ea(a).w}")
+            elif GREG[a.name][0] == "a":
+                self.e(f"movea.w {src},{GREG[a.name]}")
+            else:
+                self.e(f"move.w {src},{GREG[a.name]}")
+                if a.name in MIRROR:
+                    self.e(f"eori.w #$7fff,{GREG[a.name]}")
+            return
+        if isinstance(b, Reg) and b.name == "cs":
+            self.getseg(b.name, "d6")
+            self.write(a, "d6")
+            return
+        if isinstance(a, Reg):
+            if (w == 8 and isinstance(b, Reg) and a.name in HALF and b.name in HALF
+                    and HALF[a.name][1] == HALF[b.name][1]):
+                dest, src = GREG[HALF[a.name][0]], GREG[HALF[b.name][0]]
+                if HALF[a.name][1]:
+                    # MOV exports no native CCR flags. Preserve X and the low
+                    # byte while copying the high byte, including source aliases.
+                    self.e(f"move.b {dest},d6")
+                    self.e(f"move.w {src},{dest}")
+                    self.e(f"move.b d6,{dest}")
+                else:
+                    self.e(f"move.b {src},{dest}")
+                return
+            if isinstance(b, Imm):
+                v = self.imm(b, pos)
+                if a.name in MIRROR:
+                    self.e(f"move.w #({v})^$7fff,{GREG[a.name]}")
+                elif a.name in HALF or GREG[a.name][0] == "d":
+                    if a.name in HALF and HALF[a.name][1]:
+                        self.e(f"move.l #{v},d6")
+                        self.putreg(a.name, "d6")
+                    else:
+                        r = GREG[HALF[a.name][0]] if a.name in HALF else GREG[a.name]
+                        self.e(f"move.{SZ[w]} #{v},{r}")
+                else:
+                    self.e(f"movea.w #{v},{GREG[a.name]}")
+                return
+            if isinstance(b, Mem) and a.name in GREG and GREG[a.name][0] == "a":
+                self.e(f"movea.w {self.ea(b).w},{GREG[a.name]}")
+                return
+            if isinstance(b, Mem) and (a.name in GREG and GREG[a.name][0] == "d"):
+                self.e(f"move.w {self.ea(b).w},{GREG[a.name]}")
+                if a.name in MIRROR:
+                    self.e(f"eori.w #$7fff,{GREG[a.name]}")
+                return
+            if isinstance(b, Mem) and a.name in HALF and not HALF[a.name][1]:
+                self.e(f"move.b {self.ea(b).b},{GREG[HALF[a.name][0]]}")
+                return
+            if isinstance(b, Reg) and w == 16 and GREG[a.name][0] == "d":
+                self.e(f"move.w {GREG[b.name]},{GREG[a.name]}")
+                if (a.name in MIRROR) != (b.name in MIRROR):
+                    self.e(f"eori.w #$7fff,{GREG[a.name]}")
+                return
+            if isinstance(b, Reg) and w == 16 and b.name not in MIRROR:
+                self.e(f"move.l {GREG[b.name]},{GREG[a.name]}")
+                return
+            self.read(b, "d6")
+            self.write(a, "d6")
+            return
+        # memory destination
+        if isinstance(b, Imm):
+            v = self.imm(b, pos)
+            self.e(f"move.{SZ[w]} #{v},{self.ea(a).at(w)}")
+            return
+        if w == 8 and b.name in HALF and not HALF[b.name][1]:
+            self.e(f"move.b {GREG[HALF[b.name][0]]},{self.ea(a).b}")
+            return
+        if w == 16 and b.name in GREG and b.name not in MIRROR:
+            self.e(f"move.w {GREG[b.name]},{self.ea(a).w}")
+            return
+        self.read(b, "d6")
+        self.write(a, "d6")
+
+    def op_lea(self):
+        i = self.i
+        r, m = i.operands
+        self.offset_d7(m)
+        if GREG[r.name][0] == "d":
+            self.putreg(r.name, "d7")
+        else:
+            self.e(f"movea.l d7,{GREG[r.name]}")
+
+    def offset_d7(self, m: Mem) -> None:
+        """d7 := the operand's offset (low word)."""
+        regs = [x for x in (m.base, m.index) if x]
+        if not regs:
+            self.e(f"move.l #{hx(m.disp)},d7")
+            return
+        self.getreg(regs[0], "d7")
+        if len(regs) == 2:
+            self.e(f"add.w {GREG[regs[1]]},d7")
+        if m.disp:
+            self.e(f"add.w #{hx(m.disp)},d7")
+
+    def op_les(self):
+        self.lxs("es")
+
+    def op_lds(self):
+        self.lxs("ds")
+
+    def far_pair(self, m: Mem, zx: bool = False) -> bool:
+        """Far pointer in memory: offset word -> d6, segment word (at offset+2, 64 KiB
+        wrap) -> d7; low words valid. `zx`: zero-extend d7 where that is one
+        moveq; returns whether it did."""
+        base = self.seg_base(m.seg)
+        if not (m.base or m.index):
+            if zx:
+                self.e("moveq #0,d7")
+            for d, r in ((m.disp, "d6"), (m.disp + 2, "d7")):
+                self.e(f"move.w ({sx(0x7FFE - (d & 0xFFFF))},{base}),{r}")
+            return zx
+        if self.c.bp_direct and direct_pair(m):
+            d = signed(m.disp)      # exact under the region guard (bp_offsets)
+            if zx:
+                self.e("moveq #0,d7")
+            self.e(f"move.w ({sx(-d - 1)},{base},d5.w),d6")
+            self.e(f"move.w ({sx(-d - 3)},{base},d5.w),d7")
+            return zx
+        self.mirror_d7(m)
+        self.e(f"move.w -1({base},d7.w),d6")
+        self.e("subq.w #2,d7")
+        self.e(f"move.w -1({base},d7.w),d7")
+        return False
+
+    def lxs(self, seg: str) -> None:
+        r, m = self.i.operands
+        clean = self.far_pair(m, zx=not self.c.seg_repeat)
+        self.putreg(r.name, "d6")
+        (self.putseg_repeat if self.c.seg_repeat else self.putseg)(seg, "d7", clean)
+
+    def op_xchg(self):
+        a, b = self.i.operands
+        w = self.i.width
+        if isinstance(a, Reg) and isinstance(b, Reg) and w == 16 and \
+                (a.name in MIRROR) == (b.name in MIRROR):
+            if a.name != b.name:
+                self.e(f"exg {GREG[a.name]},{GREG[b.name]}")
+            return
+        if isinstance(a, Mem) or isinstance(b, Mem):
+            m, r = (a, b) if isinstance(a, Mem) else (b, a)
+            self.lea(m)
+            self.load_dest(m, "d6")
+            self.getreg(r.name, "d7")
+            self.store_dest(m, "d7")
+            self.putreg(r.name, "d6")
+            return
+        self.getreg(a.name, "d6")
+        self.getreg(b.name, "d7")
+        self.putreg(a.name, "d7")
+        self.putreg(b.name, "d6")
+
+    def op_push(self):
+        o = self.i.operands[0]
+        if isinstance(o, Reg) and o.name == "cs":
+            self.push(const=self.c.cs)
+        elif isinstance(o, Reg) and o.name in GREG and o.name not in MIRROR:
+            self.push(GREG[o.name])
+        elif isinstance(o, Mem) and o.width == 16:
+            mem = self.ea(o)    # 16-bit addressing never reads SP
+            self.push(mem.w)
+        elif isinstance(o, Reg) and o.name in SEGBASE:
+            self.push(f"{SEGSLOT[o.name]}(a6)")
+        else:   # SP: the value before the push (286 on)
+            self.read(o, "d7")
+            self.push("d7")
+
+    def op_pop(self):
+        o = self.i.operands[0]
+        if isinstance(o, Reg) and o.name in GREG and GREG[o.name][0] == "d" and o.name != "sp":
+            self.pop(GREG[o.name])
+            if o.name in MIRROR:
+                self.e(f"eori.w #$7fff,{GREG[o.name]}")
+            return
+        if isinstance(o, Reg) and o.name in GREG and GREG[o.name][0] == "a":
+            self.e(f"movea.w -1(a2,d4.w),{GREG[o.name]}")
+            self.e("subq.w #2,d4")
+            return
+        if isinstance(o, Reg) and o.name in SEGBASE:
+            if self.c.seg_repeat:
+                self.pop("d6")
+                self.putseg_repeat(o.name, "d6", False)
+                return
+            self.e("moveq #0,d6")
+            self.pop("d6")
+            self.putseg(o.name, "d6", clean=True)
+            return
+        self.pop("d6")
+        self.write(o, "d6")
+
+    def op_cbw(self):
+        self.e("ext.w d0")
+
+    def op_cwd(self):
+        self.e("move.w d0,d2")
+        self.e("ext.l d2")
+        self.e("clr.w d2")
+        self.e("swap d2")
+
+    def op_xlat(self):
+        seg = self.i.seg or "ds"
+        base = self.seg_base(seg)
+        self.e("moveq #0,d7")
+        self.e("move.b d0,d7")
+        self.e("add.w d3,d7")
+        self.e("eori.w #$7fff,d7")
+        self.e(f"move.b 0({base},d7.w),d0")
+
+    def op_nop(self):
+        pass
+
+    # -- flags instructions ------------------------------------------------------
+    def op_clc(self):
+        if "CF" in self.c.need:
+            self.e("and.b #$fe,G_FL+1(a6)")
+
+    def op_stc(self):
+        if "CF" in self.c.need:
+            self.e("or.b #1,G_FL+1(a6)")
+
+    def op_cmc(self):
+        if "CF" in self.c.need:
+            self.e("eor.b #1,G_FL+1(a6)")
+
+    def op_cld(self):
+        self.e("clr.b G_DF(a6)")
+
+    def op_std(self):
+        self.e("move.b #1,G_DF(a6)")
+
+    def op_cli(self):
+        self.e("clr.b G_IF(a6)")
+
+    def op_sti(self):
+        self.e("move.b #1,G_IF(a6)")
+        self.e("move.b rt_irq_pending,G_IRQ(a6)")  # re-arm (runtime.h: one move, atomic)
+
+    def op_lahf(self):
+        self.e("jsr __flags_word")
+        self.putreg("ah", "d7")
+
+    def op_sahf(self):
+        self.getreg("ah", "d7")
+        self.e("jsr __set_flags_lo")
+
+    def op_pushf(self):
+        self.e("jsr __flags_word")
+        self.push("d7")
+
+    def op_popf(self):
+        self.pop("d7")
+        self.trap_tf()
+        self.e("jsr __set_flags")
+
+    def trap_tf(self):
+        """TF set in the FLAGS image in d7 stops loudly, out of line (open-work
+        26: the game never sets TF; no single-step delivery)."""
+        stop = f"{self.c.label}_tf"
+        self.e("btst #8,d7")
+        self.e(f"bne {stop}")
+        hot, self.out = self.out, [f"{stop}:"]
+        self.e(f"move.l #{hx(self.i.ip)},d7")
+        self.e("jmp rt_trap" if self.c.program else "jmp T_TRAP")
+        self.cold, self.out = self.cold + self.out, hot
+
+    def bcd(self):
+        self.e(f"jsr __{self.i.op}")
+
+    def op_aam(self):
+        v = self.i.operands[0].value
+        if v == 0:
+            self.exit_fault(0)
+            return
+        self.e(f"move.l #{hx(v)},d7")
+        self.e("jsr __aam")
+
+    def op_aad(self):
+        self.e(f"move.l #{hx(self.i.operands[0].value)},d7")
+        self.e("jsr __aad")
+
+    # -- ports --------------------------------------------------------------------
+    def op_in(self):
+        a, port = self.i.operands
+        if isinstance(port, Imm):
+            self.e(f"move.l #{hx(port.value)},d7")
+        else:
+            self.e("move.l d2,d7")
+        self.e(f"jsr rt_in{self.i.width}")
+        if self.i.width == 8:
+            self.e("move.b d6,d0")
+        else:
+            self.e("move.w d6,d0")
+
+    def op_out(self):
+        port, a = self.i.operands
+        if isinstance(port, Imm):
+            self.e(f"move.l #{hx(port.value)},d7")
+        else:
+            self.e("move.l d2,d7")
+        self.e("move.l d0,d6")
+        self.e(f"jsr rt_out{self.i.width}")
+
+    # -- string instructions --------------------------------------------------------
+    def rep_checkpoint(self, done: bool) -> None:
+        if self.c.rep_hook is None:
+            return
+        point, restart = self.c.rep_hook
+        self.e(f"pea {int(done)}.w")
+        self.e(f"pea {point}.w")
+        self.e("jsr rt_replay_rep")
+        self.e("tst.l (sp)+")
+        self.e("lea 4(sp),sp")
+        self.e(f"bne {restart}")
+
+    def string(self):
+        """One body per direction (DF), step as immediate; REP tests CX before each
+        element, REPE/REPNE test ZF after it (ZF then always stored)."""
+        i = self.i
+        if self.c.rep_hook is not None:
+            self.c.need |= set(STATUS)  # an original slice boundary can expose every defined flag
+        # R21: the forward path falls through. Both directions keep the same
+        # bodies and checks; global continuations cross the cold-code scope.
+        back, end = f"{self.c.label}_dfback", f"{self.c.label}_dfend"
+        self.e("tst.b G_DF(a6)")
+        self.e(f"bne {back}")
+        self.string_body(i.width // 8, end)
+        hot, self.out = self.out, []
+        self.at(back)
+        self.string_body(-(i.width // 8), end)
+        self.e(f"bra {end}")
+        self.cold, self.out = self.cold + self.out, hot
+        self.at(end)
+        self.rep_checkpoint(True)
+        self.ccr = set()
+
+    def string_body(self, step: int, end: str) -> None:
+        i = self.i
+        op, w = i.op, i.width
+        src = self.seg_base(i.seg or "ds") if op in ("movs", "cmps", "lods") else None
+        sz = SZ[w]
+        add = f"{'addq' if step > 0 else 'subq'}.w #{abs(step)}"
+        top = self.local()
+        if self.c.vram and op in ("movs", "stos"):
+            self.vram_mark_string(step)
+        if i.rep:
+            if step > 0 and op != "lods" and self.c.rep_hook is None:
+                self.e("tst.w d1")
+                self.e(f"beq {end}")
+                self.string_fast(src, top, end)
+            self.at(top)
+            self.rep_checkpoint(False)
+            self.e("tst.w d1")
+            self.e(f"beq {end}")
+        k = 0 if w == 8 else -1     # [SI] at (k,src,d7.w), [ES:DI] at (k,a1,d6.w)
+        if op in ("movs", "cmps", "lods"):
+            self.e("move.w #$7fff,d7")
+            self.e("sub.w a4,d7")
+        if op in ("movs", "cmps", "stos", "scas"):
+            self.e("move.w #$7fff,d6")
+            self.e("sub.w a5,d6")
+        if op == "movs":
+            self.e(f"move.{sz} {k}({src},d7.w),{k}(a1,d6.w)")
+        elif op == "stos":
+            self.e(f"move.{sz} d0,{k}(a1,d6.w)")
+        elif op == "lods":
+            self.e(f"move.{sz} {k}({src},d7.w),d0")
+        else:  # cmps scas: d7 - d6
+            self.compare_pair(f"{k}({src},d7.w)", f"{k}(a1,d6.w)")
+        if op in ("movs", "cmps", "lods"):     # low words (R4)
+            self.e(f"{add},a4")
+        if op in ("movs", "cmps", "stos", "scas"):
+            self.e(f"{add},a5")
+        if i.rep:
+            self.e("subq.w #1,d1")
+            if op in ("cmps", "scas"):
+                self.e("btst #2,G_FL+1(a6)")
+                self.e(f"{'beq' if i.rep == 'repe' else 'bne'} {end}")
+            self.e(f"bra {top}")
+
+    def string_fast(self, src: str | None, slow: str, end: str) -> None:
+        """REP with DF = 0 and CX != 0 (D11): taken when no SI/DI range reaches
+        10000h (offset + size * CX < 10000h: no access wraps and SI/DI end
+        without wrapping), else `slow` (the element body).
+        SI/DI are host pointers in the loop (base + 8000h - offset: just above
+        the element, which forward order meets descending) and offsets again
+        after it; the loop goes element by element in the x86 order
+        (overlapping MOVS included), `db<cc>` on CX - 1. CMPS/SCAS compare for
+        equality, then the flags of the last pair computed as the element
+        body does."""
+        i = self.i
+        op, w = i.op, i.width
+        sz, n = SZ[w], w // 8
+        uses_si = op in ("movs", "cmps")
+        self.e("moveq #0,d7")
+        self.e("move.w d1,d7")
+        if n == 2:
+            self.e("add.l d7,d7")
+        if uses_si:
+            self.e("moveq #0,d6")
+            self.e("move.w a4,d6")
+            self.e("add.l d7,d6")
+            self.e("cmp.l #$10000,d6")
+            self.e(f"bcc {slow}")
+        self.e("moveq #0,d6")
+        self.e("move.w a5,d6")
+        self.e("add.l d6,d7")
+        self.e("cmp.l #$10000,d7")
+        self.e(f"bcc {slow}")
+        ptrs = [("a4", src)] if uses_si else []
+        ptrs.append(("a5", "a1"))
+        for p, base in ptrs:        # base + 8000h - offset = base - (offset ^ 8000h signed)
+            self.e(f"move.w {p},d6")
+            self.e("eori.w #$8000,d6")
+            self.e(f"movea.l {base},{p}")
+            self.e(f"suba.w d6,{p}")
+        if n == 2 and (op == "stos" or (op == "cmps" and i.rep == "repe")):
+            self.string_pairs()
+        elif n == 2 and op == "movs":
+            self.string_copy()
+        else:
+            self.string_words()
+        for p, base in ptrs:        # offset = (base - pointer) ^ 8000h, low word
+            self.e(f"move.w {base},d6")
+            self.e(f"sub.w {p},d6")
+            self.e("eori.w #$8000,d6")
+            self.e(f"movea.l d6,{p}")
+        self.e(f"bra {end}")
+        self.stats["string fast path"] += 1
+
+    def string_pairs(self) -> None:
+        """REP STOSW / REPE CMPSW, two elements per long (R12). The long at
+        -(p) holds the guest-first element in its low word (higher host
+        address). STOSW: AX doubled (R24 below). CMPSW: CX/2 pairs by `cmp.l`;
+        in a mismatching pair the low words decide which element stopped; CX =
+        the words of [ES:DI] after it; an odd last element alone; the flags of
+        the last pair compared as the element body does."""
+        loop, tail, fin = self.local(), self.local(), self.local()
+        if self.i.op == "stos":
+            # R24: every store writes AX and the fast path has no poll or read,
+            # so the order is free: a first word where the pointer is not long
+            # aligned, eight longs per pass (the remainder by a computed entry),
+            # an odd last word after them. AX:AX in a0, the word count in d7.
+            self.e("move.w d0,d6")
+            self.e("swap d6")
+            self.e("move.w d0,d6")
+            self.e("movea.l d6,a0")
+            self.e("move.w a5,d7")
+            self.e("lsr.b #2,d7")
+            self.e(f"bcc.s {tail}")
+            self.e("move.w d0,-(a5)")
+            self.e("subq.w #1,d1")
+            self.at(tail)
+            self.e("move.w d1,d7")
+            self.e("lsr.w #1,d1")
+            self.e("moveq #7,d6")
+            self.e("and.w d1,d6")
+            self.e("lsr.w #3,d1")
+            self.e("neg.w d6")
+            self.e(f"jmp {fin}(pc,d6.w*2)")
+            self.at(loop)
+            for _ in range(8):
+                self.e("move.l a0,-(a5)")
+            self.at(fin)
+            self.e(f"dbf d1,{loop}")
+            fin = self.local()
+            self.e("lsr.w #1,d7")
+            self.e(f"bcc.s {fin}")
+            self.e("move.w d0,-(a5)")
+            self.at(fin)
+            self.e("clr.w d1")
+            self.stats["string pairs"] += 1
+            return
+        # R26: eight pairs per pass after the remainder pairs; the end of
+        # [ES:DI] in d7 gives CX (the fast path's range ends below 10000h). The
+        # passes wait in d1's upper word; a0 may hold the source base.
+        rem, pairs, found = self.local(), self.local(), self.local()
+        self.e("moveq #0,d7")
+        self.e("move.w d1,d7")
+        self.e("add.l d7,d7")
+        self.e("neg.l d7")
+        self.e("add.l a5,d7")
+        self.e("lsr.w #1,d1")
+        self.e(f"beq.s {tail}")
+        self.e("move.w d1,d6")
+        self.e("lsr.w #3,d6")
+        self.e("swap d1")
+        self.e("move.w d6,d1")
+        self.e("swap d1")
+        self.e("andi.w #7,d1")
+        self.e("subq.w #1,d1")
+        self.e(f"bcs.s {pairs}")
+        self.at(rem)
+        self.e("move.l -(a4),d6")
+        self.e("cmp.l -(a5),d6")
+        self.e(f"dbne d1,{rem}")
+        self.e(f"bne.s {found}")
+        self.at(pairs)
+        self.e("swap d1")
+        self.e("subq.w #1,d1")
+        self.e(f"bcs.s {tail}")
+        self.at(loop)
+        for _ in range(7):
+            self.e("move.l -(a4),d6")
+            self.e("cmp.l -(a5),d6")
+            self.e(f"bne.s {found}")
+        self.e("move.l -(a4),d6")
+        self.e("cmp.l -(a5),d6")
+        self.e(f"dbne d1,{loop}")
+        self.e(f"beq.s {tail}")
+        self.at(found)
+        self.e("move.w 2(a4),d6")
+        self.e("cmp.w 2(a5),d6")
+        self.e(f"beq.s {fin}")
+        self.e("addq.l #2,a4")
+        self.e("addq.l #2,a5")
+        self.e(f"bra.s {fin}")
+        self.at(tail)
+        self.e("cmpa.l d7,a5")
+        self.e(f"beq.s {fin}")
+        self.e("move.w -(a4),d6")
+        self.e("cmp.w -(a5),d6")
+        self.at(fin)
+        self.e("move.l a5,d1")
+        self.e("sub.l d7,d1")
+        self.e("lsr.l #1,d1")
+        self.compare_pair("(a4)", "(a5)")
+        self.stats["string pairs"] += 1
+
+    def string_copy(self) -> None:
+        """F2: REP MOVSW by longs. A long reads both words before writing
+        either, which equals the element order unless [ES:DI] starts 1-3
+        bytes above [SI] (a4 - a5 in 1..3) and overwrites the second word
+        before it is read: that case, and CX < 4, take the element loop.
+        Otherwise as R24: a first word where the destination is not long
+        aligned, eight longs per pass, an odd last word."""
+        words, loop, fin, done = self.local(), self.local(), self.local(), self.local()
+        self.e("cmp.w #4,d1")
+        self.e(f"bcs.s {words}")
+        self.e("move.l a4,d6")
+        self.e("sub.l a5,d6")
+        self.e("subq.l #1,d6")
+        self.e("moveq #2,d7")
+        self.e("cmp.l d7,d6")
+        self.e(f"bls.s {words}")
+        tail = self.local()
+        self.e("move.w a5,d7")
+        self.e("lsr.b #2,d7")
+        self.e(f"bcc.s {tail}")
+        self.e("move.w -(a4),-(a5)")
+        self.e("subq.w #1,d1")
+        self.at(tail)
+        self.e("move.w d1,d7")
+        self.e("lsr.w #1,d1")
+        self.e("moveq #7,d6")
+        self.e("and.w d1,d6")
+        self.e("lsr.w #3,d1")
+        self.e("neg.w d6")
+        self.e(f"jmp {fin}(pc,d6.w*2)")
+        self.at(loop)
+        for _ in range(8):
+            self.e("move.l -(a4),-(a5)")
+        self.at(fin)
+        self.e(f"dbf d1,{loop}")
+        self.e("lsr.w #1,d7")
+        self.e(f"bcc.s {done}")
+        self.e("move.w -(a4),-(a5)")
+        self.e(f"bra.s {done}")
+        self.at(words)
+        self.e("subq.w #1,d1")
+        loop = self.local()
+        self.at(loop)
+        self.e("move.w -(a4),-(a5)")
+        self.e(f"dbf d1,{loop}")
+        self.at(done)
+        self.e("clr.w d1")
+        self.stats["string copy"] += 1
+
+    def string_words(self) -> None:
+        """The fast path's element loop: `db<cc>` on CX - 1."""
+        i = self.i
+        op, sz = i.op, SZ[i.width]
+        loop = self.local()
+        self.e("subq.w #1,d1")
+        self.at(loop)
+        cc = {"repe": "ne", "repne": "eq"}.get(i.rep, "f") if op in ("cmps", "scas") else "f"
+        if op == "movs":
+            self.e(f"move.{sz} -(a4),-(a5)")
+        elif op == "stos":
+            self.e(f"move.{sz} d0,-(a5)")
+        elif op == "cmps":
+            self.e(f"move.{sz} -(a4),d6")
+            self.e(f"cmp.{sz} -(a5),d6")
+        else:
+            self.e(f"cmp.{sz} -(a5),d0")
+        self.e(f"db{cc} d1,{loop}")
+        if cc == "f":
+            self.e("clr.w d1")
+        else:           # ran out (last pair did not stop it): d1 = -1, CX = 0
+            done = self.local()
+            self.e(f"b{cc}.s {done}")
+            self.e("addq.w #1,d1")
+            self.at(done)
+            self.compare_pair("(a4)", "(a5)")
+
+    def compare_pair(self, src_mem, dst_mem) -> None:
+        """CMPS/SCAS flags: d7 ([SI] or AL/AX) - d6 ([ES:DI])."""
+        i = self.i
+        w, sz = i.width, SZ[i.width]
+        if i.op == "cmps":
+            self.load_mem(src_mem, w, "d7")
+        else:
+            self.e("move.l d0,d7")
+        self.load_mem(dst_mem, w, "d6")
+        need = (self.c.need | ({"ZF"} if i.rep else set())) & FLAG_KINDS["sub"][0]
+        if "AF" in need:
+            self.e("move.b d7,G_AF(a6)")
+            self.e("eor.b d6,G_AF(a6)")
+            self.stats["AF store"] += 1
+        self.e(f"cmp.{sz} d6,d7")
+        saved = self.c.need
+        self.c.need = need - {"PF", "AF"}
+        self.store_ccr(self.c.need & ALLC, self.kills("sub"))
+        self.c.need = saved
+        if {"PF", "AF"} & need:
+            self.e(f"sub.{sz} d6,d7")
+            if "PF" in need:
+                self.e("move.b d7,G_PF(a6)")
+                self.stats["PF store"] += 1
+            if "AF" in need:
+                self.e("eor.b d7,G_AF(a6)")
+
+    def load_mem(self, mem: str, w: int, dst: str) -> None:
+        self.e(f"move.{SZ[w]} {mem},{dst}")
+
+    # -- control flow ---------------------------------------------------------------
+    def goto_near(self, ip: int, how: str = "bra") -> None:
+        lab = self.c.near(ip) if self.c.near else None
+        if lab:
+            self.e(f"{how} {lab}")
+        else:
+            if self.c.program:
+                raise LowerError(f"near target {ip:04X} unresolved")
+            self.e(f"move.l #{hx(ip)},d7")
+            self.e(f"{'jsr' if how == 'jsr' else 'jmp'} T_{'CALL' if how == 'jsr' else 'JUMP'}")
+
+    def goto_far(self, seg: str, off: int, how: str) -> None:
+        lab = self.c.far((seg, off)) if self.c.far else None
+        if lab:
+            self.e(f"{how} {lab}")
+        else:
+            if self.c.program:
+                raise LowerError(f"far target {seg}:{off:04X} unresolved")
+            self.e(f"move.l #{seg},d6")
+            self.e(f"move.l #{hx(off)},d7")
+            self.e(f"{how} T_{'CALLF' if how == 'jsr' else 'JUMPF'}")
+
+    def return_check(self, ip: int, cs: str | None) -> None:
+        if not self.c.program:
+            return
+        if cs is None:
+            self.e(f"cmp.w #{hx(ip)},d7")
+            self.e(f"bne {self.c.ret_mismatch}")
+        else:
+            self.e(f"cmp.l #(({cs})<<16)|{hx(ip)},d7")
+            self.e(f"bne {self.c.far_ret_mismatch}")
+        self.stats["return check"] += 1
+
+    def dispatch_near(self, how: str) -> None:
+        """Target IP in d7: compare with the known targets, else the runtime table."""
+        # R22: a matched first walk call returns directly to the check.
+        # Keep every remaining target and fallback in an exact cold path.
+        outline = how == "jsr" and bool(self.c.smc_targets)
+        done = f"{self.c.label}_dispatchend" if outline else self.local() if how == "jsr" else None
+        hot = None
+        for k, (lo, hi, lab) in enumerate(self.c.smc_targets):
+            nxt = f"{self.c.label}_dispatchcold" if outline and k == 0 else self.local()
+            self.e(f"cmp.w #{hx(lo)},d7")
+            self.e(f"blo {nxt}")
+            self.e(f"cmp.w #{hx(hi)},d7")
+            self.e(f"bhi {nxt}")
+            self.e(f"{how} {lab}")
+            if outline and k == 0:
+                self.at(done)
+                hot, self.out = self.out, []
+            elif done:
+                self.e(f"bra {done}")
+            self.at(nxt)
+        for ip in self.c.near_targets:
+            lab = self.c.near(ip) if self.c.near else None
+            if not lab:
+                continue
+            nxt = self.local()
+            self.e(f"cmp.w #{hx(ip)},d7")
+            self.e(f"bne {nxt}")
+            self.e(f"{how} {lab}")
+            if done:
+                self.e(f"bra {done}")
+            self.at(nxt)
+        if self.c.program and self.c.complete:
+            self.e(f"move.l #{self.c.cs},d6")
+            self.e("jmp rt_stop_unknown")  # outside the proved table
+            self.stats["stop_unknown site"] += 1
+        elif self.c.program:
+            self.e(f"move.l #{self.c.cs},d6")
+            self.e(f"{how} rt_dispatch_near")
+            self.stats["dispatcher exit"] += 1
+        else:
+            self.e(f"{how} T_{'CALL' if how == 'jsr' else 'JUMP'}")
+        if hot is not None:
+            if not (self.c.program and self.c.complete):
+                self.e(f"bra {done}")
+            self.cold, self.out = self.cold + self.out, hot
+        elif done:
+            self.at(done)
+
+    def dispatch_far(self, how: str) -> None:
+        """Target CS:IP in d6:d7."""
+        done = self.local() if how == "jsr" else None
+        for seg, off in self.c.far_targets:
+            lab = self.c.far((seg, off)) if self.c.far else None
+            if not lab:
+                continue
+            nxt = self.local()
+            self.e(f"cmp.w #{hx(off)},d7")
+            self.e(f"bne {nxt}")
+            self.e(f"cmp.w #{seg},d6")
+            self.e(f"bne {nxt}")
+            self.e(f"{how} {lab}")
+            if done:
+                self.e(f"bra {done}")
+            self.at(nxt)
+        if self.c.program:
+            self.e(f"{how} rt_dispatch_far")
+            self.stats["dispatcher exit"] += 1
+        else:
+            self.e(f"{how} T_{'CALLF' if how == 'jsr' else 'JUMPF'}")
+        if done:
+            self.at(done)
+
+    def target_d7(self, t) -> None:
+        """Indirect near target into d7, zero-extended where a cell walk may take
+        it (its entry IP, smc.py)."""
+        (self.read_zx if self.c.smc_targets else self.read)(t, "d7")
+
+    def op_jmp(self):
+        t = self.i.operands[0]
+        if isinstance(t, Rel):
+            self.goto_near(t.target)
+            return
+        self.target_d7(t)
+        self.dispatch_near("jmp")
+
+    def op_call(self):
+        i = self.i
+        t = i.operands[0]
+        if isinstance(t, Rel):
+            self.push(const=hx(i.next_ip))
+            self.goto_near(t.target, "jsr")
+        else:
+            self.target_d7(t)
+            self.push(const=hx(i.next_ip))
+            self.dispatch_near("jsr")
+        self.return_check(i.next_ip, None)
+
+    def far_operand(self) -> tuple[str, int] | None:
+        t = self.i.operands[0]
+        if isinstance(t, Far):
+            self.check_reloc({self.i.size - 2})
+            seg = f"LOADSEG+{hx(t.seg)}" if self.reloc_at_end() else hx(t.seg)
+            return seg, t.off
+        self.check_reloc(set())
+        self.far_pair(t)
+        self.e("exg d6,d7")
+        return None
+
+    def op_jmpf(self):
+        f = self.far_operand()
+        if self.c.driver_call:
+            # D9: the driver's retf comes back here; its outermost return
+            # publishes the frame it drew (rt_vdrv_return), then returns to
+            # the thunk's caller
+            if not f:
+                raise LowerError(f"indirect graphics driver thunk {self.i}")
+            self.e("addq.w #1,rt_vdrv_depth")
+            self.goto_far(f[0], f[1], "jsr")
+            self.e("jmp rt_vdrv_return")
+            self.stats["graphics driver call"] += 1
+            return
+        if f:
+            self.goto_far(f[0], f[1], "jmp")
+        else:
+            self.dispatch_far("jmp")
+
+    def op_callf(self):
+        i = self.i
+        f = self.far_operand()
+        self.push_far(self.c.cs, hx(i.next_ip))
+        ret = i.next_ip + (2 if self.c.manager else 0)  # the manager skips `dw id`
+        if f:
+            self.goto_far(f[0], f[1], "jsr")
+        else:
+            self.dispatch_far("jsr")
+        self.return_check(ret, self.c.cs)
+
+    def op_jcc(self):
+        t = self.i.operands[0].target
+        lab = self.c.near(t) if self.c.near else None
+        if lab:
+            self.branch_cc(self.i.cc, lab)
+            # R14b: the fall-through keeps the CCR: what it held, or after a load
+            # the state block's image (it holds every live flag)
+            if self.i.cc not in ("p", "np"):
+                loaded = not CC_READS[self.i.cc] <= self.c.ccr_in
+                self.ccr = ALLC & self.c.live if loaded else set(self.c.ccr_in)
+                if not loaded:
+                    self.stats["jump reads the CCR"] += 1
+                return
+        else:
+            if self.c.program:
+                raise LowerError(f"jcc target {t:04X} unresolved")
+            go = self.local()
+            nxt = self.local()
+            self.branch_cc(self.i.cc, go)
+            self.e(f"bra {nxt}")
+            self.at(go)
+            self.goto_near(t)
+            self.at(nxt)
+        self.ccr = set()
+
+    def loopish(self, cond: str | None) -> None:
+        t = self.i.operands[0].target
+        lab = (self.c.near(t) if self.c.near else None) or self.local()
+        far = not (self.c.near and self.c.near(t))
+        nxt = self.local()
+        if self.i.op == "jcxz":
+            self.e("tst.w d1")
+            self.e(f"beq {lab}")
+        else:
+            if cond:
+                if "ZF" in self.c.ccr_in:
+                    self.e(f"s{'eq' if cond == 'e' else 'ne'} d7")
+                else:
+                    self.e("btst #2,G_FL+1(a6)")
+                    self.e(f"s{'ne' if cond == 'e' else 'eq'} d7")
+                    self.stats["flag load"] += 1
+            self.e("subq.w #1,d1")
+            if cond:
+                self.e(f"beq {nxt}")
+                self.e("tst.b d7")
+                self.e(f"bne {lab}")
+            else:
+                self.e(f"bne {lab}")
+        if far:
+            self.e(f"bra {nxt}")
+            self.at(lab)
+            self.goto_near(t)
+        self.at(nxt)
+        self.ccr = set()
+
+    def op_loop(self):
+        self.loopish(None)
+
+    def op_loope(self):
+        self.loopish("e")
+
+    def op_loopne(self):
+        self.loopish("ne")
+
+    def op_jcxz(self):
+        self.loopish(None)
+
+    def op_ret(self):
+        self.ret(far=False)
+
+    def op_retf(self):
+        self.ret(far=True)
+
+    def ret(self, far: bool) -> None:
+        """Near IP in d7.w (R5); far CS:IP packed in d7.l (R33)."""
+        i = self.i
+        if far:
+            self.pop_far()
+        else:
+            self.pop("d7")
+        if i.operands:
+            self.sub_const(i.operands[0].value, "d4")
+        self.e("rts")
+
+    def op_iret(self):
+        # flags word at SS:SP+4 first (d6/d7 then carry IP and CS)
+        self.e("move.l d4,d7")
+        self.e("subq.w #4,d7")
+        self.e("move.w -1(a2,d7.w),d7")
+        self.trap_tf()
+        self.e("jsr __set_flags")
+        self.pop("d7")
+        self.pop("d6")
+        self.e("subq.w #2,d4")
+        self.e("swap d7")
+        self.e("move.w d6,d7")
+        self.e("swap d7")
+        self.e("rts")
+
+    def op_int(self):
+        self.interrupt(self.i.operands[0].value)
+
+    def op_int3(self):
+        self.interrupt(3)
+
+    def vector(self, vec: int) -> str:
+        """d6 operand: the vector, in program mode with CS in the upper word."""
+        return f"#(({self.c.cs})<<16)|{hx(vec)}" if self.c.program else f"#{hx(vec)}"
+
+    def interrupt(self, vec: int) -> None:
+        self.e(f"move.l #{hx(self.i.next_ip)},d7")
+        self.e(f"move.l {self.vector(vec)},d6")
+        self.e("jsr rt_int" if self.c.program else "jmp T_INT")
+
+    def op_into(self):
+        nxt = self.local()
+        self.load_ccr({"OF"})
+        self.e(f"bvc {nxt}")
+        self.interrupt(4)
+        self.at(nxt)
+        self.ccr = set()
+
+    def exit_fault(self, vec: int) -> None:
+        self.e(f"move.l #{hx(self.i.ip)},d7")
+        self.e(f"move.l {self.vector(vec)},d6")
+        if self.c.program:
+            self.e("jsr rt_fault")
+            self.e(f"bra {self.c.retry or self.c.label}")
+        else:
+            self.e("jmp T_FAULT")
+
+    def op_hlt(self):
+        self.e(f"move.l #{hx(self.i.next_ip)},d7")
+        self.e("jsr rt_halt" if self.c.program else "jmp T_HALT")
+
+
+# Vectors the game installs handlers for (docs/external-surface.md); every other
+# software interrupt is a runtime service, which reads no guest flags and leaves
+# those it does not define unchanged in the state block.
+GUEST_VECTORS = {0x00, 0x05, 0x08, 0x23, 0x24}
+
+
+def signed(v: int) -> int:
+    v &= 0xFFFF
+    return v - 0x10000 if v & 0x8000 else v
+
+
+def direct_disp(m: Mem) -> bool:
+    """[bp+d] that a guarded copy addresses as (-d,aS,d5.w) (d 0 is direct anyway)."""
+    return m.base == "bp" and not m.index and signed(m.disp) not in (0, -0x8000)
+
+
+def direct_pair(m: Mem) -> bool:
+    """Far pointer at [bp+d] read directly in a guarded copy (offset and segment)."""
+    return m.base == "bp" and not m.index and -0x7FFE <= signed(m.disp) <= 0x7FFD
+
+
+def far_pair(i: Insn) -> bool:
+    """Reads a far pointer from its memory operand (Lowering.far_pair)."""
+    return i.op in ("les", "lds") or i.op in ("jmpf", "callf") and isinstance(i.operands[0], Mem)
+
+
+def bp_offsets(i: Insn) -> list[int]:
+    """Signed offsets from BP that `i` addresses directly in a guarded copy; each
+    is exact while 0 <= BP + d <= FFFFh (region.py)."""
+    if i.op == "lea":
+        return []
+    out = []
+    for o in i.operands:
+        if not isinstance(o, Mem):
+            continue
+        if far_pair(i):
+            if direct_pair(o):
+                out += [signed(o.disp), signed(o.disp) + 2]
+        elif direct_disp(o):
+            out.append(signed(o.disp))
+    return out
+
+
+def areg(o) -> bool:
+    """SI or DI (held in an address register)."""
+    return isinstance(o, Reg) and o.name in GREG and GREG[o.name][0] == "a"
+
+
+def reads(i: Insn, program: bool = False) -> set:
+    """Status flags an instruction reads (for liveness and fusion). Test mode
+    (`program` false) treats every interrupt/fault exit as reading all flags (the
+    harness compares them); program mode applies the runtime contract and leaves
+    the divide-error path to an explicit successor (emit.py)."""
+    op = i.op
+    if program:
+        if op == "int":
+            return set(STATUS) if i.operands[0].value in GUEST_VECTORS else set()
+        if op in ("int3", "hlt", "div", "idiv") or op == "aam" and i.operands[0].value == 0:
+            return set()
+    if op == "jcc":
+        return set(CC_READS[i.cc])
+    if op in ("adc", "sbb", "rcl", "rcr", "cmc"):
+        return {"CF"}
+    if op in ("loope", "loopne"):
+        return {"ZF"}
+    if op == "into":
+        return {"OF"}
+    if op in ("daa", "das"):
+        return {"CF", "AF"}
+    if op in ("aaa", "aas"):
+        return {"AF"}
+    if op in ("lahf", "pushf", "int", "int3", "hlt"):
+        return set(STATUS)
+    if op in ("div", "idiv") or op == "aam" and i.operands[0].value == 0:
+        return set(STATUS)  # divide error: the handler sees FLAGS
+    return set()
+
+
+STRING_OPS = ("movs", "cmps", "stos", "lods", "scas")
+DEST_WRITERS = ("mov", "add", "adc", "sub", "sbb", "and", "or", "xor", "inc", "dec", "neg", "not",
+                "rol", "ror", "rcl", "rcr", "shl", "shr", "sar", "pop")
+
+
+def mem_dests(i: Insn) -> list:
+    """Explicit memory operands an instruction writes (string and stack stores aside)."""
+    ops = i.operands
+    if i.op == "xchg":
+        return [o for o in ops if isinstance(o, Mem)]
+    if i.op in DEST_WRITERS and ops and isinstance(ops[0], Mem):
+        return [ops[0]]
+    return []
+
+
+def fuse_reader(i: Insn) -> bool:
+    """Readers that take flags straight from the CCR left by the previous instruction."""
+    if i.op == "jcc":
+        return i.cc not in ("p", "np")
+    return i.op in ("loope", "loopne")
+
+
+def writes(i: Insn) -> tuple[set, set]:
+    """(must-kill, may-define) status flags."""
+    op = i.op
+    k = None
+    if op in ("add", "adc", "sub", "sbb", "cmp", "neg", "inc", "dec"):
+        k = {"cmp": "sub"}.get(op, op)
+    elif op in ("and", "or", "xor", "test"):
+        k = "logic"
+    elif op in ("mul", "imul", "div", "idiv"):
+        k = {"idiv": "div"}.get(op, op)
+    elif op in ("cmps", "scas"):
+        d = set(STATUS)
+        return (d, d) if not i.rep else (set(), d)
+    elif op in ("rol", "ror", "rcl", "rcr", "shl", "shr", "sar"):
+        d, u = FLAG_KINDS[op]
+        allk = set(d) | set(u)
+        return (allk, allk) if isinstance(i.operands[1], Imm) else (set(), allk)
+    elif op in ("popf", "sahf", "iret", "daa", "das", "aaa", "aas", "aad") or \
+            op == "aam" and i.operands[0].value:
+        d = set(STATUS) - ({"OF"} if op == "sahf" else set())
+        return d, d
+    elif op in ("clc", "stc", "cmc"):
+        return {"CF"}, {"CF"}
+    if k is None:
+        return set(), set()
+    d, u = FLAG_KINDS[k]
+    return set(d) | set(u), set(d) | set(u)
+
+
+def lower(insn: Insn, ctx: Ctx) -> Lowering:
+    lw = Lowering(insn, ctx)
+    lw.run()
+    return lw

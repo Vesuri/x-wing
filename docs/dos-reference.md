@@ -29,6 +29,13 @@ DOSBox-X tag `dosbox-x-v2026.08.31` (`4f19017c`) is built by `make dos-emulator`
 - **`dosbox-x-xwing-script.patch`:** the text-screen script used for the installer and for
   play.
 
+A second build of the same tag serves as an oracle and is never used for reference runs:
+`make dos-oracle` (`tools/build_dosbox_x_debug.sh`) builds it unpatched with
+`--enable-debug=heavy` in `~/.local/src/xwing-dosbox-x-debug`
+(`XWING_DOSBOX_X_DEBUG_SRC`), a worktree of the reference tree.
+`tests/dosbox_retf.py` single-steps it for the `retf` cases where Unicorn deviates
+([x86 notes](x86-notes.md#unicorn-x86-16-as-oracle)).
+
 `tools/dosbox_x.py` checks the tree before every run:
 - HEAD is the pinned tag;
 - every file the series touches equals the series applied to the tag, built in a scratch

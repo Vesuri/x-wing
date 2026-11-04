@@ -1,12 +1,12 @@
-"""Table-driven 8086 real-mode decoder (D13: own decoder, Capstone cross-check in tests).
+"""Table-driven real-mode decoder (D13: own decoder, Capstone cross-check in tests).
 
-Copied unchanged from Secret Weapons of the Luftwaffe translator/decode.py (commit pinned in
-manifest/references.tsv).
-
-Scope: the 8086 instruction set as executed by a 286/386 in real mode. The
-classified SWOTL code uses no 186+ opcodes (no 0Fh, C0h/C1h, 68h/6Ah, C8h/C9h)
-and no ESC/WAIT/LOCK; those, the 60h–6Fh range, `pop cs`, `mov cs` and the
-undefined group aliases raise DecodeError, so they fail loudly.
+Copied from Secret Weapons of the Luftwaffe's translator/decode.py (commit pinned in
+manifest/references.tsv) and extended with the 80186 forms X-Wing's code uses
+(docs/external-surface.md, translator fit): `push imm` (68h, 6Ah), `imul r16,r/m16,imm`
+(69h, 6Bh), shifts and rotates by an immediate count (C0h, C1h), `enter` (C8h) and
+`leave` (C9h). The other 186+ opcodes (0Fh, `pusha`/`popa`, `bound`, `ins`/`outs`), the
+ESC/WAIT/LOCK prefixes, `pop cs`, `mov cs` and the undefined group aliases raise
+DecodeError, so they fail loudly.
 """
 
 from __future__ import annotations
@@ -198,6 +198,12 @@ def decode(code: bytes, ip: int, pos: int = 0) -> Insn:
         return mk("inc" if b < 0x48 else "dec", 16, (gpr(b & 7, 16),))
     if 0x50 <= b < 0x60:
         return mk("push" if b < 0x58 else "pop", 16, (gpr(b & 7, 16),))
+    if b in (0x68, 0x6A):
+        return mk("push", 16, (Imm(r.u16() if b == 0x68 else r.s8() & 0xFFFF, 16),))
+    if b in (0x69, 0x6B):
+        _, reg, rm = _modrm(r, 16, seg)
+        imm = r.u16() if b == 0x69 else r.s8() & 0xFFFF
+        return mk("imul", 16, (gpr(reg, 16), rm, Imm(imm, 16)))
     if 0x70 <= b < 0x80:
         n = r.s8()
         return mk("jcc", 0, (rel(n),), CC[b & 15])
@@ -270,14 +276,20 @@ def decode(code: bytes, ip: int, pos: int = 0) -> Insn:
         if reg:
             raise DecodeError(f"{b:02X} /{reg}")
         return mk("mov", w, (rm, Imm(r.u8() if w == 8 else r.u16(), w)))
+    if b == 0xC8:
+        size = r.u16()
+        return mk("enter", 16, (Imm(size, 16), Imm(r.u8(), 8)))
+    if b == 0xC9:
+        return mk("leave", 16)
     if b == 0xCD:
         return mk("int", 0, (Imm(r.u8(), 8),))
-    if 0xD0 <= b <= 0xD3:
-        w = 8 if b in (0xD0, 0xD2) else 16
+    if 0xD0 <= b <= 0xD3 or b in (0xC0, 0xC1):
+        w = 8 if b in (0xC0, 0xD0, 0xD2) else 16
         _, reg, rm = _modrm(r, w, seg)
         if SHIFT[reg] is None:
             raise DecodeError("shift /6")
-        return mk(SHIFT[reg], w, (rm, Imm(1, 8) if b < 0xD2 else Reg("cl")))
+        count = Imm(r.u8(), 8) if b < 0xD0 else Imm(1, 8) if b < 0xD2 else Reg("cl")
+        return mk(SHIFT[reg], w, (rm, count))
     if b in (0xD4, 0xD5):
         return mk("aam" if b == 0xD4 else "aad", 8, (Imm(r.u8(), 8),))
     if 0xE0 <= b <= 0xE3:

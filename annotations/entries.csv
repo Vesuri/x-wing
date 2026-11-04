@@ -1,1 +1,4 @@
 module,offset,reason
+ADLIB.IMS,0x00a1b,"INT 08h handler, installed by AX=2508h at +0093E..00A13; chains to the BIOS (MEASURED: interrupts.csv)"
+ADLIB.IMS,0x00978,"INT 08h calibration handler: mov dx,0978h; AX=2508h at +00938, counts ticks at [64h] while +0094D waits for 4, then the previous vector is restored at +00968 (MEASURED: interrupts.csv)"
+XWING.EXE,0x058e6,"continuation pushed as a return address: mov bx,0236h; push bx at +058BE (CS 056Bh), reached by ret at +05915 (MEASURED: edges.csv)"

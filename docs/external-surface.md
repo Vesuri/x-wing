@@ -90,7 +90,7 @@ handle is freed (AH=45h) only on exit.
 |---|---|---|
 | 00h (divide error) | root `+01174`, `+01533` (once per run); `+011DE`, `+0167B` (once, in the exit run: INFERRED restore) | not raised |
 | 05h, 23h (print screen, Ctrl-Break) | root `+01155`, `+01136` (once per run); `+011CC`, `+011BA` (once, in the exit run) | not raised |
-| 08h (timer) | `ADLIB.IMS+0093E..00A13` | `ADLIB.IMS+00A1B` ×287,850; it chains to the BIOS at 18.2 Hz |
+| 08h (timer) | `ADLIB.IMS+0093E..00A13` | `ADLIB.IMS+00A1B` ×287,850; it chains to the BIOS at 18.2 Hz. Before it, `+00938` installs a calibration handler `+00978` that counts ticks while `+0094D` waits; `+00968` restores the previous vector |
 | 09h (keyboard) | not hooked | BIOS ×522 |
 | 74h (mouse IRQ 12) | not hooked | BIOS ×44 |
 
@@ -120,7 +120,7 @@ game in two ways:
   divider;
 - through a far pointer passed by its caller from `+006B6`, to `FLIGHT.OVL+19561`.
 
-Its INT 08h handler is the only other way into it.
+Its INT 08h handlers (the calibration handler, then the timer handler) are the only other ways into it.
 
 ## VGA
 
@@ -173,14 +173,13 @@ The corpus has:
 - no 386 operand- or address-size prefixes;
 - no FPU code.
 
-Gaps for P3:
-- the decoder, IR and interpreter need `enter`, `leave`, `push imm`, `imul r,rm,imm` and
-  shifts by an immediate;
-- the flight code, where SWOTL's cell-walk support (`translator/smc.py`) applies, needs
-  none of them.
+P3 closed the gap: the decoder, IR and interpreter handle `enter`, `leave`, `push imm`,
+`imul r,rm,imm` and shifts by an immediate, checked against Capstone and Unicorn
+(`make test-x86`, [x86 notes](x86-notes.md)). The flight code, where SWOTL's
+cell-walk support (`translator/smc.py`) applies, needs none of them.
 
 Everything else the census found is already covered by SWOTL's design:
-- one timer handler in the music driver;
+- the timer handlers in the music driver;
 - polled keyboard, mouse and game port;
 - chained mode 13h;
 - EMS 4.0 page mapping;

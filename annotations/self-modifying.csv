@@ -1,4 +1,5 @@
 module,first,last,kind,writers,form,note
-FLIGHT.OVL,0x25a57,0x26165,form,+26974 +26993 +269A7,8887ww 2e8b1eww2e8e1eww,"es: writes at stride 4 build the run of mov byte [bx+w],al cells; +26993 writes the 10 bytes of mov bx/ds from cs:[w] at +25CD7 (MEASURED, ms-p2c traces)"
-FLIGHT.OVL,0x25a57,0x26165,operand,+2498D +249E8 +24A46,ww,"mov word cs:[si],dx: the displacement word of a cell (MEASURED)"
-FLIGHT.OVL,0x25a57,0x26165,form,+23789/+23795 +2384C/+23857,c3,"ret: mov byte cs:[di],C3h at a cell start before a call into the run; the original byte restored from AH after it (MEASURED)"
+FLIGHT.OVL,0x25a57,0x26165,form,+26974 +269A7,8887ww,"mov byte [bx+w],al: es: writes at stride 4 build the run of cells (MEASURED, ms-p2c traces)"
+FLIGHT.OVL,0x25a57,0x26165,form,+26993,2e8b1eww2e8e1eww,"mov bx/ds from cs:[w]: +26993 writes the 10 bytes at +25CD7 (MEASURED)"
+FLIGHT.OVL,0x25a57,0x26165,form,+23789/+23795 +2384C/+23857,c3,"ret: planted at a cell start before a call into the run; the original byte restored after the call (MEASURED)"
+FLIGHT.OVL,0x25a57,0x26165,operand,+2498D +249E8 +24A46,,"mov word cs:[si],dx: the displacement word of a cell (MEASURED)"

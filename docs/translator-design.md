@@ -10,6 +10,11 @@ commit that adapts it. Until then, its SWOTL-specific values do not describe X-W
 include `LOADSEG` 0822h, PLINK, RTSVGA, SPAZ, the INT 33h frame boundary, guest offsets
 and sizes. Links in the copied text name SWOTL's docs.
 
+P3 copied `translator/` whole and adapted the front end: `image.py`, `decode.py`,
+`sem.py` and `cfg.py` (rows below). The other modules (`emit`, `lower`, `flags`, `irq`,
+`gen`, `check`, `support`, `smc`, `compute`, `region`, `reuse`, `compact`, `reglive`) are
+SWOTL's unchanged and still name its layout. P4–P6 adapt them.
+
 ## Decisions for X-Wing
 
 SWOTL's D1–D16 are numbered as in its first design (`11f81ef`). "SWOTL as built" is the
@@ -29,7 +34,7 @@ settled form at the pinned commit.
 | D10 | Sound | SPAZ translated; OPL writes reach `rt_out8`; FM re-hosted to Paula; effects prerendered | Changed: `ADLIB.IMS` translated for music and FM effects (P7); worst-case effect priced first. Sound Blaster PCM through a DSP/DMA/IRQ model in P10 |
 | D11 | Strings | IR loops; REP fast paths when DF and range are provable | Kept |
 | D12 | Translator language | Python | Kept |
-| D13 | Decoder | Own, cross-checked with Capstone; 186+ opcodes raise | Changed: 186/286 forms the census finds are added (P3) |
+| D13 | Decoder | Own, cross-checked with Capstone; 186+ opcodes raise | Changed: the 80186 forms the census found are decoded, lifted and checked against Unicorn (P3); the other 186+ opcodes still raise |
 | D14 | 68k oracle | Unicorn 68020 | Kept |
 | D15 | Memory | (b) Fast RAM required; development on a 68030 model with 8 MiB Fast | Changed: 68030 minimum, 68040 recommended; 8 MB Fast target; the version started without WHDLoad measured down to its minimum ([design](design.md)) |
 | D16 | Self-modified code | Regions found in the map; run-time cell walk with an exact cell cache; everything else stops | Kept as a mechanism; X-Wing's regions come from its P2 census |
@@ -50,9 +55,9 @@ architecture.md (SWOTL `docs/architecture.md`).
 
 | Module | Role |
 |---|---|
-| `translator/image.py` | proved root/overlay images (`tools/swotl_model.py`), annotations, run-time bytes of self-modified regions |
-| `translator/decode.py` | own table-driven 8086 decoder; 186+/FPU opcodes raise (none in SWOTL) |
-| `translator/cfg.py` | recursive descent from `annotations/` seeds; CS along flow; PLINK manager calls and parent chain; self-modified regions recorded, not decoded |
+| `translator/image.py` | root, overlay and driver images (`tools/xwing_model.py`), annotations, run-time bytes of self-modified regions |
+| `translator/decode.py` | own table-driven decoder: 8086 plus the 80186 forms X-Wing uses (`push imm`, three-operand `imul`, shifts by an immediate, `enter`, `leave`); the other 186+ and FPU opcodes raise |
+| `translator/cfg.py` | recursive descent from `annotations/` seeds over the root, overlay segment and driver ranges; CS along flow; thunks resolved by descriptor index, other far targets by the parent chain; self-modified regions recorded, not decoded |
 | `translator/ir.py`, `sem.py` | IR ops; lifting of every decoded instruction |
 | `translator/interp.py` | host IR interpreter (the semantics under test) |
 | `translator/gen.py` | `make gen`: `build/gen/<module>.ir` with hash header; coverage report (G6); sizes the R8 alignment pads by assembling the program (vasm) |

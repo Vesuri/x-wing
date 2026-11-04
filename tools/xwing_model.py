@@ -45,6 +45,7 @@ THUNKS = 0x4D47
 OVL_AREA = (0x5BA0, 0x39600)  # link linear range of the overlay area
 NAME_BASE = 0x4061  # file-name offset + this = image offset of the name (MEASURED)
 DRIVERS = ['ADLIB.IMS', 'ADLIB_W.IMS', 'ROLAND.IMS', 'ROLAND_W.IMS', 'GMIDI.IMS', 'GMIDI_W.IMS']
+OUT_OF_SCOPE = tuple(DRIVERS[1:])  # music drivers the AdLib reference never loads
 
 
 @dataclass

@@ -35,6 +35,8 @@ make dos-reference          # traced milestones, logo to exit to DOS; prints MIL
 make dos-run RUN=name ARGS=...  # one traced run (tools/pc_run.py)
 make map                    # manager check, sweep, code writes, census of the newest milestone set; prints MAP PASS
 make ghidra                 # one Ghidra program per code unit in tmp/ghidra-proj
+make dos-oracle             # unpatched heavy-debug DOSBox-X for the differential's RETF oracle
+make test-x86               # gate 3: Capstone cross-check, Unicorn differential, sabotage (AmigaXDev's Unicorn)
 make dos-play               # play on a period 386; the copy protection is answered for you
 make extract-original-data  # Macintosh demo: both forks and Finder data into tmp/runtime-data
 make reference              # fresh volume, configure, restart, launch; prints REFERENCE PASS
