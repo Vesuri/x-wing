@@ -18,7 +18,7 @@ are in place.
    `imul r,rm,imm`, shifts by an immediate. The Capstone
    cross-check and the Unicorn differential are clean over every opcode present; sabotage
    plants are caught.
-3. Optional, for P8's donor route: make the Macintosh reference reach named milestones and
+3. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh reference reach named milestones and
    map its 68k CODE.
    Acceptance: a bounded run reaches a positively identified game state by guest state,
    writes a framebuffer read from video memory and a trap log, and reproduces their pinned
