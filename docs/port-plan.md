@@ -187,7 +187,10 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
   - the command tail and environment;
   - copy-free EMS mapping;
   - the frame boundary for D9 (X-Wing's per-frame call);
-  - INT 09h, as a guest handler if the census shows one.
+  - INT 09h, as a guest handler if the census shows one;
+  - `translator/irq.py` to the music driver's INT 08h handlers (P4 generates without it);
+  - dispatch residency by descriptor index, the cell-cache segment window and the
+    driver's load segment (`DRVSEG`) as P4 emits them.
 - Gate: the LucasArts logo drawn by generated code on the A1200 model. Host lockstep to
   m1: service log, registers, RAM, framebuffer and DAC.
 

@@ -1,0 +1,2 @@
+module,offset,reason
+XWING.EXE,0x01517,"push cs; call word ptr [5F42h]: the word is 01DAh in the image (DGROUP 3A07h), root +015EA, which enters the exit path with CX = 1 and ends in INT 21h AH=4Ch at +01660; the bytes after the call are a relocated DGROUP word at +0151B (DERIVED: reading; the site is never executed)"

@@ -11,9 +11,26 @@ include `LOADSEG` 0822h, PLINK, RTSVGA, SPAZ, the INT 33h frame boundary, guest 
 and sizes. Links in the copied text name SWOTL's docs.
 
 P3 copied `translator/` whole and adapted the front end: `image.py`, `decode.py`,
-`sem.py` and `cfg.py` (rows below). The other modules (`emit`, `lower`, `flags`, `irq`,
-`gen`, `check`, `support`, `smc`, `compute`, `region`, `reuse`, `compact`, `reglive`) are
-SWOTL's unchanged and still name its layout. P4–P6 adapt them.
+`sem.py` and `cfg.py` (rows below). P4 adapted the back end to X-Wing:
+- `lower.py`: the 80186 forms; relocated words add their module's load segment
+  (`LOADSEG` 0822h for the root and overlays, `DRVSEG` 522Ah for `ADLIB.IMS`, its
+  INT 21h AX=4B03h segment in every reference run); no manager return skip.
+- `emit.py`: module tags; CS expressions per module; dispatch rows tagged with the
+  overlay segment's descriptor index + 1 (root and driver 0); D9 store marking in
+  `FRONTEND` and `FLIGHT` (`VRAM_MODULES`); the INT 00h handler from `entries.csv`; a
+  CS store reaches only cell caches of its own overlay file; an undecoded return site
+  that ends in a stop has no live flag.
+- `smc.py`: X-Wing's region lies above 64 KiB, so the segment check is a window, a low
+  segment and a limit (`smc_seg_lo`, `smc_seg_limit`).
+- `reglive.py`, `flags.py`: three-operand `imul` writes no DX; a shift count masked to 0
+  sets no flag.
+- `gen.py`, `check.py`: `xwing-gen 1` headers over `tools/xwing_model.py`.
+
+`irq.py` still models SWOTL's SPAZ handler. `make gen` runs without it until P5 adapts
+it to the music driver's INT 08h handlers: there is no `irq-footprint.csv`, and the sync
+points are the loop heads. `flags`, `support`, `compute`, `region`, `reuse` and
+`compact` are otherwise SWOTL's. The speed annotations (`align`, `outline`,
+`seg-repeat`, `bp-regions`) are empty until P8 measures them.
 
 ## Decisions for X-Wing
 
@@ -60,19 +77,19 @@ architecture.md (SWOTL `docs/architecture.md`).
 | `translator/cfg.py` | recursive descent from `annotations/` seeds over the root, overlay segment and driver ranges; CS along flow; thunks resolved by descriptor index, other far targets by the parent chain; self-modified regions recorded, not decoded |
 | `translator/ir.py`, `sem.py` | IR ops; lifting of every decoded instruction |
 | `translator/interp.py` | host IR interpreter (the semantics under test) |
-| `translator/gen.py` | `make gen`: `build/gen/<module>.ir` with hash header; coverage report (G6); sizes the R8 alignment pads by assembling the program (vasm) |
+| `translator/gen.py` | `make gen`: `build/gen/<module>.ir` and `.s` with hash header; audit against `tests/audit.csv`; coverage report (G6); sizes the R8 alignment pads by assembling the program (vasm) |
 | `translator/check.py` | G1 header/digest/regeneration check, G2 lint |
-| `translator/lower.py` | one decoded instruction -> 68020 text under the register contract (templates per op family; the IR stays the semantic reference) |
+| `translator/lower.py` | one decoded instruction -> 68020 text under the register contract (templates per op family, the 80186 forms included; the IR stays the semantic reference) |
 | `translator/flags.py` | flag demand: per-instruction store set and CCR fusion with the next reader, or one past plain instructions |
 | `translator/region.py` | BP-stable components, their direct-access range and guards (speed-plan R6) |
 | `translator/reuse.py`, `compact.py`, `reglive.py` | run-local rewrites: repeated index/base formations (R13), folded displacements (R14f), native BP (R25), push/pop runs (R31); word-mask compaction within an instruction (R4); DX liveness within a block (word MUL/DIV store DX only where live) |
-| `translator/smc.py` | self-modified region as a run-time cell walk with cell cache (D16, below) |
+| `translator/smc.py` | self-modified region as a run-time cell walk with cell cache (D16, below); the segment check is a window |
 | `translator/compute.py` | admission and emission of `kind=compute` HLE rows (native-compute.md (SWOTL `docs/native-compute.md`)) |
 | `translator/emit.py` | program mode: global flag liveness, per-function return sets, leaders, labels, transfers, `build/gen/<module>.s`, `program.s` (assembly root, dispatch table) |
 | `translator/support.py` | state-block equates, flag/BCD helpers (`build/gen/support.s`) |
 | `src/runtime/` | runtime (C + `rt_entry.s`): machine model of the reference (PSP, environment, MCBs, IVT values), EXEC of `SWOTL.EXE`, INT 21h/10h/16h/33h/67h services, `rt_*` entries, dispatch lookup with PLINK residency; platform interface `platform.h` |
 | `src/platform/host/`, `src/platform/amiga/` | `platform.h` for Unicorn (harness-served stubs) and AmigaOS (dos.library, private native stack) |
-| `tests/` | `host_run.py` (generated program + runtime on Unicorn 68020 to a milestone vs the reference; `--amiga` capture; `--sabotage`), `test_decode.py` (Capstone), `x86_diff.py` + `x86_sabotage.py` (Unicorn x86-16), `m68k_diff.py` (instructions/short blocks, test mode) + `m68k_blocks.py` (generated program, traced blocks) + `m68k_sabotage.py` (Unicorn 68020), `test_guards.py` (G1/G2 plants), `audit.csv` (audit expectations), `uc.py` (ctypes binding) |
+| `tests/` | `host_run.py` (generated program + runtime on Unicorn 68020 to a milestone vs the reference; `--amiga` capture; `--sabotage`), `test_decode.py` (Capstone), `x86_diff.py` + `x86_sabotage.py` (Unicorn x86-16), `m68k_diff.py` (instructions/short blocks, test mode) + `m68k_blocks.py` (generated program, traced blocks; `cross_flags_cases.py`, `m68k_assembly.py`) + `m68k_sabotage.py` (Unicorn 68020), `test_guards.py` (G1/G2 plants), `audit.csv` (audit expectations), `uc.py` (ctypes binding) |
 
 Language: Python 3.11 (sibling tooling, Capstone binding present). Offline,
 so translator speed is irrelevant.
@@ -228,7 +245,8 @@ diffs directly); relocated words in instructions are emitted as
 check, read by the sweep), `runtime.csv` (MS C runtime entries: name,
 class, evidence), `self-modifying.csv` (D16 regions and cell forms),
 `flags.csv` (PUSHF/POPF pairs that only save and restore FLAGS),
-`hle.csv` (guest range, service, reason, oracle; below), `align.csv`
+`noreturn.csv` (X-Wing: calls with no fall-through, read by cfg and the sweep; the
+return of one stops), `hle.csv` (guest range, service, reason, oracle; below), `align.csv`
 (R8 pads; `tools/align_targets.py`), `bp-regions.csv` (BP writes whose
 component gets a guarded copy; a profile choice, `tools/bp_regions.py`),
 `outline.csv` (forward jcc whose fall-through range goes out of line, R27;

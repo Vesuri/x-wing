@@ -5,7 +5,7 @@ Output per module `build/gen/<module>.ir` (decoded IR listing) and
 `build/gen/support.s` (flag/BCD helpers) and `build/gen/program.s` (assembly root:
 state equates, runtime xrefs, module includes, dispatch table); never edited by hand
 (G1). Header: generator version, SHA-256 of the inputs (translator sources,
-tools/swotl_model.py, annotations/, the module file) and of the body.
+tools/xwing_model.py, annotations/, the module file) and of the body.
 Alignment pads (R8, emit.align) are sized here: the program is assembled
 with vasm and pads grown in two-byte steps until every requested residue
 is verified in the assembled object. Nonconvergence fails generation.
@@ -16,6 +16,12 @@ starts of the trace corpus as translated / self-modified (D16, not yet
 lowered) / HLE / unclassified; unclassified ones fail. Writes
 build/gen/irq-footprint.csv (translator/irq.py, docs/irq-plan.md I2); a
 footprint violation fails generation.
+
+Copied from Secret Weapons of the Luftwaffe's translator/gen.py (commit pinned in
+manifest/references.tsv) and adapted to X-Wing's names. The IRQ0 footprint proof
+(translator/irq.py) still models SWOTL's SPAZ handler; until P5 adapts it to the
+music driver's INT 08h handlers, generation runs without it: no irq-footprint.csv,
+and the sync points are the loop heads alone.
 """
 
 from __future__ import annotations
@@ -35,7 +41,8 @@ from collections import Counter
 from . import cfg, emit, image, irq, support
 from .sem import lift
 
-VERSION = "swotl-gen 2 (ir, 68020)"
+VERSION = "xwing-gen 1 (ir, 68020)"
+IRQ_PROOF = False   # translator/irq.py is SWOTL's until P5 (module docstring)
 AUDIT = image.REPO / "tests/audit.csv"
 SUPPORT = "support"
 POLLS = "poll-points.csv"
@@ -48,7 +55,7 @@ M = image.M
 
 def inputs_digest(module: str) -> str:
     h = hashlib.sha256()
-    files = sorted((image.REPO / "translator").glob("*.py")) + [image.REPO / "tools/swotl_model.py"]
+    files = sorted((image.REPO / "translator").glob("*.py")) + [image.REPO / "tools/xwing_model.py"]
     files += sorted(image.ANNOTATIONS.glob("*.csv"))
     if module not in (SUPPORT, PROGRAM):
         files.append(M.REF / module)
@@ -71,8 +78,7 @@ def listing(u: cfg.Unit) -> bytes:
         n = u.insns[off]
         out.append(f"{u.name}+{off:05X} {u.cs[off]:04X}:{n.ip:04X} {n.raw.hex():<14} {n}")
         if off in u.manager_calls:
-            out.append(f"    ; PLINK manager call, overlay {u.manager_calls[off]}")
-            continue
+            out.append(f"    ; overlay manager thunk, segment {u.manager_calls[off]}")
         out.extend(f"    {o}" for o in lift(n))
     return ("\n".join(out) + "\n").encode()
 
@@ -143,17 +149,18 @@ def generate(out: Path, program: emit.Program | None = None) -> tuple[dict[str, 
     units = program.units if program is not None else cfg.build()
     out.mkdir(parents=True, exist_ok=True)
     proof = None
-    if program is None:
+    if program is None and IRQ_PROOF:
         # I2/I8: the footprint proof on the program with loop heads only gives the
         # sync points (irq.Proof.sync_points); they are leaders of the generated one
         proof = irq.prove(emit.Program(units, sync={}))
-    prog = program if program is not None else emit.Program(units, sync=proof.sync_points())
+    prog = program if program is not None else emit.Program(
+        units, sync=proof.sync_points() if proof else {})
     total, per = Counter(), {}
     files: list[str] = []
     texts: dict[str, list[str]] = {}
     for name, u in units.items():
         if not u.insns and not u.smc_entries:
-            continue  # DATA.OVL: DGROUP, no code
+            continue  # no code in scope
         write(out, f"{name}.ir", name, listing(u))
         lines, stats = prog.module_text(name)
         texts[f"{name}.s"] = lines
@@ -172,7 +179,7 @@ def generate(out: Path, program: emit.Program | None = None) -> tuple[dict[str, 
     write(out, "program.s", PROGRAM, (support.equates() + prog.program_text(files)).encode())
     # the state-block equates for the native compute rows (compute_native.s)
     write(out, "equates.i", PROGRAM, support.equates().encode())
-    # D8/I8 sync points for the reference tracer (SWOTL_POLLS): DOSBox-X takes
+    # D8/I8 sync points for the reference tracer (XWING_POLLS): DOSBox-X takes
     # hardware interrupts only there, so the host can replay them exactly
     (out / POLLS).write_text("module,offset,kind\n" + "".join(
         f"{m},0x{o:05x},{prog.sync[(m, o)]}\n" for m, o in sorted(prog.loop_heads)))

@@ -39,7 +39,7 @@ def check_gen(regen: bool, out: Path = gen.OUT) -> list[str]:
     for f in files:
         data = f.read_bytes()
         lines = data.split(b"\n", 4)
-        if len(lines) < 5 or not lines[0].startswith(b"; swotl-gen"):
+        if len(lines) < 5 or not lines[0].startswith(b"; xwing-gen"):
             bad.append(f"{f.name}: no generator header")
             continue
         module = lines[1].decode().removeprefix("; module ")

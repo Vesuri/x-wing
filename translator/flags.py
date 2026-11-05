@@ -51,8 +51,8 @@ def seq_lives(insns, live_end=ALL, program: bool = False) -> list[set]:
 
 def ccr_static(i) -> set:
     k = FUSE_KIND.get(i.op)
-    if k is None or k in ("shl", "shr", "sar") and not hasattr(i.operands[1], "value"):
-        return set()
+    if k is None or k in ("shl", "shr", "sar") and not getattr(i.operands[1], "value", 0) & 31:
+        return set()  # a CL count, or an immediate one masked to 0 (186+: no change)
     return CCR_OK[k]
 
 

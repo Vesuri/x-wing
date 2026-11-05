@@ -88,7 +88,7 @@ handle is freed (AH=45h) only on exit.
 
 | Vector | Set by | Handler |
 |---|---|---|
-| 00h (divide error) | root `+01174`, `+01533` (once per run); `+011DE`, `+0167B` (once, in the exit run: INFERRED restore) | not raised |
+| 00h (divide error) | root `+01174`, `+01533` (once per run); `+011DE`, `+0167B` (once, in the exit run: INFERRED restore) | root `+01198` (CS:0328h, `annotations/entries.csv`); not raised |
 | 05h, 23h (print screen, Ctrl-Break) | root `+01155`, `+01136` (once per run); `+011CC`, `+011BA` (once, in the exit run) | not raised |
 | 08h (timer) | `ADLIB.IMS+0093E..00A13` | `ADLIB.IMS+00A1B` ×287,850; it chains to the BIOS at 18.2 Hz. Before it, `+00938` installs a calibration handler `+00978` that counts ticks while `+0094D` waits; `+00968` restores the previous vector |
 | 09h (keyboard) | not hooked | BIOS ×522 |
@@ -163,7 +163,7 @@ decodes every static instruction start except the 80186 forms:
 
 | Module | Starts | 80186 starts (executed) |
 |---|---|---|
-| `XWING.EXE` | 8,034 | 3 (3): `enter` 1, `leave` 2 |
+| `XWING.EXE` | 8,032 | 3 (3): `enter` 1, `leave` 2 |
 | `FRONTEND.OVL` | 97,040 | 1,681 (1,403): `leave` 713, `push imm8` 440, `enter` 277, `push imm16` 211, `shift imm` 39, `imul imm8` 1 |
 | `FLIGHT.OVL` | 71,853 | 0 |
 | `ADLIB.IMS` | 7,305 | 406 (275): `leave` 195, `push imm` 108, `shift imm` 52, `enter` 46, `imul imm` 5 |

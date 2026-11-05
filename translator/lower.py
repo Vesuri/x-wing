@@ -20,6 +20,12 @@ instead of the state block.
 
 Semantics follow translator/sem.py (386 real mode); the tests compare the
 output against Unicorn x86-16, independently of the IR.
+
+Copied from Secret Weapons of the Luftwaffe's translator/lower.py (commit pinned in
+manifest/references.tsv) and adapted to X-Wing: a relocated word adds its module's
+load segment (`Ctx.loadseg`: the root and overlays LOADSEG, the music driver
+DRVSEG); the thunks need no manager return skip; the 80186 forms (`push imm`,
+three-operand `imul`, shifts by an immediate, `enter`, `leave`) are lowered.
 """
 
 from __future__ import annotations
@@ -57,7 +63,8 @@ CCR_OK = {"add": ALLC | {"X"}, "adc": ALLC | {"X"}, "sub": ALLC | {"X"}, "sbb": 
 # State block above guest RAM (a6 = TOP, odd: words at a6+odd are aligned).
 STATE_EQU = (("G_FL", 15), ("G_PF", 14), ("G_AF", 13), ("G_DF", 12), ("G_IF", 11),
              ("G_TF", 10), ("G_IRQ", 9), ("G_FX", 7), ("G_ES", 5), ("G_SS", 3), ("G_DS", 1))
-LOADSEG = 0x0822  # load segment of every reference run (docs/source-inventory.md)
+LOADSEG = 0x0822  # root load segment of every reference run (docs/dos-reference.md)
+DRVSEG = 0x522A   # ADLIB.IMS load and relocation segment (INT 21h AX=4B03h) of every run
 RET_BYTE = 0xC3   # the RET planted in self-modified cells (smc.py)
 # A closed whitelist proves X preservation; unknown instructions kill it.
 KEEPS_X = {"move", "movea", "moveq", "lea", "ror", "rol", "and", "or", "eor", "eori", "not",
@@ -115,13 +122,14 @@ class Ctx:
     smc_targets: tuple = ()                   # (first IP, last IP, walk label): D16 regions
     code_regions: tuple = ()                  # cell caches a CS store may reach (emit.code_regions)
     seg_limit: int = 0                        # lowest segment reaching no cell cache (0: none, D3)
+    seg_lo: int = 0                           # lowest segment reaching one (below: none)
     seg_repeat: bool = False                  # segment load usually repeats its value (R30)
     complete: bool = False                    # near_targets is a proved switch table
     far_targets: tuple = ()                   # known (seg, off) targets of an indirect far one
-    manager: bool = False                     # PLINK manager call: return skips `dw id`
+    loadseg: str = "LOADSEG"                  # what a relocated word adds (module load segment)
     program: bool = False                     # program mode (return checks, runtime calls)
     vram: bool = False                        # graphics driver: stores to A000h mark rows (D9)
-    driver_call: bool = False                 # PLINK thunk jump into the graphics driver (D9)
+    driver_call: bool = False                 # jump into the per-frame graphics call (D9; none yet)
     ret_mismatch: str = "rt_ret_mismatch"     # a return check's mismatch branch (emit.py: local)
     far_ret_mismatch: str = "rt_ret_far_mismatch"
     bp_direct: bool = False                   # guarded copy: [bp+d] direct (region.py, R6)
@@ -159,7 +167,7 @@ class Lowering:
     def imm(self, o: Imm, pos: int | None = None) -> str:
         v = o.value & (0xFF if o.width == 8 else 0xFFFF)
         if pos is not None and pos in self.c.reloc:
-            return f"LOADSEG+{hx(v)}"
+            return f"{self.c.loadseg}+{hx(v)}"
         return hx(v)
 
     def reloc_at_end(self) -> bool:
@@ -323,7 +331,8 @@ class Lowering:
             self.e(f"cmp.w #{hx(self.c.seg_limit)},{src}")
             self.e(f"bcs {cold}")
             self.at(back)
-            self.cold += [f"{cold}:", "\tjsr smc_expose", f"\tbra {back}"]
+            low = [f"\tcmp.w #{hx(self.c.seg_lo)},{src}", f"\tbcs {back}"] if self.c.seg_lo else []
+            self.cold += [f"{cold}:", *low, "\tjsr smc_expose", f"\tbra {back}"]
             self.stats["segment check (cell cache)"] += 1
         self.e(f"lsl.l #4,{src}")
         self.e(f"lea -$7fff(a6),{SEGBASE[s]}")
@@ -979,6 +988,9 @@ class Lowering:
         rot = op in ("rol", "ror", "rcl", "rcr")
         need = self.c.need & FLAG_KINDS[op][0]
         skip = None
+        n = cnt.value & 0x1F if isinstance(cnt, Imm) else None
+        if n == 0:
+            return  # 186+: the count is masked to 5 bits; 0 changes nothing
         if isinstance(a, Mem):
             self.lea(a)
         if op in ("rcl", "rcr"):
@@ -994,15 +1006,19 @@ class Lowering:
             self.e("and.b d1,d7")
             self.e(f"beq {skip}")
             count = "d7"
+        elif n <= 8:
+            count = f"#{n}"
         else:
-            count = "#1"
+            self.e(f"moveq #{n},d7")
+            count = "d7"
+        many = n is not None and n != 1  # an immediate count but 1: OF undefined
         r = self.dest_reg(a) or "d6"
         if r == "d6":
             self.load_dest(a, "d6")
         self.e(f"{m68}.{sz} {count},{r}")
         self.x_cf = isinstance(cnt, Imm) and op in ("shl", "shr", "sar", "rcl", "rcr")
         self.cf_result = self.x_cf
-        computed = {"OF"} & need if op not in ("shl", "sar") else set()
+        computed = {"OF"} & need if op not in ("shl", "sar") and not many else set()
         if rot or computed or isinstance(cnt, Reg):
             self.c.fuse = False
         store = (need - computed) | ({"CF"} if rot and computed else set())
@@ -1048,7 +1064,20 @@ class Lowering:
         self.muldiv("mul")
 
     def op_imul(self):
+        if len(self.i.operands) == 3:
+            self.imul3()
+            return
         self.muldiv("imul")
+
+    def imul3(self) -> None:
+        """186+ `imul r16,r/m16,imm`: the low word of the signed product; CF = OF =
+        the product does not fit 16 bits (SF ZF AF PF undefined, as for imul)."""
+        r, src, k = self.i.operands
+        self.read(src, "d6")
+        self.e(f"muls.w #{hx(k.value & 0xFFFF)},d6")
+        self.mul_flags(["move.w d6,d7", "ext.l d7", "cmp.l d6,d7"])
+        self.putreg(r.name, "d6")
+        self.ccr = set()
 
     def op_div(self):
         self.muldiv("div")
@@ -1337,7 +1366,10 @@ class Lowering:
 
     def op_push(self):
         o = self.i.operands[0]
-        if isinstance(o, Reg) and o.name == "cs":
+        if isinstance(o, Imm):  # 186+; a relocated segment word adds the load segment
+            self.check_reloc({self.i.size - 2})
+            self.push(const=self.imm(o, self.i.size - 2))
+        elif isinstance(o, Reg) and o.name == "cs":
             self.push(const=self.c.cs)
         elif isinstance(o, Reg) and o.name in GREG and o.name not in MIRROR:
             self.push(GREG[o.name])
@@ -1372,6 +1404,37 @@ class Lowering:
             return
         self.pop("d6")
         self.write(o, "d6")
+
+    def op_enter(self):
+        """186+ `enter size,level` (level masked to 5 bits): push BP; the frame is
+        the new SP; level - 1 frame pointers copied from [ss:bp-2] down; the frame
+        pushed when level > 0; BP = frame; SP -= size. Mirrored registers: the
+        mirror of x - k is mirror(x) + k."""
+        size, level = (o.value for o in self.i.operands)
+        level &= 0x1F
+        self.e("move.w d5,d7")
+        self.e("eori.w #$7fff,d7")
+        self.push("d7")
+        if level:
+            self.e("move.w d4,d6")           # mirror of the frame
+            for _ in range(level - 1):
+                self.e("addq.w #2,d5")
+                self.push("-1(a2,d5.w)")
+            self.e("move.w d6,d7")
+            self.e("eori.w #$7fff,d7")
+            self.push("d7")
+            self.e("move.w d6,d5")
+        else:
+            self.e("move.w d4,d5")
+        size &= 0xFFFF
+        if size:
+            self.e(f"add.w #{hx(size)},d4")
+
+    def op_leave(self):
+        """186+ `leave`: SP = BP, then pop BP."""
+        self.e("move.w d5,d4")
+        self.pop("d5")
+        self.e("eori.w #$7fff,d5")
 
     def op_cbw(self):
         self.e("ext.w d0")
@@ -1951,7 +2014,7 @@ class Lowering:
         t = self.i.operands[0]
         if isinstance(t, Far):
             self.check_reloc({self.i.size - 2})
-            seg = f"LOADSEG+{hx(t.seg)}" if self.reloc_at_end() else hx(t.seg)
+            seg = f"{self.c.loadseg}+{hx(t.seg)}" if self.reloc_at_end() else hx(t.seg)
             return seg, t.off
         self.check_reloc(set())
         self.far_pair(t)
@@ -1980,7 +2043,7 @@ class Lowering:
         i = self.i
         f = self.far_operand()
         self.push_far(self.c.cs, hx(i.next_ip))
-        ret = i.next_ip + (2 if self.c.manager else 0)  # the manager skips `dw id`
+        ret = i.next_ip
         if f:
             self.goto_far(f[0], f[1], "jsr")
         else:
@@ -2239,7 +2302,9 @@ def writes(i: Insn) -> tuple[set, set]:
     elif op in ("rol", "ror", "rcl", "rcr", "shl", "shr", "sar"):
         d, u = FLAG_KINDS[op]
         allk = set(d) | set(u)
-        return (allk, allk) if isinstance(i.operands[1], Imm) else (set(), allk)
+        if isinstance(i.operands[1], Imm):
+            return (allk, allk) if i.operands[1].value & 0x1F else (set(), set())
+        return set(), allk
     elif op in ("popf", "sahf", "iret", "daa", "das", "aaa", "aas", "aad") or \
             op == "aam" and i.operands[0].value:
         d = set(STATUS) - ({"OF"} if op == "sahf" else set())

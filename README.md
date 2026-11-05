@@ -37,6 +37,8 @@ make map                    # manager check, sweep, code writes, census of the n
 make ghidra                 # one Ghidra program per code unit in tmp/ghidra-proj
 make dos-oracle             # unpatched heavy-debug DOSBox-X for the differential's RETF oracle
 make test-x86               # gate 3: Capstone cross-check, Unicorn differential, sabotage (AmigaXDev's Unicorn)
+make gen                    # translate the root, both overlays and ADLIB.IMS to build/gen (audit, coverage)
+make test-m68k              # gate 4: G1 regeneration, 68020 differential, block test, guards, sabotage (vasm)
 make dos-play               # play on a period 386; the copy protection is answered for you
 make extract-original-data  # Macintosh demo: both forks and Finder data into tmp/runtime-data
 make reference              # fresh volume, configure, restart, launch; prints REFERENCE PASS

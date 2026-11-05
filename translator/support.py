@@ -8,11 +8,11 @@ other register; the CCR is clobbered.
 
 from __future__ import annotations
 
-from .lower import LOADSEG, STATE_EQU
+from .lower import DRVSEG, LOADSEG, STATE_EQU
 
 
 def equates() -> str:
-    lines = [f"LOADSEG\tequ\t${LOADSEG:04x}"]
+    lines = [f"LOADSEG\tequ\t${LOADSEG:04x}", f"DRVSEG\tequ\t${DRVSEG:04x}"]
     lines += [f"{n}\tequ\t{v}" for n, v in STATE_EQU]
     return "\n".join(lines) + "\n"
 

@@ -1,0 +1,7 @@
+counter,expected,reason
+spill,0,fixed register contract (D4); no lowering spills to the native stack
+full-flag materialization,3,"MS C run-time LAHF readers in the root: sub +02A87 and cmp +02A99 (LAHF at +02AA3), cmp +036AC (LAHF at +036BB)"
+PF store,6,"the same three setters, and cmp +05B35, cmp +05B39, xor +05AF0 (LAHF at +05B41); the manager's PUSHF pairs in annotations/flags.csv only save and restore"
+AF store,7,"the same five LAHF setters, and add +056DB, adc +056DE (DAA at +056DD, +056E0)"
+dispatcher exit,228,"the 228 indirect.csv sites without a proved switch table (288 sites, 60 tables)"
+stop_unknown site,61,"60 switch tables' out-of-table fallback, and the return of the noreturn.csv call at +01517"

@@ -6,7 +6,8 @@ manifest/references.tsv) and adapted to X-Wing's overlay manager
 
 Seeds (all from annotations/ and the images, no traces): MZ entry, the manager's thunks,
 `entries.csv`, `runtime.csv`, the switch and traced targets of `indirect.csv`. Follows
-fall-through and direct near/far transfers. Code is split into segment ranges: the root
+fall-through and direct near/far transfers; a call listed in `noreturn.csv` has no
+fall-through. Code is split into segment ranges: the root
 (without the overlay area), each overlay segment (its code bytes in its file, at its
 link segment) and the music driver (its own link space). A thunk (`call 048Ah; jmp far;
 dw index`) names its target segment by the descriptor index after the far jump. Any
@@ -139,6 +140,7 @@ class _Descent:
         self.thunk_jumps = {a + 3: index for a, index, _, _ in M.thunks(mods[M.ROOT].data)}
         self.index_range = {int(n.split("#")[1]): n for n in rs if "#" in n}
         self.smc = image.smc_regions()
+        self.noreturn = {(r["module"], int(r["offset"], 16)) for r in image.rows("noreturn.csv")}
         self.far_entries: dict[str, dict[int, int]] = {n: {} for n in rs}
         self.work: list[tuple[str, int, str, int | None]] = []
         self.body: dict[str, dict[int, int]] = {n: {} for n in image.SCOPE}  # byte -> start
@@ -237,6 +239,10 @@ class _Descent:
                 if n.op == "jmp":
                     return
             elif n.op in ("jmp", "jmpf"):
+                return
+            if (mod, off) in self.noreturn:
+                if n.op not in ("call", "callf"):
+                    raise CfgError(f"{mod}+{off:05X}: noreturn.csv names no call ({n})")
                 return
             off += n.size
 

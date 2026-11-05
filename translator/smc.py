@@ -28,8 +28,9 @@ byte:
   region's store hook (`_wb`, `_ww`; lower.code_store): a RET at a cell
   start becomes the walk's stop (`_plant`, one at a time), the cell's first
   byte back ends it, any other change drops the cache (`_plant` 0).
-- A DS, ES or SS value whose 64 KiB window reaches a region (below the
-  segment limit) drops every cache (`smc_expose`) at each segment load
+- A DS, ES or SS value whose 64 KiB window reaches a region (inside the
+  segment window: at or above its low segment, below its limit) drops every
+  cache (`smc_expose`) at each segment load
   (lower.putseg, the reload cells, the runtime's register reload); a reload
   that does so continues exactly. Runtime stores into a region do the same
   (runtime.h rt_wrote).
@@ -40,6 +41,10 @@ Bytes that are not covered are read when a walk reaches them: a RET there
 returns, another byte is decoded or walked exactly.
 No poll point: the block has no loop, and the reference takes no
 interrupt inside it.
+
+Copied from Secret Weapons of the Luftwaffe's translator/smc.py (commit pinned in
+manifest/references.tsv). X-Wing's region lies above the first 64 KiB, so the
+segment check is a window (low segment, limit) instead of a limit alone.
 """
 
 from __future__ import annotations
@@ -76,23 +81,39 @@ def _mov_run(code: bytes, bound: str, other: str) -> list[str]:
                         [f"\tbra {other}"] if other == ".stop" else [])   # else falls into .f1
 
 
-def _reload_cell(base: str, limit: int) -> list[str]:
+def _reload_cell(base: str, window: tuple[int, int]) -> list[str]:
     def word(p: int, dst: str) -> list[str]:      # CS word operand at cell byte p
         return ["\tmoveq #0,d7", f"\tmove.w -{p}(a0),d7", "\tneg.l d7",
                 f"\tmove.w (-{base}-1,a6,d7.l),{dst}"]
     return (word(3, "d3") + word(8, "d7")
-            + ["\tand.l #$ffff,d7", "\tmove.w d7,G_DS(a6)"] + expose_check("d7", limit, ".rk")
+            + ["\tand.l #$ffff,d7", "\tmove.w d7,G_DS(a6)"] + expose_check("d7", window, ".rk")
             + ["\tlsl.l #4,d7", "\tlea -$7fff(a6),a3", "\tsuba.l d7,a3", "\tlea -10(a0),a0"])
 
 
-def expose_check(reg: str, limit: int, skip: str) -> list[str]:
+def expose_check(reg: str, window: tuple[int, int], skip: str) -> list[str]:
     """A segment value in `reg` whose window reaches a region drops the caches."""
+    lo, limit = window
     if not limit:
         return []
-    return [f"\tcmp.w #{hx(limit)},{reg}", f"\tbcc.s {skip}", "\tjsr smc_expose", f"{skip}:"]
+    low = [f"\tcmp.w #{hx(lo)},{reg}", f"\tbcs.s {skip}"] if lo else []
+    return [f"\tcmp.w #{hx(limit)},{reg}", f"\tbcc.s {skip}", *low, "\tjsr smc_expose", f"{skip}:"]
 
 
-def _ret_cell(base: str, limit: int) -> list[str]:
+def window_reset(label: str, window: tuple[int, int]) -> list[str]:
+    """A dropped cache is cleared only when no segment register reaches a region:
+    to the exact walk (`label`_x) while one does. d6 scratch."""
+    lo, limit = window
+    if not lo:
+        return [x for s in ("G_DS", "G_ES", "G_SS")
+                for x in (f"\tcmp.w #{hx(limit)},{s}(a6)", f"\tbcs {label}_x")]
+    out = []
+    for k, s in enumerate(("G_DS", "G_ES", "G_SS")):
+        out += [f"\tmove.w {s}(a6),d6", f"\tcmp.w #{hx(limit)},d6", f"\tbcc.s .r{k}",
+                f"\tcmp.w #{hx(lo)},d6", f"\tbcc {label}_x", f".r{k}:"]
+    return out
+
+
+def _ret_cell(base: str, window: tuple[int, int]) -> list[str]:
     return ["\tmove.w -1(a2,d4.w),d7", "\tsubq.w #2,d4", "\trts"]
 
 
@@ -177,17 +198,18 @@ def expose(labels: list[str]) -> list[str]:
 
 
 def walk(label: str, cs: str, first_ip: int, last_ip: int, forms: list[str],
-         limit: int = 0) -> list[str]:
+         window: tuple[int, int] = (0, 0)) -> list[str]:
     """Cell walk of one region: d7 = entry IP (zero-extended); called with the
-    guest return IP pushed, like the call target it replaces. `limit`: the
-    lowest segment whose window reaches no region (0: no cache)."""
-    if not limit or set(forms) != CACHED:
-        return exact(label, cs, first_ip, last_ip, forms, limit)
-    return cached(label, cs, first_ip, last_ip, limit) + exact(
-        f"{label}_x", cs, first_ip, last_ip, forms, limit)
+    guest return IP pushed, like the call target it replaces. `window`: the
+    lowest segment whose window reaches a region and the lowest above it that
+    reaches none (limit 0: no cache)."""
+    if not window[1] or set(forms) != CACHED:
+        return exact(label, cs, first_ip, last_ip, forms, window)
+    return cached(label, cs, first_ip, last_ip, window) + exact(
+        f"{label}_x", cs, first_ip, last_ip, forms, window)
 
 
-def cached(label: str, cs: str, first_ip: int, last_ip: int, limit: int) -> list[str]:
+def cached(label: str, cs: str, first_ip: int, last_ip: int, window: tuple[int, int]) -> list[str]:
     """The walk over cached cells (module docstring). Registers: d0 AL, d1
     7FFFh - BX (AL in each byte while a run is stored by longs), d2 the stop
     (offset of the planted RET, FFFFh none), d3 BX, d7 the offset of the cell,
@@ -201,7 +223,7 @@ def cached(label: str, cs: str, first_ip: int, last_ip: int, limit: int) -> list
     rel, rfixed = _parse(RELOAD)
     save = "d1-d2/d5/a4"
     ret = f"{label}_ret"
-    lines = [f"{ret}:\tmovem.l (sp)+,{save}"] + _ret_cell(base, limit) + [
+    lines = [f"{ret}:\tmovem.l (sp)+,{save}"] + _ret_cell(base, window) + [
              f"{label}:\t; self-modified cells {first_ip:04X}..{last_ip:04X} (D16): cell cache (D3)",
              f"\tmove.w {label}_plant,d6", f"\tbeq {label}_reset",
              f"{label}_go:\tsub.w #{hx(first_ip)},d7", f"\tcmp.w #{hx(last + 1)},d7", f"\tbcc {label}_xo",
@@ -240,7 +262,9 @@ def cached(label: str, cs: str, first_ip: int, last_ip: int, limit: int) -> list
              "\tneg.l d5", "\tmoveq #0,d6", f"\tmove.w (-{base}-1,a6,d5.l),d6",
              "\tmove.w d6,G_DS(a6)", "\tmove.w d6,d5", "\tlsl.l #4,d6", "\tlea -$7fff(a6),a3",
              "\tsuba.l d6,a3", "\tmove.w #$7fff,d1", "\tsub.w d3,d1", f"\tadd.w #{len(rel)},d7",
-             f"\tcmp.w #{hx(limit)},d5", "\tbcc .next", "\tjsr smc_expose", "\tbra.s .xo",
+             f"\tcmp.w #{hx(window[1])},d5", "\tbcc .next",
+             *([f"\tcmp.w #{hx(window[0])},d5", "\tbcs .next"] if window[0] else []),
+             "\tjsr smc_expose", "\tbra.s .xo",
              # no record: inside a cached cell (exact), a RET, or cells to decode
              f".miss:\tlea {label}_cov,a4", "\ttst.b (a4,d7.w)", "\tbne.s .xo",
              f"\tlea (-{lin},a6),a4", "\tsuba.w d7,a4", f"\tcmp.b #{hx(_parse(RET)[0][0])},(a4)",
@@ -249,9 +273,7 @@ def cached(label: str, cs: str, first_ip: int, last_ip: int, limit: int) -> list
              ".s0:\tmoveq #-1,d2", "\tbra .s1"]     # the planted RET lies before the entry
     lines += [f"{label}_xo:\tadd.w #{hx(first_ip)},d7", f"\tbra {label}_x",
               # a dropped cache: cleared when no segment reaches a region
-              f"{label}_reset:\tcmp.w #{hx(limit)},G_DS(a6)", f"\tbcs {label}_x",
-              f"\tcmp.w #{hx(limit)},G_ES(a6)", f"\tbcs {label}_x",
-              f"\tcmp.w #{hx(limit)},G_SS(a6)", f"\tbcs {label}_x",
+              f"{label}_reset:", *window_reset(label, window),
               f"\tlea {label}_rec,a0", f"\tmove.w #{hx(n * 5 // 4)},d6",
               ".c:\tclr.l (a0)+", "\tdbra d6,.c", "\tmoveq #-1,d6", f"\tmove.w #$ffff,{label}_plant",
               f"\tbra {label}_go"]
@@ -334,7 +356,7 @@ def _hooks(label: str, lin: str, n: int) -> list[str]:
 
 
 def exact(label: str, cs: str, first_ip: int, last_ip: int, forms: list[str],
-          limit: int = 0) -> list[str]:
+          window: tuple[int, int] = (0, 0)) -> list[str]:
     """The exact cell walk (module docstring); entered like the walk."""
     base = f"({cs})*16"
     lines = [f"{label}:\t; self-modified cells {first_ip:04X}..{last_ip:04X} (D16)",
@@ -361,7 +383,7 @@ def exact(label: str, cs: str, first_ip: int, last_ip: int, forms: list[str],
             else:
                 lines += [f"\tcmp.b #{hx(code[off])},{1 - off}(a0)", f"\tbne {nxt if p == 0 else '.stop'}"]
                 p += 1
-        body = FORMS[form][1](base, limit)
+        body = FORMS[form][1](base, window)
         lines += body
         if body[-1] != "\trts":
             lines.append("\tbra .cell")

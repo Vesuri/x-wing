@@ -1,7 +1,15 @@
 """Program mode: global flag liveness, block leaders and the 68020 `.s` of every
 module (Motorola syntax, vasm). Generated text is G1-guarded like the IR listing.
 
-Successors: fall-through (a PLINK manager call returns 2 bytes later), direct
+Copied from Secret Weapons of the Luftwaffe's translator/emit.py (commit pinned in
+manifest/references.tsv) and adapted to X-Wing: module tags; the overlay manager's
+thunks (a `jmp far` after the manager call, no inline id to skip); CS expressions per
+module (the music driver's from DRVSEG); dispatch rows tagged with the overlay
+segment's descriptor index; D9 store marking in the code that writes A000h
+(VRAM_MODULES); the INT 00h handler from entries.csv. No graphics-driver frame
+boundary yet (P5).
+
+Successors: fall-through, direct
 near/far targets (cfg), statically resolved switch tables; a `ret`/`retf`
 continues at the return sites of the calls whose targets reach it without
 crossing a call (native rts; a mismatch stops; a call through the dispatcher
@@ -11,7 +19,7 @@ row only indirect near jmp/call sites target), and on through the rows those
 leave to; a ret no call target reaches falls back
 to every return site), an
 unresolved indirect transfer at some row of the runtime dispatch table (the
-cfg seeds: MZ entry, PLINK thunks, runtime.csv, indirect.csv targets; any
+cfg seeds: MZ entry, manager thunks, runtime.csv, indirect.csv targets; any
 other target stops), so each sees the live-in union of that set; a divide
 error continues in the guest INT 00h handler; a flag-preserving cell walk passes its caller continuation's live flags
 through (other self-modified flow sees every flag live); an annotated PUSHF/POPF save reads what is live after
@@ -33,9 +41,8 @@ from .flags import ALL, plan, transfer
 from .lower import GREG, LOADSEG, MIRROR, Ctx, LowerError, hx
 
 M = image.M
-TAG = {"SWOTL.EXE": "R", "SPAZ.OVL": "SPZ", "RTSVGA.OVL": "VGA", "FRONTEND.OVL": "FE",
-       "CAMPAIGN.OVL": "CMP", "NOTCAMP.OVL": "NCP", "FLIGHT.OVL": "FLT", "REPLAY.OVL": "RPL",
-       "PANEL.OVL": "PNL", "DATA.OVL": "DAT"}
+TAG = {"XWING.EXE": "R", "FRONTEND.OVL": "FE", "FLIGHT.OVL": "FLT", "ADLIB.IMS": "AD"}
+DRIVER = cfg.DRIVER
 RET, UNKNOWN, SMC = "ret", "unknown", "smc"
 TERMINAL = {"jmp", "jmpf", "ret", "retf", "iret", "hlt"}
 RUNTIME = ("rt_int", "rt_irq", "rt_fault", "rt_halt", "rt_trap", "rt_in8", "rt_in16", "rt_out8", "rt_out16",
@@ -54,16 +61,20 @@ POINTER_NAMES = ("x", "y", "width", "height", "hot_x", "hot_y", "image", "x_min"
 
 
 def pointer_guest() -> list[int]:
+    """Empty until X-Wing's pointer state is annotated (P5)."""
+    if not (image.ANNOTATIONS / "pointer.csv").exists():
+        return []
     rows = image.rows("pointer.csv")
     if tuple(r["name"] for r in rows) != POINTER_NAMES:
         raise LowerError(f"pointer.csv: names must be {', '.join(POINTER_NAMES)} in order")
     return [int(r["offset"], 16) for r in rows]
 
 
-# D9: the graphics driver in scope. Only it writes video memory
-# (docs/external-surface.md); a return from a call into it through its PLINK
-# thunks publishes a frame.
-GRAPHICS_DRIVER = "RTSVGA.OVL"
+# D9: the modules whose code writes video memory (docs/external-surface.md, VGA:
+# FRONTEND and FLIGHT store to A000h, the root and the driver never). Their stores
+# check for A000h and mark rows. X-Wing has no separate graphics driver: the frame
+# boundary (SWOTL's return from a driver thunk) is X-Wing's per-frame call, found in P5.
+VRAM_MODULES = ("FRONTEND.OVL", "FLIGHT.OVL")
 
 
 def retried(i) -> bool:
@@ -111,11 +122,11 @@ def sync_points(path=None) -> dict[tuple[str, int], str]:
 def poll(lab: str, always: bool = False) -> list[str]:
     """D8 safe point at a sync point (a block leader: live flags are in the state
     block, so the CCR is free): a posted interrupt branches to the poll's stub
-    (poll_stub), the common case falls through. Only sync builds (SWOTL_SYNC: host
+    (poll_stub), the common case falls through. Only sync builds (XWING_SYNC: host
     runs, replays, the bench) test, but at an IF 0→1 point (always): production
     takes ticks at the CIA interrupt (irq-plan I8)."""
     test = ["\ttst.b G_IRQ(a6)", f"\tbne {lab}_irq"]
-    return (test if always else ["\tifd SWOTL_SYNC", *test, "\tendif"]) + [f"{lab}_np:"]
+    return (test if always else ["\tifd XWING_SYNC", *test, "\tendif"]) + [f"{lab}_np:"]
 
 
 def poll_stub(lab: str, ip: int, cs: str, always: bool = False, loop: bool = False) -> list[str]:
@@ -126,7 +137,7 @@ def poll_stub(lab: str, ip: int, cs: str, always: bool = False, loop: bool = Fal
     would be another visit, and loop while the bench watch keeps G_IRQ set."""
     stub = [f"{lab}_irq:", f"\tmove.l #{hx(ip)},d7", f"\tmove.l #({cs})<<16{'|1' if loop else ''},d6",
             "\tjsr rt_irq", f"\tbra {lab}_np"]
-    return stub if always else ["\tifd SWOTL_SYNC", *stub, "\tendif"]
+    return stub if always else ["\tifd XWING_SYNC", *stub, "\tendif"]
 
 
 # A return check's mismatch branch (lower.return_check) targets a module-local
@@ -313,8 +324,13 @@ def copy_label(mod: str, off: int) -> str:
     return f"{TAG[mod]}_{off:05X}_bp"
 
 
-def cs_expr(cs: int) -> str:
-    return f"LOADSEG+{hx(cs)}"
+def loadseg(mod: str) -> str:
+    """The run-time segment a module's link segments and relocated words add."""
+    return "DRVSEG" if mod == DRIVER else "LOADSEG"
+
+
+def cs_expr(cs: int, mod: str = "") -> str:
+    return f"{loadseg(mod)}+{hx(cs)}"
 
 
 class Program:
@@ -336,6 +352,7 @@ class Program:
         self.outline_sites: dict[str, tuple] = {}  # R27, outline_cold
         self.offsets: dict[str, list[int]] = {}   # sorted instruction offsets (outline_cold)
         self.run_last: dict[str, dict[int, int]] = {}  # each run's last offset by its first
+        self.fixups: dict[str, list[int]] = {}    # sorted fixup offsets per module (ctx)
         self.indirect: dict[tuple[str, int], tuple[list, list]] = {}
         for r in image.rows("indirect.csv"):
             def parse(col):
@@ -350,7 +367,7 @@ class Program:
         self.seeds = {(n, off) for n, u in self.units.items() for off in u.seeds}
         self.entries: set = set(self.seeds)
         # run-time dispatch table rows: the static seeds (cfg.seeds)
-        seeds = [(m, o, why) for m, o, why in cfg.seeds(image.load())
+        seeds = [(m, o, why) for m, o, why, _ in cfg.seeds(image.load())
                  if m in self.units and o in self.units[m].insns]
         self.dispatch = {(m, o) for m, o, _ in seeds}
         # R14e: rows a far transfer may enter: every seed but those that are only
@@ -424,16 +441,15 @@ class Program:
                     self.compute_end[(mod, first)] = int(r['end'], 16)
             elif r.get('end'):
                 raise LowerError(f"hle.csv: {mod}+{first:05X} end needs kind compute")
-        int0 = [r for r in image.rows("runtime.csv") if r["name"] == "__cintDIV"]
+        int0 = [r for r in image.rows("entries.csv") if r["reason"].startswith("INT 00h")]
         self.int0 = (int0[0]["module"], int(int0[0]["offset"], 16)) if int0 else None
         # D16: self-modified regions, each lowered as one cell walk
         self.smc_forms = image.smc_forms()
         self.walk_preserves_flags = all(smc.preserves_flags(forms)
                                         for forms in self.smc_forms.values())
         self.cell_regions()
-        # D9: the `jmp far` of each PLINK thunk into the graphics driver
-        # (thunk: call far manager, dw id, jmp far)
-        self.driver_jumps = {at + 7 for at, mod, _ in M.thunks(image.load()) if mod == GRAPHICS_DRIVER}
+        # D9: jumps into the per-frame graphics call (none until P5 finds it)
+        self.driver_jumps: set[int] = set()
         self.build_edges()
         # D8 poll points: where tests and the reference take a pending hardware
         # interrupt (production: at the CIA tick). The I8 sync points and, so the
@@ -504,13 +520,13 @@ class Program:
 
     def near_node(self, mod: str, off: int, ip: int):
         u = self.units[mod]
-        return (mod, u.off_of(u.cs[off], ip))
+        return (mod, u.off_of(u.cs[off], ip, off))
 
     def build_edges(self) -> None:
         for mod, u in self.units.items():
             for off, i in u.insns.items():
                 n = (mod, off)
-                nxt = off + i.size + (2 if off in u.manager_calls else 0)
+                nxt = off + i.size
                 fall = (mod, nxt) if i.op not in TERMINAL else None
                 s: list = []
                 op = i.op
@@ -643,10 +659,16 @@ class Program:
         t = self.succ[n][0]
         return set(ALL) if t in (RET, UNKNOWN, SMC) else set(self.live_in[t])
 
+    def undecoded_live(self, n) -> frozenset:
+        """Flags live at an undecoded return site: every flag where the walk of a
+        self-modified region continues; none where the run ends in a stop
+        (run_text: `bra <label>_stop`, e.g. after a noreturn.csv call)."""
+        return ALL if n[1] in self.units[n[0]].smc_entries else frozenset()
+
     def ret_live_of(self, n) -> set:
         out = set()
         for r in self.ret_of[n]:
-            out |= self.live_in.get(r, ALL)
+            out |= self.live_in.get(r, self.undecoded_live(r))
         return out
 
     def liveness(self) -> None:
@@ -672,7 +694,7 @@ class Program:
                         # A matched walk that defines/reads no flags passes its
                         # caller's requirements through unchanged. The return
                         # check stops if it does not return to that call site.
-                        out |= (self.live_in.get(self.call_site[n], ALL)
+                        out |= (self.live_in.get(self.call_site[n], self.undecoded_live(self.call_site[n]))
                                 if n in self.call_site and self.walk_preserves_flags else ALL)
                     else:
                         out |= self.live_in[s]
@@ -746,18 +768,27 @@ class Program:
             if first + smc.span(first, last) > 0x10000:
                 raise LowerError(f"{mod}+{lo:05X}: cell cache past its segment")
             self.cells.append((walk_label(mod, lo), u.segment(lo), first, smc.span(first, last)))
+        if any(mod == DRIVER for mod, _, _ in self.smc_forms):
+            raise LowerError("cell cache: a self-modified region in the driver is not lowered")
         lins = [((LOADSEG + seg) * 16 + first, (LOADSEG + seg) * 16 + first + n - 1)
                 for _, seg, first, n in self.cells]
         self.smc_bounds = (min(a for a, _ in lins), max(b for _, b in lins)) if lins else (1, 0)
-        if lins and self.smc_bounds[0] > 0x10000:
-            raise LowerError("cell cache: a segment check from below is not lowered")
         self.smc_limit = (self.smc_bounds[1] >> 4) + 1 if lins else 0
+        # a segment below this one ends its window (the byte past it too) before the cells
+        self.smc_seg_lo = max(0, (self.smc_bounds[0] - 0x10000 + 15) >> 4) if lins else 0
+        self.smc_window = (self.smc_seg_lo, self.smc_limit)
 
-    def code_regions(self, cs: int) -> tuple:
-        """Cell caches a CS-segment store in segment `cs` may reach: (offset to
-        region offset, span, walk label), region offset = offset + the first."""
+    def code_regions(self, cs: int, mod: str) -> tuple:
+        """Cell caches a CS-segment store in segment `cs` of module `mod` may reach:
+        (offset to region offset, span, walk label), region offset = offset + the
+        first. Code of one overlay file never runs while a segment of the other is
+        resident (both base segments load at 05BAh; a child keeps its base resident,
+        docs/overlay-manager.md), so its stores reach only its own file's cells."""
         out = []
         for lab, seg, first, n in self.cells:
+            other = next(m for m in TAG if lab.startswith(TAG[m] + "_"))
+            if other != mod and other.endswith(".OVL") and mod.endswith(".OVL"):
+                continue
             delta = (cs - seg) * 16 - first
             if delta < n and delta + 0x10000 >= 0:
                 out.append((delta, n, lab))
@@ -768,7 +799,7 @@ class Program:
         lo, hi = self.smc_bounds
         code = smc.expose([lab for lab, *_ in self.cells]) + [
             "\tcnop\t0,4", f"smc_lo:\tdc.l\t{hx(lo)}", f"smc_hi:\tdc.l\t{hx(hi)}",
-            f"smc_seg_limit:\tdc.w\t{hx(self.smc_limit)}"]
+            f"smc_seg_limit:\tdc.w\t{hx(self.smc_limit)}", f"smc_seg_lo:\tdc.w\t{hx(self.smc_seg_lo)}"]
         data = []
         for (mod, lo_, hi_) in sorted(self.smc_forms):
             u = self.units.get(mod)
@@ -785,18 +816,21 @@ class Program:
         return next(((lo, hi) for m, lo, hi in self.smc_forms if m == mod and lo <= off <= hi),
                     None)
 
-    def dispatch_rows(self) -> list[tuple[int, int, int, int, str]]:
-        """Run-time dispatch table: (link CS, IP, overlay id (root 0), far (R14e),
-        label) of every decoded entry, sorted by CS:IP. Overlays sharing an area share
-        CS:IP, so the runtime picks the row whose overlay is resident."""
+    def dispatch_rows(self) -> list[tuple[str, int, int, int, str]]:
+        """Run-time dispatch table: (CS expression, IP, overlay id, far (R14e), label)
+        of every decoded entry, sorted by module, CS:IP. The overlay id is the
+        overlay segment's descriptor index + 1 (root and driver 0). Segments sharing
+        an area share CS:IP, so the runtime picks the row whose segment is resident."""
         out = []
         for mod, off in self.dispatch:
             u = self.units.get(mod)
             if not u or off not in u.insns:
                 continue
-            out.append((u.cs[off], u.ip_of(off), u.module.index + 1,
+            r = u.range_at(off).name
+            oid = int(r.split("#")[1]) + 1 if "#" in r else 0
+            out.append((loadseg(mod), u.cs[off], u.ip_of(off), oid,
                         int((mod, off) in self.far_rows), label(mod, off)))
-        return sorted(out)
+        return [(f"{b}+{hx(cs)}", ip, oid, far, lab) for b, cs, ip, oid, far, lab in sorted(out)]
 
     def program_text(self, files: list[str]) -> str:
         """Assembly root of the Amiga/host link: equates, runtime imports, the module
@@ -809,7 +843,7 @@ class Program:
         lines += ["\txref\t" + s for s in sorted({s for _, s in self.hle.values()})]
         lines += ["\txdef\tdispatch_table", "\txdef\tdispatch_count", "\txdef\tload_segment", "\txdef\tpointer_guest",
                   "\txdef\toverlay_table", "\txdef\tsmc_expose", "\txdef\tsmc_lo",
-                  "\txdef\tsmc_hi", "\txdef\tsmc_seg_limit"]
+                  "\txdef\tsmc_hi", "\txdef\tsmc_seg_limit", "\txdef\tsmc_seg_lo"]
         if len(self.cells) == 1:
             lines += ["\txdef\t" + a for a, _ in WALK_ALIASES]
         lines += ["\tsection\t.text,code"]
@@ -818,10 +852,11 @@ class Program:
         lines += code
         rows = self.dispatch_rows()
         lines += ["\tcnop\t0,4", "load_segment:\tdc.l\tLOADSEG",
-                  f"overlay_table:\tdc.l\t{hx(M.OVL_TABLE)}\t; PLINK records, id 1 first (root offset)",
-                  "pointer_guest:\tdc.w\t" + ",".join(hx(o) for o in pointer_guest()),
+                  f"overlay_table:\tdc.l\t{hx(M.OVL_TABLE)}\t; descriptors, id 1 first (root offset)",
+                  "pointer_guest:" + ("\tdc.w\t" + ",".join(hx(o) for o in pointer_guest())
+                                      if pointer_guest() else "\t; no pointer state (P5)"),
                   "\tcnop\t0,4", "dispatch_count:", f"\tdc.l\t{len(rows)}", "dispatch_table:"]
-        lines += [f"\tdc.w\t{cs_expr(cs)},{hx(ip)},{oid},{far}\n\tdc.l\t{lab}"
+        lines += [f"\tdc.w\t{cs},{hx(ip)},{oid},{far}\n\tdc.l\t{lab}"
                   for cs, ip, oid, far, lab in rows]
         lines += ["\tsection\t.bss,bss"] + data
         return "\n".join(lines) + "\n"
@@ -842,7 +877,7 @@ class Program:
         cs = u.cs[off]
 
         def near(ip):
-            t = u.off_of(cs, ip)
+            t = u.off_of(cs, ip, off)
             if t in u.insns:
                 return label(mod, t)
             if t in u.smc_entries:
@@ -869,18 +904,23 @@ class Program:
             for m, o in sw + tr:
                 if m not in self.units or o not in self.units[m].insns:
                     continue
-                k = (cs_expr(self.units[m].cs[o]), self.units[m].ip_of(o))
+                k = (cs_expr(self.units[m].cs[o], m), self.units[m].ip_of(o))
                 far_map[k] = label(m, o)
                 keys.append(k)
             far_t = tuple(keys)
-        rel = frozenset(f - off for f in u.module.fixups if off <= f < off + i.size)
-        return Ctx(cs=cs_expr(cs), label=label(mod, off), reloc=rel, near=near, far=far,
+        if mod not in self.fixups:
+            self.fixups[mod] = sorted(u.module.fixups)
+        fx = self.fixups[mod]
+        k = bisect.bisect_left(fx, off)
+        rel = frozenset(f - off for f in fx[k:k + i.size] if f < off + i.size)
+        return Ctx(cs=cs_expr(cs, mod), label=label(mod, off), reloc=rel, near=near, far=far,
+                   loadseg=loadseg(mod),
                    near_targets=near_t, complete=bool(sw), far_targets=far_t,
                    smc_targets=tuple(sorted((u.ip_of(lo), u.ip_of(hi), walk_label(mod, lo))
                                             for lo, hi in smc_t)),
-                   code_regions=self.code_regions(cs), seg_limit=self.smc_limit,
+                   code_regions=self.code_regions(cs, mod), seg_limit=self.smc_limit, seg_lo=self.smc_seg_lo,
                    seg_repeat=label(mod, off) in self.seg_repeat,
-                   manager=off in u.manager_calls, program=True, vram=mod == GRAPHICS_DRIVER,
+                   program=True, vram=mod in VRAM_MODULES,
                    driver_call=mod == M.ROOT and off in self.driver_jumps, ret_mismatch=RM,
                    far_ret_mismatch=RMF,
                    rep_hook=((self.diagnostic_reps[(mod, off)], label(mod, off))
@@ -906,7 +946,7 @@ class Program:
         cs = u.cs[off]
 
         def near_copy(ip):
-            t = u.off_of(cs, ip)
+            t = u.off_of(cs, ip, off)
             return copy_label(mod, t) if (mod, t) in nodes else near(ip)
 
         c.near, c.label, c.retry, c.bp_direct = near_copy, copy_label(mod, off), label(mod, off), True
@@ -958,7 +998,7 @@ class Program:
             assert (mod, o) in self.leaders, (mod, o)
             always = self.sync.get((mod, o)) == "if"
             lines.extend(poll(lab(mod, o), always))
-            stub = poll_stub(lab(mod, o), u.ip_of(o), cs_expr(u.cs[o]), always, (mod, o) in self.loops)
+            stub = poll_stub(lab(mod, o), u.ip_of(o), cs_expr(u.cs[o], mod), always, (mod, o) in self.loops)
             if comp is not None:    # a handler may change BP: on in the exact code
                 stub[-1 if always else -2] = f"\tbra {label(mod, o)}_np"
             stubs.extend(stub)
@@ -987,7 +1027,7 @@ class Program:
                 _, service = self.hle[row]
                 if row in self.compute_entries:
                     lines.append(f"\tmoveq #{index},d7")
-                lines += compute.hook(service, f"{lab(mod, o)}_cx", cs_expr(u.cs[o]))
+                lines += compute.hook(service, f"{lab(mod, o)}_cx", cs_expr(u.cs[o], mod))
                 targets = [self.compute_resume(x, f"{lab(mod, o)}_cr{k}", stubs)
                            for k, x in enumerate(resumes)]
                 stubs += compute.resume_dispatch(f"{lab(mod, o)}_cx", targets, hx(u.ip_of(o)))
@@ -996,7 +1036,7 @@ class Program:
                 resume, service = self.hle[(mod, o)]
                 if (mod, o) in self.compute_rows:
                     target = self.compute_resume(resume, f"{lab(mod, o)}_cr", stubs)
-                    lines += compute.hook(service, target, cs_expr(u.cs[o]))
+                    lines += compute.hook(service, target, cs_expr(u.cs[o], mod))
                 else:
                     lines += [f"\tmove.w {GREG[a]},{d}" for a, d in zip(self.hle_args[(mod, o)], ("d7", "d6"))]
                     lines += [f"\tjsr {service}", f"\tbne {label(*resume)}"]
@@ -1030,7 +1070,7 @@ class Program:
         i = u.insns[last]
         closed = i.op in TERMINAL and not opened
         if not closed and not opened:
-            nxt = last + i.size + (2 if last in u.manager_calls else 0)
+            nxt = last + i.size
             if nxt not in u.insns:
                 lines.append(f"\tbra {smc_label(mod, nxt) if nxt in u.smc_entries else stop_label(mod, last)}")
                 closed = True
@@ -1058,7 +1098,9 @@ class Program:
         place = {}
         if u.insns[run[-1]].op in TERMINAL and nxt < len(offs):
             pos[offs[nxt]] = len(run)   # the next run starts at the target
-            lasts = self.run_last.setdefault(mod, {r[0]: r[-1] for r in self.runs(mod)})
+            if mod not in self.run_last:   # once per module (setdefault would rebuild it)
+                self.run_last[mod] = {r[0]: r[-1] for r in self.runs(mod)}
+            lasts = self.run_last[mod]
             place[len(run)] = label(mod, lasts[offs[nxt]])
         starts = starts + [len(lines)]
         cuts, end = [], 0
@@ -1173,8 +1215,8 @@ class Program:
             if m == mod:
                 if u.ip_of(lo) > u.ip_of(hi) or u.segment(lo) != u.segment(hi):
                     raise LowerError(f"{mod}+{lo:05X}: self-modified region crosses a segment")
-                lines += smc.walk(walk_label(mod, lo), cs_expr(u.segment(lo)), u.ip_of(lo),
-                                  u.ip_of(hi), forms, self.smc_limit)
+                lines += smc.walk(walk_label(mod, lo), cs_expr(u.segment(lo), mod), u.ip_of(lo),
+                                  u.ip_of(hi), forms, self.smc_window)
                 stats["self-modified walk"] += 1
         stops = {w.strip("()") for x in lines for w in x.replace(",", " ").split()
                  if w.endswith("_stop")}

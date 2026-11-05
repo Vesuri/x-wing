@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle
+.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check test-m68k
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -19,6 +19,9 @@ help:
 	@echo 'make ghidra                 Ghidra project per code unit in tmp/ghidra-proj'
 	@echo 'make dos-oracle             build the unpatched debug DOSBox-X for the RETF oracle'
 	@echo 'make test-x86               gate 3: decoder cross-check, Unicorn differential, sabotage'
+	@echo 'make gen                    translate the in-scope modules -> build/gen (audit, coverage)'
+	@echo 'make gen-check              G1: headers, digests and byte-identical regeneration of build/gen'
+	@echo 'make test-m68k              gate 4: gen-check, then 68020 differential, blocks, guards, sabotage'
 
 verify-input:
 	@shasum -a 256 -c manifest/originals.sha256
@@ -102,3 +105,26 @@ t-sab-dosbox-retf:
 
 dos-oracle:
 	@tools/build_dosbox_x_debug.sh
+
+# Gate 4 (copied from Secret Weapons of the Luftwaffe's Makefile). The checks run in
+# parallel after the one writer of build/gen (gen-check, which regenerates and
+# compares). The boundary shard records its x86 side for the sabotage plants.
+M68K_TESTS = $(subst /,-of-,$(SHARDS:%=t-m68k-%)) t-blocks t-guards t-sab-m68k
+gen:
+	@$(ENV) python3 -m translator.gen
+gen-check:
+	@$(ENV) python3 -m translator.check gen --regen
+test-m68k: gen
+	@$(MAKE) -s gen-check
+	@$(MAKE) -s -k -j$(JOBS) $(M68K_TESTS)
+t-m68k-%:
+	$(call RUN,m68k-$*,python3 tests/m68k_diff.py --only $(CORPUS) --shard $(SHARD))
+t-m68k-boundary.0-of-1:
+	$(call RUN,m68k-boundary.0-of-1,python3 tests/m68k_diff.py --only boundary --shard 0/1 \
+		--record tmp/test/x86-side-boundary.pkl)
+t-blocks:
+	$(call RUN,blocks,python3 tests/m68k_blocks.py)
+t-guards:
+	$(call RUN,guards,python3 tests/test_guards.py)
+t-sab-m68k: t-m68k-boundary.0-of-1
+	$(call RUN,sabotage-m68k,python3 tests/m68k_sabotage.py)

@@ -8,8 +8,9 @@ its own installer and run under a scripted DOSBox-X. The Macintosh demo is insta
 fresh System 7.5.5 volume and launched on an emulated 68040 Macintosh. The DOS reference
 runs are traced with Secret Weapons of the Luftwaffe's tracer and reach pinned milestones.
 The static and live map of the DOS program is in place. SWOTL's translator is copied;
-its decoder, IR and interpreter cover X-Wing's x86 code and pass gate 3. No 68k code is
-generated yet. Read
+its decoder, IR and interpreter cover X-Wing's x86 code and pass gate 3, and its 68020
+backend translates every in-scope module and passes gate 4. No runtime runs the
+generated code yet. Read
 `docs/open-work.md` first.
 
 ## Rules

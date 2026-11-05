@@ -9,7 +9,8 @@ Units: the root (link range 0..end of image, without the overlay area), each of 
 overlay segments (its code bytes in its file, at its link segment) and `ADLIB.IMS` (its
 own link space). Seeds: the MZ entry, every thunk, every traced instruction start
 (union of the trace corpus), traced indirect targets. Follows fall-through, near and far
-direct jumps and calls; stops at returns and indirect jumps; never sweeps linearly. A far
+direct jumps and calls; stops at returns, indirect jumps and the calls listed in
+annotations/noreturn.csv; never sweeps linearly. A far
 target resolves to the unit itself, else its parent chain (the manager keeps parents
 resident), else the root; a thunk's far jump resolves through its descriptor index. Root
 far references into the overlay area are listed, not followed. CS is kept along a flow
@@ -122,6 +123,8 @@ class Sweep:
         self.tables: dict[tuple[str, int], list[int]] = {}
         self.switch_sites: list[tuple[Unit, int, int, object]] = []
         self.smc = smc_regions()
+        with (M.REPO / 'annotations/noreturn.csv').open() as f:
+            self.noreturn = {(r['module'], int(r['offset'], 16)) for r in csv.DictReader(f)}
         self.smc_conflicts = 0
         self.curated = dispatch_tables()
         self.index_unit = {int(n.split('#')[1]): n for n in us if '#' in n}
@@ -286,6 +289,8 @@ class Sweep:
                     self.switch_sites.append((u, off, seg, i))
                 if i.mnemonic in ('jmp', 'ljmp'):
                     return
+            if (f, off) in self.noreturn:
+                return
             off = nxt
         self.conflict(f, off, f'flow past the end of {unit} ({why})')
 

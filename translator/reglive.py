@@ -1,6 +1,8 @@
 """Conservative DX liveness within one basic block.
 
-Unknown instructions/runtime boundaries read DX. All block entries/exits keep
+Unknown instructions/runtime boundaries read DX. Copied from Secret Weapons of the
+Luftwaffe (commit pinned in manifest/references.tsv); X-Wing adds the 186+
+three-operand imul, which writes only its destination. All block entries/exits keep
 the ordinary register contract. No profile observations participate in proof.
 """
 from .decode import Mem, Reg
@@ -20,6 +22,10 @@ def transfer_dx(i, live, context):
         return True
     if i.op == 'cwd':
         return False
+    if i.op == 'imul' and len(i.operands) == 3:  # 186+ imul r16,r/m16,imm: no DX:AX
+        dest = i.operands[0]
+        full = dest.name == 'dx'
+        return touches_dx(i.operands[1]) or live and not full
     if i.op in ('mul', 'imul'):
         return any(touches_dx(o) for o in i.operands) or (live if i.width == 8 else False)
     if i.op in ('mov', 'lea', 'pop'):

@@ -1,1 +1,5 @@
 module,save,restore,reason
+XWING.EXE,0x041e2,0x043e8,"overlay manager (0406h:017Ch): PUSHF after the AX = FFFFh exit, POPF before its RETF; its stack frame is never read through BP or SP, so the FLAGS image is not touched (DERIVED: reading)"
+XWING.EXE,0x044f4,0x0450f,"thunk handler (0406h:048Ah): PUSHF after saving the registers, POPF before restoring them; the frame is read only at [bp+2] (the thunk's return IP) (DERIVED: reading)"
+XWING.EXE,0x0464e,0x0469f,"overlay manager routine 0406h:05EEh: PUSHF first, POPF before its RET; no BP or SP access (DERIVED: reading)"
+XWING.EXE,0x046a1,0x04774,"overlay manager routine 0406h:0641h: PUSHF first, POPF before its RET; no BP or SP access (DERIVED: reading)"
