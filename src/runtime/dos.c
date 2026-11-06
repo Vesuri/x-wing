@@ -898,6 +898,10 @@ void rt_int21(uint16_t cs, uint16_t ip)
         SET_AL(rt_r.bx, 0);
         rt_r.cx = 0;
         break;
+    case 0x2f:  /* get DTA: ES:BX (reference: PSP:80h, AX kept) */
+        rt_r.bx = dta_off;
+        G_ES = dta_seg;
+        break;
     case 0x35:
         rt_r.bx = rd16(AL(rt_r.ax) * 4);
         G_ES = rd16(AL(rt_r.ax) * 4 + 2);

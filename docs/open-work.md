@@ -21,6 +21,8 @@ are in place.
    Acceptance: m04-registration and the later milestones are reached by the bypassed port
    with a check against the reference that holds across that mapping difference, and a
    control in which the bypass leaves a wrong answer fails.
+   On the Amiga (a1200-040) the bypassed port passes the registration desk and stops
+   on the way into a mission with `transfer into untranslated code` at CS:IP 522A:1B04.
 3. The music driver's interrupt-level paths the P5 proof defers or allows
    ([design](design.md), owner decisions 2026-11-05).
    Acceptance: the driver's far callback (ADLIB.IMS +006B6, `annotations/irq-stops.csv`)
