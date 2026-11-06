@@ -1,0 +1,2 @@
+module,offset,target,reason
+XWING.EXE,0x05915,0x058e6,"near RET to the continuation pushed at +058C1 (mov bx,0236h; push bx, 056Bh:0211h): the command-line option parser's handler at 056Bh:0258h is entered by JMP from +058CA and its calls at +0590F and +05912 are balanced, so the word at SS:SP is 0236h (056Bh:0236h = +058E6); the lowering checks the popped IP (MEASURED: every reference run's edges.csv, +05915 -> +058E6 only; DERIVED: reading)"

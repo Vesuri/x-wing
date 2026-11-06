@@ -1,0 +1,63 @@
+--- a/src/misc/xwing_trace.cpp
++++ b/src/misc/xwing_trace.cpp
+@@ -141,6 +141,21 @@
+                 (unsigned long long)joystick_run.count) < 0)
+         E_Exit("XWING: cannot write joystick.csv");
+     joystick_run.count = 0;
++}
++/* Retrace log (XWING_RETRACE=1): every read of the VGA input status port 3DAh by
++ * module code, as runs of one value within one service-event interval (the host
++ * run replays them, tests/host_run.py). */
++FILE *retrace_ports = nullptr;
++struct RetraceRun {
++    uint64_t service = 0, count = 0;
++    uint32_t value = 0;
++} retrace_run;
++void FlushRetrace() {
++    if (!retrace_ports || !retrace_run.count) return;
++    if (fprintf(retrace_ports, "%llu,%u,%llu\n", (unsigned long long)retrace_run.service,
++                (unsigned)retrace_run.value, (unsigned long long)retrace_run.count) < 0)
++        E_Exit("XWING: cannot write retrace.csv");
++    retrace_run.count = 0;
+ }
+ /* OPL log (XWING_OPL=1): every AdLib register write (index at 388h, data at
+  * 389h) with the emulated time in ms. */
+@@ -388,6 +403,9 @@
+     FlushJoystickPorts();
+     if (joystick_ports && fclose(joystick_ports)) E_Exit("XWING: cannot flush joystick.csv");
+     joystick_ports = nullptr;
++    FlushRetrace();
++    if (retrace_ports && fclose(retrace_ports)) E_Exit("XWING: cannot flush retrace.csv");
++    retrace_ports = nullptr;
+ 	if (rep_chunks) fclose(rep_chunks);
+ 	rep_chunks = nullptr;
+ 	if (events && pclose(events)) LOG_MSG("XWING: events.csv.gz pipe failed");
+@@ -495,6 +513,12 @@
+         joystick_ports = fopen(Path("joystick.csv").c_str(), "w");
+         if (!joystick_ports) E_Exit("XWING: cannot open joystick.csv");
+         fputs("service,write,width,value,repeat\n", joystick_ports);
++    }
++    if (const char *v = getenv("XWING_RETRACE")) {
++        if (strcmp(v, "1")) E_Exit("XWING: XWING_RETRACE must be 1 when set");
++        retrace_ports = fopen(Path("retrace.csv").c_str(), "w");
++        if (!retrace_ports) E_Exit("XWING: cannot open retrace.csv");
++        fputs("service,value,repeat\n", retrace_ports);
+     }
+ 	for (const auto &spec : Split(getenv("XWING_KEYS"), ',')) {
+ 		Trigger t;
+@@ -848,6 +872,15 @@
+             joystick_run.value = value;
+         }
+         ++joystick_run.count;
++    }
++    if (retrace_ports && !write && port == 0x3da && CurrentLocation().module) {
++        if (retrace_run.count && (retrace_run.service != service_events || retrace_run.value != value))
++            FlushRetrace();
++        if (!retrace_run.count) {
++            retrace_run.service = service_events;
++            retrace_run.value = value;
++        }
++        ++retrace_run.count;
+     }
+ 	if (opl && write && width == 1) {
+ 		if (port == 0x388) opl_index = (uint8_t)value;

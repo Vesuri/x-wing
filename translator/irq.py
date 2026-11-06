@@ -7,14 +7,21 @@ unsigned ranges, the interrupted registers (whole or halves), entry SP plus a
 displacement, segment classes, words loaded through a displacement (typed by it).
 States per context and instruction are partitioned by the index and segment
 registers (SIGNATURES), joined within a partition and widened after WIDEN changes.
-Segment classes: the SPAZ link paragraphs its relocated constants name (`188A`
-data, `1770` code), `G` (the word at 188A:0162, which SPAZ init stores), `S` (song
-segments, words of G's song table), `BDA` (the BIOS tick the BIOS chain runs,
-rt_bios_int08), `K` (the interrupted stack). Indexed offsets are ranges; loads of annotations/irq-bounds.csv variables
+Segment classes: the link paragraphs relocated constants name (four hex digits in
+the root's link space, `A` and four in the driver's, at DRVSEG), `G` (the driver's
+DS: the word at ADLIB.IMS 0000:0911 its install stores), `S` (song data: segments of
+the song pointers SEGMENT_WORDS and SEGMENT_LOADS name, huge pointers with their 1000h
+carries), `BDA` (the BIOS tick the BIOS chain runs, rt_bios_int08), `K` (the
+interrupted stack), `NULL` (a null far pointer's segment, never dereferenced).
+Calls the handler reaches through a pointer follow their traced targets
+(annotations/irq-hooks.csv) and proved switch tables all entries; a call on a
+deferred path stops (annotations/irq-stops.csv). Unsigned and equality branches
+after cmp r16,imm narrow the register on each edge. Indexed offsets are ranges; loads of annotations/irq-bounds.csv variables
 take its bounds, and accesses of a class with an extent row (`*`) are clamped to it
 (I3's monitor checks every handler access against the footprint).
 Proved, else Violation: no interrupted register, flag or stack word is read but
-to save it (a push or its copy), every exit (IRET, or the chain to the BIOS
+to save it (a push or its copy; STACK_COPIES names the stores of unwritten handler
+words the owner allowed), every exit (IRET, or the chain to the BIOS
 handler with the frame in place) has every register, SP and the frame as on entry,
 no DF read, every port in PORTS, no software interrupt, recursion or indirect
 transfer but the BIOS chain. A possible divide fault is listed (runtime row).
@@ -33,7 +40,7 @@ reach their traced targets (indirect.csv); an untraced call keeps DS (MS C; I3's
 monitor checks); INT 21h AH=4Ch ends a path. annotations/irq-ds.csv declares
 entries that return the caller's DS where the analysis cannot see it. Constant-
 address word stores give memory slots (resolved by iteration; G is the slot
-188A:0162 and must resolve). Each access of a reached instruction is masked (IF = 0
+ADLIB.IMS 0000:0911 and must resolve). Each access of a reached instruction is masked (IF = 0
 or STI shadow in every context: no delivery before it), disjoint (known address
 outside the footprint), sync (may meet it: a read of a handler-written byte, a
 write of a handler-accessed byte, a handler port; an indexed access whose
@@ -57,14 +64,16 @@ from dataclasses import dataclass, field
 from . import image
 from .decode import Far, Imm, Mem, Reg
 from .ir import FLAG_KINDS, T, mask
-from .lower import CC_READS, LOADSEG
+from .lower import CC_READS, DRVSEG, LOADSEG
 from .sem import lift
 
 M = image.M
-PORTS = {0x388: "OPL index (rt_out8)", 0x389: "OPL data (rt_out8)", 0x20: "PIC EOI"}
+DRIVER = "ADLIB.IMS"                 # translator/cfg.py DRIVER: relocated at DRVSEG
+PORTS = {0x388: "OPL index (rt_out8)", 0x389: "OPL data (rt_out8)", 0x20: "PIC EOI",
+         0x3C8: "DAC write index (rt_dac_out)", 0x3C9: "DAC data (rt_dac_out)"}
 BIOS_TICK = ("BDA", 0x6C, 0x70)      # rt_bios_int08: tick dword, midnight byte (0040:006C)
 BIOS_ENTRY = 0xFFEA5                 # indirect.csv target of the chain (F000:FEA5)
-GAME_DS_SLOT = (0x188A, 0x162)       # SPAZ init +026E stores the caller's DS here
+GAME_DS_SLOT = (DRIVER, 0x0000, 0x911)  # ADLIB.IMS install +0915/+09C5: mov cs:[0911h],ds
 SIGNATURES = 64                      # signatures per context and instruction before joining
 WIDEN = 6                            # joins that change a joined state before widening
 REGS = ("ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "cs", "ds", "es", "ss", "flagsx")
@@ -72,11 +81,33 @@ HALF = {"al": ("ax", 0), "ah": ("ax", 1), "bl": ("bx", 0), "bh": ("bx", 1),
         "cl": ("cx", 0), "ch": ("cx", 1), "dl": ("dx", 0), "dh": ("dx", 1)}
 FLAGS = ("CF", "PF", "AF", "ZF", "SF", "TF", "IF", "DF", "OF")
 X = ("x",)
+NULL = "NULL"     # segment 0 of a null far pointer joined with a segment: never dereferenced
 TAINT = ("e", "h", "p", "x")
 
 
 class Violation(Exception):
     pass
+
+
+def hooks() -> dict[tuple[str, int], list[tuple[str, int]]]:
+    """irq-hooks.csv: indirect calls the handler reaches -> their traced targets
+    (indirect.csv). The generated call stops on any other target (emit.py)."""
+    traced = {(r["module"], int(r["offset"], 16)): [
+        (t.split("+")[0], int(t.split("+")[1], 16)) for t in r["traced_targets"].split() if t != "(isr)"]
+        for r in image.rows("indirect.csv")}
+    out = {}
+    for r in image.rows("irq-hooks.csv"):
+        n = (r["module"], int(r["offset"], 16))
+        if not traced.get(n):
+            raise Violation(f"irq-hooks.csv: {site(n)} has no traced targets in indirect.csv")
+        out[n] = traced[n]
+    return out
+
+
+def stops() -> set[tuple[str, int]]:
+    """irq-stops.csv: calls the handler may reach whose path is deferred; the generated
+    call stops (emit.py) and the proof ends the path there."""
+    return {(r["module"], int(r["offset"], 16)) for r in image.rows("irq-stops.csv")}
 
 
 def bounds() -> dict[tuple[str, int, int], tuple[int, int]]:
@@ -106,11 +137,62 @@ def declared_sync() -> dict[tuple[str, int], list[tuple[str, int, int, str]]]:
 # variable is the displacement of the operand that addresses it (indexed: the
 # array). Every handler store through one stores a word of the same class.
 SEGMENT_WORDS = {
-    (f"{GAME_DS_SLOT[0]:04X}", GAME_DS_SLOT[1]): "G",   # SPAZ init +026E
-    ("G", 0x613E): "S",         # song table far pointers (FLIGHT +0389B, +038D7)
-    ("188A", 0x19C): "S",       # voice segments, copied from the song table (+0B18, +0B99)
+    ("A0000", GAME_DS_SLOT[2]): "G",   # the driver's DS (ADLIB.IMS install +0915/+09C5)
+    ("G", 0x6E4): "S",                 # the song table far pointer's segment (ADLIB.IMS +007E4 les)
+    ("S", 0x0002): "S",                # the segments of that table's far pointers (+007EB)
+    ("G", 0x0E38): "S",                # the current event's huge song pointer (+025EC, +02658)
+    ("G", 0x6D8): "3A07",              # the API caller's DS (+00022, +001F3), loaded around the
+                                       # far callback (+006AA) (MEASURED: 4229h in flight, DGROUP)
+    ("0125", 0x0015): "3A07",          # the root timer callback's DGROUP (XWING.EXE +01356)
+                                       # (MEASURED: 4229h at m01 and in flight)
 }
 
+
+def base(mod: str) -> int:
+    """The run-time segment a module's link paragraphs add (emit.loadseg)."""
+    return DRVSEG if mod == DRIVER else LOADSEG
+
+
+def para_name(mod: str, para: int) -> str:
+    """A link paragraph's class: four hex digits in the root's link space, `A`
+    and four in the driver's (lin_class adds base())."""
+    return f"{'A' if mod == DRIVER else ''}{para:04X}"
+
+# Class aliases for the segment-word table: G is the driver's DS, its
+# load paragraph 04D0 (ADLIB +00BEF mov ax,04D0h; MEASURED: G = DRVSEG + 04D0h)
+CLASS_ALIAS = {"A04D0": "G"}
+
+# Segment loads: (module, offset) -> class of the segment word the instruction loads,
+# where the word's displacement does not type it (an indexed record)
+SEGMENT_LOADS = {
+    (DRIVER, 0x01DCD): "S",  # the segment of a track record's huge song pointer (rec+2):
+    (DRIVER, 0x025E6): "S",  # loaded into ES and dereferenced as song bytes there or after
+    (DRIVER, 0x02D7E): "S",  # the 1000h carry (DERIVED: the code); G words at displacement 2
+    (DRIVER, 0x031AE): "S",  # of other records hold counts and pointers, hence per site
+    (DRIVER, 0x02C65): "3A07",  # a queued request's DS (+02C4A record at EC0h+16k, +0C), the
+                               # tick's +001EA stores it to G:06D8 (INFERRED: the API caller's
+                               # DS, DGROUP as G:06D8 measures)
+}
+
+# Dead reads: (module, offset) -> the value given to a read of a word the handler
+# never wrote whose value reaches no use (the analysis does not refine on branches)
+DEAD_READS = {
+    (DRIVER, 0x119A): ("c", 0),   # mov di,[bp-2] before any write: DI is returned only
+                                  # when exactly one record matched (+011B5 je, DX = 0),
+                                  # and that match wrote DI (+011AB) (DERIVED: the code)
+}
+
+# Stack copies: handler stores of a word of its own stack area it never wrote on the
+# path (an unwritten handler-local, X). On DOS the word is what the interrupted program
+# left below its SP; in the port, the private stack's. Allowed at these sites only and
+# listed in the footprint; the host lockstep's RAM compare fails if a copied word
+# differs (owner decision 2026-11-05, docs/design.md; open work)
+STACK_COPIES = {
+    (DRIVER, 0x02B4D): "request 0Fh: the tick (+02C79) pushes two locals only the other "
+                       "requests write (+02C71, +02C76); the voice table's entry 0Fh is the "
+                       "enqueue (+02AF4, MEASURED: image, m01, flight), which copies them",
+    (DRIVER, 0x02B6D): "the same request record's next word",
+}
 
 # -- abstract values -----------------------------------------------------------
 def rng(v, w):
@@ -172,6 +254,8 @@ def join(a, b):
         return a
     if a[0] == "s" and b[0] == "s":
         return ("s", a[1] | b[1])
+    if {a[0], b[0]} == {"s", "c"} and (a if a[0] == "c" else b)[1] == 0:
+        return ("s", (a if a[0] == "s" else b)[1] | {NULL})    # a null far pointer's segment
     if a[0] in ("e", "p") or b[0] in ("e", "p"):
         return combine(join8(split(a, 0), split(b, 0)), join8(split(a, 1), split(b, 1)))
     if a[0] in TAINT or b[0] in TAINT or a[0] in ("sp", "s") or b[0] in ("sp", "s"):
@@ -193,6 +277,7 @@ class Footprint:
     exits: dict = field(default_factory=lambda: defaultdict(set))
     runtime: dict = field(default_factory=lambda: defaultdict(set))
     clamped: dict = field(default_factory=lambda: defaultdict(set))   # class -> sites (extents)
+    huge: dict = field(default_factory=lambda: defaultdict(set))      # class -> segment arithmetic sites
     depth: int = 0
     nodes: set = field(default_factory=set)
     errors: list = field(default_factory=list)
@@ -222,11 +307,18 @@ def thaw(st):
 
 def join_states(a, b):
     regs = tuple(join(x, y) for x, y in zip(a[0], b[0]))
-    flags = tuple(None if x is None or y is None else x if x == y else ("r", 0, 1)
+    flags = tuple(None if x is None or y is None else x if x == y
+                  else X if x[0] in TAINT or y[0] in TAINT else ("r", 0, 1)
                   for x, y in zip(a[1], b[1]))
-    sb = dict(b[2])
-    slots = tuple((d, (wa, join(va, sb[d][1]))) for d, (wa, va) in a[2]
-                  if d in sb and sb[d][0] == wa)
+    sa, sb = dict(a[2]), dict(b[2])
+    # a word slot one side wrote a byte of: both sides as bytes
+    for _ in range(2):
+        for p, q in ((sa, sb), (sb, sa)):
+            for d, (w, v) in list(p.items()):
+                if w == 16 and any(k in q and q[k][0] == 8 for k in (d, d + 1)):
+                    p[d], p[d + 1] = (8, split(v, 0)), (8, split(v, 1))
+    slots = tuple((d, (w, (join if w == 16 else join8)(v, sb[d][1])))
+                  for d, (w, v) in sorted(sa.items()) if d in sb and sb[d][0] == w)
     return regs, flags, slots
 
 
@@ -248,6 +340,7 @@ def widen_state(old, new):
 class Handler:
     def __init__(self, prog, entry=None):
         self.prog = prog
+        self._preds = None
         rows = [r for r in image.rows("entries.csv") if r["reason"].startswith("INT 08h handler")]
         if entry is None:
             if len(rows) != 1:
@@ -258,24 +351,26 @@ class Handler:
         u = prog.units[self.mod]
         self.code_para = u.cs[entry[1]]
         self.bounds = bounds()
+        self.stops = stops()
         self.extents = extents()
         self.fp = Footprint()
         self.chains = {(r["module"], int(r["offset"], 16)) for r in image.rows("indirect.csv")
                        if f"-+0x{BIOS_ENTRY:x} (isr)" in r["traced_targets"]}
+        self.hooks = hooks()
 
     def err(self, n, msg):
         self.fp.errors.append(f"{site(n)}: {msg}")
 
     def para_class(self, n, para):
-        if para in (self.code_para,) or self.prog.units[self.mod].module.link_lo <= para * 16 < \
-                self.prog.units[self.mod].module.link_hi:
-            return ("s", frozenset({f"{para:04X}"}))
-        self.err(n, f"relocated segment {para:04X} outside {self.mod}")
+        m = self.prog.units[n[0]].module
+        if para == self.prog.units[n[0]].cs[n[1]] or para * 16 < len(m.data):  # its load image
+            return ("s", frozenset({para_name(n[0], para)}))
+        self.err(n, f"relocated segment {para:04X} outside {n[0]}")
         return X
 
     def run(self) -> Footprint:
         regs = {r: ("e", r) for r in REGS}
-        regs["cs"] = ("s", frozenset({f"{self.code_para:04X}"}))
+        regs["cs"] = ("s", frozenset({para_name(self.mod, self.code_para)}))
         regs["sp"] = ("sp", 0)
         flags = {"IF": ("c", 0), "TF": ("c", 0)}
         slots = {0: (16, ("e", "ip")), 2: (16, ("e", "cs")), 4: (16, ("e", "fl"))}
@@ -336,6 +431,64 @@ class Handler:
             return self.iret(n, p)
         if i.op == "jmpf" and isinstance(i.operands[0], Mem):
             return self.chain(n, i, p)
+        out = self.step_ops(ctx, n, i, p, u, fall)
+        return self.narrow(n, i, fall, out)
+
+    # the only predecessor of each node (prog.succ), for branch narrowing
+    def single_pred(self, n):
+        if self._preds is None:
+            preds = defaultdict(set)
+            for a, ss in self.prog.succ.items():
+                for b in ss:
+                    if isinstance(b, tuple):
+                        preds[b].add(a)
+            self._preds = {b: next(iter(a)) for b, a in preds.items() if len(a) == 1}
+        return self._preds.get(n)
+
+    def narrow(self, n, i, fall, out):
+        """An unsigned or equality jcc whose only predecessor is cmp r16,imm (its
+        flags): the register's range on each edge (a bounded index: cmp bx,4; jae;
+        ... [bx+d]; a request code: cmp di,0Fh; jne)."""
+        if i.op != "jcc" or i.cc not in ("b", "ae", "a", "be", "e", "ne") or not out:
+            return out
+        prev = self.single_pred(n)
+        c = self.prog.node_insn(prev) if prev and prev[0] == n[0] else None
+        if c is None or c.op != "cmp" or prev[1] + c.size != n[1] \
+                or not isinstance(c.operands[0], Reg) or c.operands[0].width != 16 \
+                or c.operands[0].name not in REGS or not isinstance(c.operands[1], Imm):
+            return out
+        r, k = c.operands[0].name, c.operands[1].value & 0xFFFF
+        full = (0, 0xFFFF)      # r != k: a range only where k is an end
+        taken = {"b": (0, k - 1), "ae": (k, 0xFFFF), "a": (k + 1, 0xFFFF), "be": (0, k),
+                 "e": (k, k), "ne": full}[i.cc]
+        other = {"b": (k, 0xFFFF), "ae": (0, k - 1), "a": (0, k), "be": (k + 1, 0xFFFF),
+                 "e": full, "ne": (k, k)}[i.cc]
+        res = []
+        for ctx, nn, st in out:
+            lo, hi = other if nn == fall else taken
+            q = thaw(st)
+            v = q.regs[r]
+            if v[0] in ("c", "r", "l"):
+                x = rng(v, 16)
+                if (lo, hi) == full and i.cc in ("e", "ne"):
+                    if x[0] == x[1] == k:
+                        continue        # r == k cannot take the != edge
+                    if x[0] == k:
+                        x = (k + 1, x[1])
+                    elif x[1] == k:
+                        x = (x[0], k - 1)
+                lo, hi = max(lo, x[0]), min(hi, x[1])
+                if lo > hi:
+                    continue        # the edge cannot be taken with this value
+                if v[0] != "l" or (lo, hi) != (0, 0xFFFF):
+                    q.regs[r] = mk(lo, hi, 16)
+                st = q.freeze()
+            res.append((ctx, nn, st))
+        return res
+
+    def step_ops(self, ctx, n, i, p, u, fall):
+        prog = self.prog
+        mod, off = n
         out = []
         for q, ex in self.ops(n, i, p, u):
             kind = ex[0]
@@ -347,26 +500,39 @@ class Handler:
                     ip = t
                 elif t[0] == "c":
                     ip = t[1]
+                elif prog.indirect.get(n, ([], []))[0]:
+                    # a proved switch table: every entry (the generated jump stops
+                    # outside the table)
+                    out.extend((ctx, tgt, q.freeze()) for tgt in prog.indirect[n][0])
+                    continue
                 else:
                     self.err(n, "indirect jump")
                     continue
-                out.append((ctx, (mod, u.off_of(u.cs[off], ip)), q.freeze()))
+                out.append((ctx, (mod, u.off_of(u.cs[off], ip, off)), q.freeze()))
             elif kind in ("call", "callf"):
-                if kind == "call":
+                if n in self.stops:
+                    self.fp.exits["stop (irq-stops.csv)"].add(site(n))
+                    continue
+                if n in self.hooks:
+                    targets = self.hooks[n]    # irq-hooks.csv: other targets stop
+                elif kind == "call":
                     t = ex[1]
                     if not isinstance(t, int):
                         self.err(n, "indirect call")
                         continue
-                    target = (mod, u.off_of(u.cs[off], t))
+                    targets = [(mod, u.off_of(u.cs[off], t, off))]
                 elif off in u.far_targets:
-                    target = u.far_targets[off]
+                    targets = [u.far_targets[off]]
                 else:
                     self.err(n, "far call outside the scope")
                     continue
                 if fall in ctx:
                     self.err(n, "recursion")
                     continue
-                out.append((ctx + (fall,), target, q.freeze()))
+                for target in targets:
+                    if kind == "callf":     # the callee's CS (its retf pops the pushed one)
+                        q.regs["cs"] = ("s", frozenset({para_name(target[0], prog.units[target[0]].cs[target[1]])}))
+                    out.append((ctx + (fall,), target, q.freeze()))
             elif kind == "jumpf" and off in u.far_targets:
                 out.append((ctx, u.far_targets[off], q.freeze()))
             elif kind == "fault":
@@ -380,6 +546,8 @@ class Handler:
                 if ip != ("c", prog.units[want[0]].ip_of(want[1])):
                     self.err(n, f"return to {ip}, not {site(want)}")
                     continue
+                if kind == "retf":          # the caller's CS (a hook's callee had its own)
+                    q.regs["cs"] = ("s", frozenset({para_name(want[0], prog.units[want[0]].cs[want[1]])}))
                 out.append((ctx[:-1], want, q.freeze()))
             else:
                 self.err(n, f"{kind} in the handler")
@@ -387,7 +555,7 @@ class Handler:
 
     def transparent(self, n, p, sp):
         for r in REGS:
-            want = ("sp", sp) if r == "sp" else ("s", frozenset({f"{self.code_para:04X}"})) if r == "cs" \
+            want = ("sp", sp) if r == "sp" else ("s", frozenset({para_name(self.mod, self.code_para)})) if r == "cs" \
                 else ("e", r)
             if p.regs[r] != want:
                 self.err(n, f"{r} is {p.regs[r]} at the exit, not as interrupted")
@@ -433,22 +601,48 @@ class Handler:
             d = off[1]
             if kind == "w":
                 self.fp.depth = max(self.fp.depth, -d)
-                for k in range(d - 1, d + size):
-                    if k in p.slots and k != d and k + p.slots[k][0] // 8 > d:
-                        del p.slots[k]
+                # overlapped word slots keep the bytes this write does not cover
                 for k in list(p.slots):
-                    if d < k < d + size:
+                    kw, kv = p.slots[k]
+                    if k < d + size and d < k + kw // 8:
                         del p.slots[k]
+                        if kw == 16:
+                            for j in (0, 1):
+                                if not d <= k + j < d + size:
+                                    p.slots[k + j] = (8, split(kv, j))
                 p.slots[d] = (w, val)
                 return None
+            if n in DEAD_READS:
+                return DEAD_READS[n]    # whatever the slot holds (a stale frame word)
             got = p.slots.get(d)
-            if got is None or got[0] != w:
-                self.err(n, f"reads the stack at SP{d:+d} (interrupted or unwritten)")
+            if got is not None and got[0] == w:
+                return got[1]
+            # a byte of a pushed word (the player's byte arguments), a word of two bytes
+            if w == 8 and got is not None and got[0] == 16:
+                return split(got[1], 0)
+            below = p.slots.get(d - 1)
+            if w == 8 and got is None and below is not None and below[0] == 16:
+                return split(below[1], 1)
+            above = p.slots.get(d + 1)
+            if w == 16 and got is not None and got[0] == 8 and above is not None and above[0] == 8:
+                return combine(got[1], above[1])
+            if d < 0:
+                # the handler's own area, unwritten on this path: what the interrupted
+                # program left there (DOS) or the private stack (the port), so an
+                # interrupted value; copying it is allowed, any use fails (TAINT)
                 return X
-            return got[1]
+            self.err(n, f"reads the stack at SP{d:+d} (interrupted or unwritten)")
+            return X
         if seg[0] != "s":
             self.err(n, f"segment {seg}")
             return X
+        if seg[1] - {NULL} != seg[1]:
+            # the null pointer's paths test it first (or dx,ax; jz); a delivered
+            # access through segment 0 is outside the footprint (I3's monitor)
+            seg = ("s", seg[1] - {NULL})
+            if not seg[1]:
+                self.err(n, "access through a null segment")
+                return X
         r = rng(off, 16)
         if r is None:
             self.err(n, f"offset {off} from interrupted state")
@@ -464,24 +658,37 @@ class Handler:
                     self.fp.mem[(cls, a, b, kind)].add(site(n))
             var = self.disp if self.disp is not None else lo
             if kind == "w":
-                if val is not None and val[0] in TAINT + ("sp",):
+                if val == X and n in STACK_COPIES:
+                    self.fp.runtime[f"stack copy into {cls} (irq.py STACK_COPIES)"].add(site(n))
+                elif val is not None and val[0] in TAINT + ("sp",):
                     self.err(n, f"stores {val} (interrupted state) to {cls}")
-                held = SEGMENT_WORDS.get((cls, var))
+                held = SEGMENT_WORDS.get((CLASS_ALIAS.get(cls, cls), var))
                 if held and (w != 16 or self.seg_value(n, val) != ("s", frozenset({held}))):
                     self.err(n, f"stores {val} into a segment word of class {held}")
                 continue
             got = ("l", cls, var)
             if (cls, var, w) in self.bounds:
                 got = mk(*self.bounds[(cls, var, w)], w)
+            if n in SEGMENT_LOADS and w == 16:
+                got = ("s", frozenset({SEGMENT_LOADS[n]}))
             out = got if out is None else join(out, got)
         return out
+
+    @staticmethod
+    def seg_class(v):
+        """The segment classes v holds (a segment, or a load of a segment word), else None."""
+        if v[0] == "s":
+            return v[1]
+        if v[0] == "l" and (CLASS_ALIAS.get(v[1], v[1]), v[2]) in SEGMENT_WORDS:
+            return frozenset({SEGMENT_WORDS[(CLASS_ALIAS.get(v[1], v[1]), v[2])]})
+        return None
 
     def seg_value(self, n, v):
         """A value written to a segment register."""
         if v[0] in ("s", "e"):
             return v
-        if v[0] == "l" and (v[1], v[2]) in SEGMENT_WORDS:
-            return ("s", frozenset({SEGMENT_WORDS[(v[1], v[2])]}))
+        if self.seg_class(v) is not None:
+            return ("s", self.seg_class(v))
         self.err(n, f"segment register from {v}")
         return X
 
@@ -565,6 +772,10 @@ class Handler:
             parts = [split(q.regs[reg], 0), split(q.regs[reg], 1)]
             parts[k] = v8
             q.regs[reg] = combine(*parts)
+        elif r in ("ds", "es") and v[0] in TAINT:
+            # a restore (push es ... pop es) of what differs by path: allowed; an access
+            # through it fails (access) and so does an exit with it (transparent)
+            q.regs[r] = v
         elif r in ("ds", "es", "ss"):
             q.regs[r] = self.seg_value(n, v)
         else:
@@ -622,6 +833,17 @@ class Handler:
                 return ("sp", vals[0][1] + d)
             self.err(n, f"{op} on SP")
             return X
+        if op == "add" and w == 16 and len(vals) == 2:
+            # huge pointers (MS C __huge): a segment, or a word loaded from memory,
+            # plus a handler-defined carry (times 1000h) keeps its type: a segment of
+            # its class, or the word (typed by SEGMENT_WORDS where a segment register
+            # takes it); the object's extent is checked at run time (I3)
+            typed = [v for v in vals if v[0] in ("s", "l")]
+            other = [v for v in vals if v[0] in ("c", "r")]
+            if len(typed) == 1 and len(other) == 1:
+                v = typed[0]
+                self.fp.huge[v[1] if v[0] == "l" else "/".join(sorted(v[1]))].add(site(n))
+                return v
         return arith(op, w, vals, [x.w if isinstance(x, T) else w for x in a])
 
     def cond(self, n, q, cc):
@@ -633,6 +855,9 @@ class Handler:
                 self.err(n, f"reads {name} before the handler sets it")
                 return X
             f[name] = v
+        if any(v[0] in TAINT for v in f.values()):
+            self.err(n, f"{cc} reads flags of interrupted state")
+            return X
         if any(v[0] != "c" for v in f.values()):
             return ("r", 0, 1)
         g = {k: v[1] for k, v in f.items()}
@@ -700,7 +925,12 @@ class Handler:
         if self.zero:
             vals = [("c", 0)] * 3
         elif any(v[0] in TAINT + ("sp",) for v in vals):
-            self.err(n, f"{kind} flags from interrupted state")
+            # flags of interrupted state or SP (add sp,imm after a call): interrupted
+            # values themselves; reading one is the violation (cond, flag)
+            d, undef = FLAG_KINDS[kind]
+            for f in set(d) | set(undef):
+                q.flags[f] = X
+            return
         d, undef = FLAG_KINDS[kind]
         unknown = ("r", 0, 1)
         for f in set(d) | set(undef):
@@ -902,7 +1132,7 @@ class Main:
         u = self.prog.units[n[0]]
         if m.base or m.index:
             return self.smc.get(n, "*")
-        off = u.off_of(u.cs[n[1]], m.disp)
+        off = u.off_of(u.cs[n[1]], m.disp, n[1])
         return (n[0], off, off + 1)
 
     def cs_write(self, n):
@@ -921,8 +1151,9 @@ class Main:
         return tuple(x for x in cs_mem if not any(
             m == x[0][0] and lo <= x[0][2] and x[0][1] <= hi for m, lo, hi in keys))
 
-    def mem_lin(self, st: MState, m: Mem):
-        seg = st.segs[SEGS.index(m.seg)] if m.seg in SEGS else None
+    def mem_lin(self, st: MState, m: Mem, n=None):
+        seg = st.segs[SEGS.index(m.seg)] if m.seg in SEGS else \
+            base(n[0]) + self.prog.units[n[0]].cs[n[1]] if m.seg == "cs" and n is not None else None
         if not isinstance(seg, int) or m.base or m.index:
             return None
         return seg * 16 + m.disp
@@ -935,19 +1166,19 @@ class Main:
             if o.name in SEGS:
                 return st.segs[SEGS.index(o.name)]
             if o.name == "cs":
-                return LOADSEG + self.prog.units[n[0]].cs[n[1]]
+                return base(n[0]) + self.prog.units[n[0]].cs[n[1]]
             return None
         if isinstance(o, Imm):
             v = o.value
             if o.width == 16 and n[1] + i.size - 2 in self.fixups[n[0]]:
-                v = (v + LOADSEG) & 0xFFFF
+                v = (v + base(n[0])) & 0xFFFF
             return v
         if isinstance(o, Mem):
             if o.seg == "cs" and not (o.base or o.index) and o.width == 16:
                 saved = dict(st.cs_mem)
                 if self.cs_key(n, o) in saved:
                     return saved[self.cs_key(n, o)]
-            lin = self.mem_lin(st, o)
+            lin = self.mem_lin(st, o, n)
             return self.slots.get(lin) if lin is not None and o.width == 16 else None
         return None
 
@@ -1014,7 +1245,7 @@ class Main:
             else:
                 setr(dst.name, self.value(n, i, st, src))
         elif op == "mov" and isinstance(dst, Mem):
-            lin = self.mem_lin(st, dst)
+            lin = self.mem_lin(st, dst, n)
             if record and lin is not None and dst.width == 16:
                 v = self.value(n, i, st, ops[1])
                 v = v if isinstance(v, int) else None
@@ -1034,7 +1265,7 @@ class Main:
             iflag = None
         elif op in ("les", "lds"):
             setr(dst.name, None)
-            lin = self.mem_lin(st, ops[1])
+            lin = self.mem_lin(st, ops[1], n)
             setr("es" if op == "les" else "ds", self.slots.get(lin + 2) if lin is not None else None)
         elif op == "xchg" and all(isinstance(o, Reg) and o.name in GPR for o in ops):
             a, b = (GPR.index(o.name) for o in ops)
@@ -1082,7 +1313,7 @@ class Main:
     def call_entry(self, n, new: MState) -> MState:
         """The callee's entry state (return address pushed: depth 0 below it)."""
         i = self.prog.node_insn(n)
-        push = (LOADSEG + self.prog.units[n[0]].cs[n[1]], None) if i.op == "callf" else (None,)
+        push = (base(n[0]) + self.prog.units[n[0]].cs[n[1]], None) if i.op == "callf" else (None,)
         return MState(new.regs, new.segs, 0, (new.tail + push)[-STACK_CAP:], new.iflag, False,
                       new.cs_mem)
 
@@ -1246,12 +1477,13 @@ class Proof:
         """Footprint class -> runtime paragraph (None: located at run time)."""
         out = {"BDA": 0x40}
         for (cls, *_rest) in self.fp.mem:
-            if re.fullmatch(r"[0-9A-F]{4}", cls):
-                out[cls] = int(cls, 16) + LOADSEG
-        slot = (GAME_DS_SLOT[0] + LOADSEG) * 16 + GAME_DS_SLOT[1]
+            if re.fullmatch(r"A?[0-9A-F]{4}", cls):
+                out[cls] = int(cls[-4:], 16) + (DRVSEG if cls[0] == "A" else LOADSEG)
+        mod, para, disp = GAME_DS_SLOT
+        slot = (base(mod) + para) * 16 + disp
         g = self.main.slots.get(slot)
         if g is None:
-            self.errors.append(f"G: the word at {GAME_DS_SLOT[0]:04X}:{GAME_DS_SLOT[1]:04X} has no single stored value")
+            self.errors.append(f"G: the word at {mod} {para:04X}:{disp:04X} has no single stored value")
         out["G"] = g
         return out
 
@@ -1280,6 +1512,15 @@ class Proof:
                     continue
                 acc = accesses(i)
                 port = i.op in ("in", "out")
+                if n in declared and (not states or not acc and not port):
+                    # monitored (unreached, or a string instruction's implicit access):
+                    # a declared row makes it sync for its span
+                    for cls, lo, hi, kind in declared.pop(n):
+                        para = paras.get(cls)
+                        w_hit = para is not None and self.meets(para * 16 + lo, para * 16 + hi, written)
+                        self.sync.add((n, cls, lo, hi, kind, bool(w_hit)))
+                    self.counts["sync (declared, monitored)"] += 1
+                    continue
                 if not acc and not port:
                     continue
                 if not states:
@@ -1319,7 +1560,7 @@ class Proof:
                 self.sync.add((n, "port", port, port, "w" if i.op == "out" else "r", False))
                 return "sync"
         for m, kind in acc:
-            seg = st.segs[SEGS.index(m.seg)] if m.seg in SEGS else LOADSEG + self.prog.units[n[0]].cs[n[1]]
+            seg = st.segs[SEGS.index(m.seg)] if m.seg in SEGS else base(n[0]) + self.prog.units[n[0]].cs[n[1]]
             if seg is None:
                 out = "monitored"
                 continue
@@ -1370,7 +1611,7 @@ class Proof:
         """Main-code writes of a bounded G variable (irq-bounds.csv): an immediate within
         the bound, or the restore of a frame copy taken in the same module
         (mov r,[v]; mov [bp+d],r ... mov r,[bp+d]; mov [v],r). Other classes are
-        SPAZ-private; I3 monitors every handler access."""
+        driver-private; I3 monitors every handler access."""
         from .lower import mem_dests
         g = self.paras.get("G")
         rows = {var: (w, lo, hi) for (cls, var, w), (lo, hi) in bounds().items() if cls == "G"}
@@ -1522,6 +1763,8 @@ class Proof:
         for cls, sites in sorted(fp.clamped.items()):
             lo, hi = self.handler.extents[cls]
             out.append(f"extent,{cls},0x{lo:04x},0x{hi:04x},rw,{' '.join(sorted(sites))}")
+        for cls, sites in sorted(fp.huge.items()):
+            out.append(f"huge,{cls},,,,{' '.join(sorted(sites))}")
         for n, cls, lo, hi, kind, written in sorted(self.sync):
             out.append(f"sync,{cls},0x{lo:04x},0x{hi:04x},{kind},{site(n)}")
         return out

@@ -12,3 +12,4 @@ dosbox-x-xwing-joystick.patch
 dosbox-x-xwing-irq0-backlog.patch
 dosbox-x-xwing-game.patch
 dosbox-x-xwing-script.patch
+dosbox-x-xwing-retrace.patch

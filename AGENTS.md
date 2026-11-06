@@ -9,9 +9,10 @@ fresh System 7.5.5 volume and launched on an emulated 68040 Macintosh. The DOS r
 runs are traced with Secret Weapons of the Luftwaffe's tracer and reach pinned milestones.
 The static and live map of the DOS program is in place. SWOTL's translator is copied;
 its decoder, IR and interpreter cover X-Wing's x86 code and pass gate 3, and its 68020
-backend translates every in-scope module and passes gate 4. No runtime runs the
-generated code yet. Read
-`docs/open-work.md` first.
+backend translates every in-scope module and passes gate 4. SWOTL's runtime and Amiga
+platform are copied; the generated code draws the LucasArts logo on the 68030 model,
+where a diagnostic replay matches the reference at m1, and runs in host lockstep to m1
+(gate 5). Read `docs/open-work.md` first.
 
 ## Rules
 

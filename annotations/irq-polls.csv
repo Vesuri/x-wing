@@ -1,0 +1,3 @@
+module,offset,reason
+ADLIB.IMS,0x0094d,"the calibration's wait for four ticks: its INT 08h handler (+00978) reads the interrupted CX and DX, so production takes those ticks here, with the guest registers live, not at the CIA interrupt (MEASURED: Amiga run, divide error at +00994 with a stale DX)"
+ADLIB.IMS,0x00954,"the calibration's counting loop: a tick there runs the same handler, which divides by the loop's DX:AX (MEASURED: as above)"

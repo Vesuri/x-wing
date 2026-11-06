@@ -768,6 +768,27 @@ SABOTAGE = [
 ]
 
 
+# Program plants of features X-Wing does not emit until P8 fills their annotations
+# (outline.csv, bp-regions.csv): no test can catch them while the generated program
+# stays byte-identical, which each run checks; a plant that changes it must be caught.
+INERT = {
+    "BP mirror store dropped across an exit": "no guarded copies (annotations/bp-regions.csv empty)",
+    "outlined jcc keeps its condition": "no outlined ranges (annotations/outline.csv empty)",
+    "outlined range falls through": "no outlined ranges (annotations/outline.csv empty)",
+    "copy exit enters no leader": "no guarded copies (annotations/bp-regions.csv empty)",
+}
+
+
+def program_digest() -> str:
+    """SHA-256 of the generated program's module texts."""
+    import hashlib
+    p = E.Program()
+    h = hashlib.sha256()
+    for mod in sorted(p.units):
+        h.update("\n".join(p.module_text(mod)[0]).encode())
+    return h.hexdigest()
+
+
 class CaughtBatch(Exception):
     """Only a completed differential batch with mismatches may stop a plant."""
 
@@ -788,8 +809,9 @@ class PlantHarness(D.Harness):
             raise CaughtBatch(self)
 
 
-def plant(k: int) -> tuple[int, int, int, int]:
-    """Plant SABOTAGE[k] and run its corpus: (mismatches, cases, x86 sides replayed, of)."""
+def plant(k: int, clean: str | None = None) -> tuple[int, int, int, int]:
+    """Plant SABOTAGE[k] and run its corpus: (mismatches, cases, x86 sides replayed, of);
+    mismatches -1: an INERT plant that leaves the program (digest `clean`) unchanged."""
     name, fn, corpus = SABOTAGE[k]
     D.Harness.keep_failing = False      # planted mismatches: no batch is kept
     if isinstance(fn, tuple):   # flag helpers (translator/support.py)
@@ -865,6 +887,8 @@ def plant(k: int) -> tuple[int, int, int, int]:
             total, failures = B.cross_entry_cases()
             return len(failures), total, 0, 0
         if corpus in ("program", "walk"):
+            if SABOTAGE[k][0] in INERT and clean and program_digest() == clean:
+                return -1, 0, 0, 0
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 B.main(["--blocks", "1500", "--states", "1"], on_batch=completed_program_batch)
@@ -921,11 +945,15 @@ def slow_first(k: int) -> tuple:
 def main() -> int:
     missed = []
     replayed = cases = 0
+    clean = program_digest()
     with ProcessPoolExecutor(min(len(SABOTAGE), os.cpu_count() or 1)) as pool:
-        futures = {k: pool.submit(plant, k) for k in sorted(range(len(SABOTAGE)), key=slow_first)}
+        futures = {k: pool.submit(plant, k, clean) for k in sorted(range(len(SABOTAGE)), key=slow_first)}
         for k, (name, _fn, corpus) in enumerate(SABOTAGE):
             bad, total, r, n = futures[k].result()
             replayed, cases = replayed + r, cases + n
+            if bad < 0:
+                print(f"{name:36} {corpus:15} inert: program unchanged, {INERT[name]}", flush=True)
+                continue
             print(f"{name:36} {corpus:15} mismatches {bad} of {total}", flush=True)
             if not bad:
                 missed.append(name)

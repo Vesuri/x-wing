@@ -7,7 +7,7 @@ manifest/references.tsv) and adapted to X-Wing's overlay manager
 Seeds (all from annotations/ and the images, no traces): MZ entry, the manager's thunks,
 `entries.csv`, `runtime.csv`, the switch and traced targets of `indirect.csv`. Follows
 fall-through and direct near/far transfers; a call listed in `noreturn.csv` has no
-fall-through. Code is split into segment ranges: the root
+fall-through; a near RET listed in `ret-jumps.csv` continues at its target. Code is split into segment ranges: the root
 (without the overlay area), each overlay segment (its code bytes in its file, at its
 link segment) and the music driver (its own link space). A thunk (`call 048Ah; jmp far;
 dw index`) names its target segment by the descriptor index after the far jump. Any
@@ -141,6 +141,7 @@ class _Descent:
         self.index_range = {int(n.split("#")[1]): n for n in rs if "#" in n}
         self.smc = image.smc_regions()
         self.noreturn = {(r["module"], int(r["offset"], 16)) for r in image.rows("noreturn.csv")}
+        self.ret_jumps = ret_jumps()
         self.far_entries: dict[str, dict[int, int]] = {n: {} for n in rs}
         self.work: list[tuple[str, int, str, int | None]] = []
         self.body: dict[str, dict[int, int]] = {n: {} for n in image.SCOPE}  # byte -> start
@@ -227,6 +228,11 @@ class _Descent:
                 self.body[mod][k] = off
             u.insns[off], u.cs[off] = n, seg
             why = f"{mod}+{off:05X}"
+            if (mod, off) in self.ret_jumps:
+                if n.op != "ret" or n.operands:
+                    raise CfgError(f"{mod}+{off:05X}: ret-jumps.csv names no plain near RET ({n})")
+                self.seed(mod, self.ret_jumps[(mod, off)], why, seg)
+                return
             if n.op in ("ret", "retf", "iret", "hlt"):
                 return
             if n.op in ("callf", "jmpf") and isinstance(n.operands[0], Far):
@@ -245,6 +251,13 @@ class _Descent:
                     raise CfgError(f"{mod}+{off:05X}: noreturn.csv names no call ({n})")
                 return
             off += n.size
+
+
+def ret_jumps() -> dict[tuple[str, int], int]:
+    """ret-jumps.csv: near RETs that pop a continuation the routine pushed
+    itself (module offset of the RET -> module offset of the target)."""
+    return {(r["module"], int(r["offset"], 16)): int(r["target"], 16)
+            for r in image.rows("ret-jumps.csv")}
 
 
 def build(mods: dict[str, M.Module] | None = None) -> dict[str, Unit]:

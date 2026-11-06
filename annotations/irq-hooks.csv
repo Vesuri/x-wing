@@ -1,0 +1,11 @@
+module,offset,reason
+ADLIB.IMS,0x00184,"call word ptr [06DCh] in the timer handler's tick (+00A2A -> +00184): the player entry the driver's API stores; the generated call stops on any target but the traced ones (indirect.csv), so the footprint covers every run (MEASURED: indirect.csv)"
+ADLIB.IMS,0x0019c,"callf dword ptr [06DEh] in the tick: the game's timer callback (root +01350) the driver's API stores; the generated call stops on any target but the traced ones (indirect.csv), so the footprint covers every run (MEASURED: indirect.csv)"
+ADLIB.IMS,0x00134,"call word ptr [bp-4] in the driver's far API dispatcher (+000E0, reached from the tick through +02C8E): a function of the table at DS:003Ch indexed by the call's byte argument; the generated call stops on any target but the traced ones (MEASURED: indirect.csv)"
+ADLIB.IMS,0x0016f,"call cx in the same dispatcher: a voice function of the table the word at DS:[DI+32h] points to (+0001C); the generated call stops on any target but the traced one (MEASURED: indirect.csv)"
+ADLIB.IMS,0x0056f,"call ax in a voice API function (+00550, a target of the dispatcher's +00134 call): the voice record's word at [DI+10h]; the generated call stops on any target but the traced one (MEASURED: indirect.csv)"
+ADLIB.IMS,0x0059f,"call ax in a voice API function (+00580, a target of +00134): the voice record's word at [DI+12h]; the generated call stops on any target but the traced one (MEASURED: indirect.csv)"
+ADLIB.IMS,0x006f2,"call ax in a voice API function (+006CA, a target of +00134): the voice record's word at [SI+1Ah]; the generated call stops on any target but the traced one (MEASURED: indirect.csv)"
+ADLIB.IMS,0x00ddf,"call word ptr [bp-2] in a target of the tick's request switch (+00DB9, +00DCA and +00E31): the request's function; the generated call stops on any target but the traced ones (MEASURED: indirect.csv)"
+ADLIB.IMS,0x00e03,"call word ptr [bp-2] in the switch targets +00DEA and +00E69: the request's voice function; the generated call stops on any target but the traced ones (MEASURED: indirect.csv)"
+ADLIB.IMS,0x00e4f,"call word ptr [bp-2] in the switch target +00E34: the request's voice function; the generated call stops on any target but the traced one (MEASURED: indirect.csv)"

@@ -2,8 +2,9 @@
 
 Steps of the [port plan](port-plan.md), in order; P6–P10 follow there. The repo rules (P0),
 the reference loop (P1, but for the two milestones below), the static and live map (P2),
-x86 semantics (P3: `make test-x86`) and the 68020 backend (P4: `make test-m68k`) are in
-place.
+x86 semantics (P3: `make test-x86`), the 68020 backend (P4: `make test-m68k`) and the
+first vertical slice (P5: `make test-amiga`, the Amiga replay and the host lockstep to m01)
+are in place.
 
 1. P1: the two milestones not yet reached ([DOS reference](dos-reference.md#not-yet-reached)).
    The rest of P1 is in place: `make dos-reference` passes 17 pinned milestones.
@@ -12,16 +13,20 @@ place.
    - A Star Destroyer battle, or the heaviest combat scene a reachable pilot state allows,
      chosen by a measured cost. Instructions per frame rank scenes only if the flight does
      not pace its frames, which is not yet known.
-2. P5: first vertical slice on SWOTL's runtime ([port plan](port-plan.md#p5-first-vertical-slice-gate-5)).
-   Acceptance: the LucasArts logo drawn by generated code on the A1200 model, and host
-   lockstep to m1 (service log, registers, RAM, framebuffer and DAC). The runtime copy
-   also takes what P4 left to it: `translator/irq.py` adapted to the music driver's
-   INT 08h handlers, so `make gen` runs the footprint proof again; dispatch by the
-   descriptors' resident bit (rows carry descriptor index + 1); the cell-cache segment
-   window (`smc_seg_lo`, `smc_seg_limit`) in the runtime's register reload; a loud stop
-   when AX=4B03h loads `ADLIB.IMS` at another segment than `DRVSEG`; X-Wing's pointer
-   state for `pointer_guest`, or none.
-3. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh reference reach named milestones and
+2. The music driver's interrupt-level paths the P5 proof defers or allows
+   ([design](design.md), owner decisions 2026-11-05).
+   Acceptance: the driver's far callback (ADLIB.IMS +006B6, `annotations/irq-stops.csv`)
+   runs at interrupt level in flight with the footprint proved through its re-entry into
+   the driver, and the stack words that re-entry and request 0Fh queue (`irq.py`
+   STACK_COPIES) equal the reference's in a host lockstep that queues them.
+3. Copy-free EMS mapping in place of SWOTL's map-by-copy (`src/runtime/ems.c`).
+   Acceptance: no EMS map copies a page; the host lockstep to m01 still passes.
+4. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
+   `--seed 7` a walk case's x86 store faults at an unmapped address and the oracle then
+   reads its recorded writes back, raising UC_ERR_READ_UNMAPPED (the same at P4's commit).
+   Acceptance: `tests/m68k_blocks.py` completes for seeds 1–8; a faulting store is
+   compared as an exception, not a crash.
+5. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh reference reach named milestones and
    map its 68k CODE.
    Acceptance: a bounded run reaches a positively identified game state by guest state,
    writes a framebuffer read from video memory and a trap log, and reproduces their pinned

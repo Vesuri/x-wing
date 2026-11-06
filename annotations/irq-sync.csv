@@ -1,1 +1,12 @@
 module,offset,class,first,last,access,reason
+XWING.EXE,0x014b3,3A07,0xbe1e,0xe721,w,"rep stosw of the MS C startup clearing DGROUP 6746h..E76Fh, which spans the root timer callback's tick counters and its E720h word (MEASURED: tests/irq_monitor.py at m01-logo)"
+XWING.EXE,0x039ab,A0000,0x090c,0x2dff,w,"rep stosw of the root's memset over the block the driver loads into, before the load; it spans the driver's chain vector, DS slot and instrument tables (MEASURED: tests/irq_monitor.py at m01-logo)"
+ADLIB.IMS,0x00bb0,G,0x013a,0x013e,r,"lodsb of the driver's string copy, called from a request with a near pointer into the driver's data (MEASURED: tests/irq_monitor.py at m01-logo)"
+ADLIB.IMS,0x01dca,G,0x0920,0x0921,r,"low word of a far 32-bit value the driver's request code reads through ES:SI; the handler uses it too (MEASURED: tests/irq_monitor.py at m01-logo)"
+ADLIB.IMS,0x01dcd,G,0x0922,0x0923,r,"high word of that value (MEASURED: tests/irq_monitor.py at m01-logo)"
+ADLIB.IMS,0x01e56,G,0x0920,0x0921,w,"low word of that value written back by the same routine (MEASURED: tests/irq_monitor.py at m01-logo)"
+ADLIB.IMS,0x01e59,G,0x0922,0x0923,w,"high word of that value written back (MEASURED: tests/irq_monitor.py at m01-logo)"
+ADLIB.IMS,0x01f0f,G,0x0962,0x0971,w,"rep stosw clearing a record's +32h words that the handler reads, called from a request with a near pointer (MEASURED: tests/irq_monitor.py at m01-logo)"
+ADLIB.IMS,0x01f17,G,0x0952,0x0961,w,"rep stosw clearing the same record's +22h words (MEASURED: tests/irq_monitor.py at m01-logo)"
+ADLIB.IMS,0x01f1f,G,0x0942,0x0951,w,"rep stosw clearing the same record's +12h words (MEASURED: tests/irq_monitor.py at m01-logo)"
+ADLIB.IMS,0x01f27,G,0x0932,0x0941,w,"rep stosw clearing the same record's +02h words (MEASURED: tests/irq_monitor.py at m01-logo)"

@@ -38,7 +38,7 @@ from pathlib import Path
 from . import cfg, compute, image, region, smc
 from .decode import Far, Rel
 from .flags import ALL, plan, transfer
-from .lower import GREG, LOADSEG, MIRROR, Ctx, LowerError, hx
+from .lower import DRVSEG, GREG, LOADSEG, MIRROR, Ctx, LowerError, hx
 
 M = image.M
 TAG = {"XWING.EXE": "R", "FRONTEND.OVL": "FE", "FLIGHT.OVL": "FLT", "ADLIB.IMS": "AD"}
@@ -360,6 +360,15 @@ class Program:
                         if t != "(isr)"]
             self.indirect[(r["module"], int(r["offset"], 16))] = (parse("switch_targets"),
                                                                   parse("traced_targets"))
+        self.ret_jumps = cfg.ret_jumps()          # near RET -> its pushed continuation
+        # indirect calls the IRQ0 handler reaches: their traced targets are complete
+        self.irq_hooks = {(r["module"], int(r["offset"], 16)) for r in image.rows("irq-hooks.csv")}
+        # calls on a deferred interrupt-level path (irq-stops.csv): the call stops
+        self.irq_stops = {(r["module"], int(r["offset"], 16)) for r in image.rows("irq-stops.csv")}
+        # poll points production tests too (irq-polls.csv): ticks for a handler the
+        # CIA interrupt may not run, taken with the guest registers live
+        self.prod_polls = {(r["module"], int(r["offset"], 16)) for r in image.rows("irq-polls.csv")}
+
         self.succ: dict[tuple[str, int], list] = {}
         self.fall: dict[tuple[str, int], tuple[str, int] | None] = {}
         self.ret_sites: set[tuple[str, int]] = set()
@@ -465,6 +474,9 @@ class Program:
             raise LowerError(f"sync point is no reached instruction: {missing[:4]} (rerun make gen)")
         self.loops = loops
         self.loop_heads = set(self.sync)
+        missing = sorted(n for n in self.prod_polls if n not in self.sync)
+        if missing:
+            raise LowerError(f"irq-polls.csv: no poll point at {missing}")
         self.live_in: dict = {}
         self.live_out: dict = {}
         self.fused_jumps: dict = {}    # conditional label -> removed direct JMP
@@ -531,7 +543,9 @@ class Program:
                 s: list = []
                 op = i.op
                 t = i.operands[0] if i.operands else None
-                if op in ("ret", "retf"):
+                if n in self.ret_jumps:
+                    s = [(mod, self.ret_jumps[n])]
+                elif op in ("ret", "retf"):
                     s = [RET]
                 elif op in ("iret", "hlt"):
                     s = []
@@ -580,7 +594,7 @@ class Program:
         call_site = self.call_site
         while stack:
             n = stack.pop()
-            if self.node_insn(n).op in ("ret", "retf"):
+            if self.node_insn(n).op in ("ret", "retf") and n not in self.ret_jumps:
                 rets.add(n)
                 continue
             # a call continues at its return site; the divide-error edge is an
@@ -646,7 +660,7 @@ class Program:
         every = frozenset(self.ret_sites)
         self.ret_fallback = 0
         for n in self.succ:
-            if self.node_insn(n).op in ("ret", "retf"):
+            if self.node_insn(n).op in ("ret", "retf") and n not in self.ret_jumps:
                 sites = ret_of.get(n)
                 if not sites:
                     self.ret_fallback += 1
@@ -816,9 +830,20 @@ class Program:
         return next(((lo, hi) for m, lo, hi in self.smc_forms if m == mod and lo <= off <= hi),
                     None)
 
+    def async_handler(self) -> str:
+        """CS,IP of the INT 08h handler the footprint proof covers (entries.csv), the
+        only one the CIA interrupt may run (machine.c rt_irq0_ready)."""
+        rows = [r for r in image.rows("entries.csv") if r["reason"].startswith("INT 08h handler")]
+        if len(rows) != 1:
+            raise ValueError("entries.csv: one INT 08h handler row expected")
+        mod, off = rows[0]["module"], int(rows[0]["offset"], 16)
+        u = self.units[mod]
+        return f"{cs_expr(u.cs[off], mod)},{hx(u.ip_of(off))}"
+
     def dispatch_rows(self) -> list[tuple[str, int, int, int, str]]:
         """Run-time dispatch table: (CS expression, IP, overlay id, far (R14e), label)
-        of every decoded entry, sorted by module, CS:IP. The overlay id is the
+        of every decoded entry, sorted by run-time CS:IP (the runtime searches it
+        by the absolute key; the driver's rows follow the root's). The overlay id is the
         overlay segment's descriptor index + 1 (root and driver 0). Segments sharing
         an area share CS:IP, so the runtime picks the row whose segment is resident."""
         out = []
@@ -828,9 +853,11 @@ class Program:
                 continue
             r = u.range_at(off).name
             oid = int(r.split("#")[1]) + 1 if "#" in r else 0
-            out.append((loadseg(mod), u.cs[off], u.ip_of(off), oid,
+            base = DRVSEG if mod == DRIVER else LOADSEG
+            out.append((base + u.cs[off], u.ip_of(off), oid, loadseg(mod), u.cs[off],
                         int((mod, off) in self.far_rows), label(mod, off)))
-        return [(f"{b}+{hx(cs)}", ip, oid, far, lab) for b, cs, ip, oid, far, lab in sorted(out)]
+        return [(f"{b}+{hx(cs)}", ip, oid, far, lab)
+                for _, ip, oid, b, cs, far, lab in sorted(out)]
 
     def program_text(self, files: list[str]) -> str:
         """Assembly root of the Amiga/host link: equates, runtime imports, the module
@@ -841,17 +868,22 @@ class Program:
         if self.diagnostic_reps:
             lines.append("\txref\trt_replay_rep")
         lines += ["\txref\t" + s for s in sorted({s for _, s in self.hle.values()})]
-        lines += ["\txdef\tdispatch_table", "\txdef\tdispatch_count", "\txdef\tload_segment", "\txdef\tpointer_guest",
+        lines += ["\txdef\tdispatch_table", "\txdef\tdispatch_count", "\txdef\tload_segment", "\txdef\tdriver_segment", "\txdef\tirq0_async_handler", "\txdef\tpointer_guest",
                   "\txdef\toverlay_table", "\txdef\tsmc_expose", "\txdef\tsmc_lo",
                   "\txdef\tsmc_hi", "\txdef\tsmc_seg_limit", "\txdef\tsmc_seg_lo"]
         if len(self.cells) == 1:
             lines += ["\txdef\t" + a for a, _ in WALK_ALIASES]
+        # One section per module: vasm sizes branches per section, and one
+        # section holding every module does not converge (no cross-module
+        # branches; calls between files are absolute and relocated).
+        for f in files:
+            lines += [f"\tsection\t.text.{f.split('.')[0].lower()},code", f'\tinclude\t"{f}"']
         lines += ["\tsection\t.text,code"]
-        lines += [f'\tinclude\t"{f}"' for f in files]
         code, data = self.smc_text()
         lines += code
         rows = self.dispatch_rows()
-        lines += ["\tcnop\t0,4", "load_segment:\tdc.l\tLOADSEG",
+        lines += ["\tcnop\t0,4", "load_segment:\tdc.l\tLOADSEG", "driver_segment:\tdc.l\tDRVSEG\t; AX=4B03h must load ADLIB.IMS here (dos.c)",
+                  "irq0_async_handler:\tdc.w\t" + self.async_handler() + "\t; the proved INT 08h handler (machine.c)",
                   f"overlay_table:\tdc.l\t{hx(M.OVL_TABLE)}\t; descriptors, id 1 first (root offset)",
                   "pointer_guest:" + ("\tdc.w\t" + ",".join(hx(o) for o in pointer_guest())
                                       if pointer_guest() else "\t; no pointer state (P5)"),
@@ -915,7 +947,8 @@ class Program:
         rel = frozenset(f - off for f in fx[k:k + i.size] if f < off + i.size)
         return Ctx(cs=cs_expr(cs, mod), label=label(mod, off), reloc=rel, near=near, far=far,
                    loadseg=loadseg(mod),
-                   near_targets=near_t, complete=bool(sw), far_targets=far_t,
+                   near_targets=near_t, complete=bool(sw) or (mod, off) in self.irq_hooks or (mod, off) in self.irq_stops,
+                   far_targets=() if (mod, off) in self.irq_stops else far_t,
                    smc_targets=tuple(sorted((u.ip_of(lo), u.ip_of(hi), walk_label(mod, lo))
                                             for lo, hi in smc_t)),
                    code_regions=self.code_regions(cs, mod), seg_limit=self.smc_limit, seg_lo=self.smc_seg_lo,
@@ -923,6 +956,7 @@ class Program:
                    program=True, vram=mod in VRAM_MODULES,
                    driver_call=mod == M.ROOT and off in self.driver_jumps, ret_mismatch=RM,
                    far_ret_mismatch=RMF,
+                   ret_jump=(u.ip_of(self.ret_jumps[(mod, off)]) if (mod, off) in self.ret_jumps else None),
                    rep_hook=((self.diagnostic_reps[(mod, off)], label(mod, off))
                              if (mod, off) in self.diagnostic_reps else None))
 
@@ -996,7 +1030,7 @@ class Program:
 
         def visit(o):   # D8 poll point
             assert (mod, o) in self.leaders, (mod, o)
-            always = self.sync.get((mod, o)) == "if"
+            always = self.sync.get((mod, o)) == "if" or (mod, o) in self.prod_polls
             lines.extend(poll(lab(mod, o), always))
             stub = poll_stub(lab(mod, o), u.ip_of(o), cs_expr(u.cs[o], mod), always, (mod, o) in self.loops)
             if comp is not None:    # a handler may change BP: on in the exact code

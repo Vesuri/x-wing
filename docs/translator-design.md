@@ -26,9 +26,46 @@ P3 copied `translator/` whole and adapted the front end: `image.py`, `decode.py`
   sets no flag.
 - `gen.py`, `check.py`: `xwing-gen 1` headers over `tools/xwing_model.py`.
 
-`irq.py` still models SWOTL's SPAZ handler. `make gen` runs without it until P5 adapts
-it to the music driver's INT 08h handlers: there is no `irq-footprint.csv`, and the sync
-points are the loop heads. `flags`, `support`, `compute`, `region`, `reuse` and
+P5 adapted the rest to the first vertical slice:
+- `irq.py`: the footprint proof over `ADLIB.IMS`'s INT 08h handlers (`make gen` runs it,
+  `build/gen/irq-footprint.csv`). G is the driver's DS (DRVSEG:0911, paragraph 04D0h);
+  the game's DGROUP is root paragraph 3A07. Song data (S) is huge: a segment, or a
+  word loaded from memory, plus a carry stays its type, typed by `SEGMENT_WORDS`
+  (class, displacement) or, where the displacement is shared, `SEGMENT_LOADS` (site).
+  A null far pointer's segment joins as `NULL`. Proved switch tables are followed,
+  equality and unsigned branches after `cmp r16,imm` narrow the register, flags of
+  interrupted state are tainted rather than fatal until read, and a byte write keeps
+  the other byte of a word slot. An unwritten word of the handler's own stack area is
+  interrupted state; `DEAD_READS` names one whose value is unused and `STACK_COPIES`
+  the two stores of such words the owner allowed (`docs/design.md`).
+  `annotations/irq-hooks.csv` lists the indirect calls the handler reaches; each
+  follows its traced targets and its generated call stops on any other.
+  `annotations/irq-stops.csv` lists calls on a deferred interrupt-level path: the
+  generated call stops and the proof ends the path (the driver's flight callback,
+  `docs/design.md`). An `annotations/irq-sync.csv` row also covers an access the proof
+  cannot type, such as a string instruction's implicit operand or an unreached site.
+  The rows cover two root clears that run before the driver is loaded and the driver's
+  pointer-argument routines that its requests call on the handler's data. The monitor
+  lists each uncovered site with its class and span.
+- `lower.py`: a `les`/`lds` from a constant address is one `move.l`, because the
+  handler writes some far pointers (`check_atomic`). A video-memory store marks its
+  segment's signed distance from A000h (the lower half is drawn through ES above A000h).
+  `ret` at an `annotations/ret-jumps.csv` site, a pushed continuation, checks the
+  popped IP and jumps to it.
+- `emit.py`: one section per module (`.text.<module>`) so vasm's branch optimisation
+  converges; dispatch rows sorted by absolute CS.
+- `cfg.py`: a ret-jump RET seeds its target; any other non-plain RET raises.
+- `tests/m68k_blocks.py`, `m68k_diff.py`: `rt_vram_mark` returns (the host lockstep
+  checks the marks); a ret-jump RET that pops another IP must stop at `rt_ret_mismatch`.
+  The cell-cache cases address a region through each store site's own CS (its
+  `code_regions` delta), plant RETs only at cell starts inside the region (X-Wing's runs
+  of mov cells continue past its last cell start) and hold the control segments above the
+  segment window. Every target of each proved switch table (`indirect.csv`) runs to its
+  own label. `tests/m68k_sabotage.py` names four plants inert while the program has no
+  outlined ranges or guarded copies (P8 fills those annotations); each run checks that
+  they leave the program unchanged, and one that changes it must be caught.
+
+`flags`, `support`, `compute`, `region`, `reuse` and
 `compact` are otherwise SWOTL's. The speed annotations (`align`, `outline`,
 `seg-repeat`, `bp-regions`) are empty until P8 measures them.
 
@@ -300,22 +337,18 @@ caller's DS where the I2 analysis cannot see it; host runs check, I3) and `irq-s
   access against the IRQ0 footprint (`tests/irq_monitor.py`, irq-plan I3:
   handler accesses inside it, main accesses meeting it only from sync
   instructions, IF clear or services; record `tmp/test/irq-monitor-<run>.json`).
-  `make test-amiga`: the same at m1b-logo on the A1200 model (FS-UAE,
-  `amiga/milestone.gdb.in`), plus the shown screen (bitplanes, colour
-  table) decoded against the reference framebuffer and DAC.
-- Amiga replay (`make test-amiga-replay`, also in `make gates`): separate
-  diagnostic images for m2-choose-side, m5-player-flight, c9-mouse-menu,
-  c66-flight-calibration and c85-joystick-calibration.
-  Translator hooks preserve native registers/CCR and split diagnostic
-  entries at block boundaries; the normal generated bodies are unchanged.
-  `tests/amiga_replay.*` replays DOSBox input and interrupt groups at their
-  recorded sync visits/service counts through the production IRQ glue.
-  Every service prefix checks registers, segments, vector, IF and DF;
-  final counts, guest state, DAC and shown bitplanes must match the original.
-  The final guest state is held while its queued frame reaches the VBI.
-  Only diagnostic builds disable physical input and the CIA timer; normal
-  hardware, smoke and restoration gates remain mandatory. No reference,
-  sync point, normal interrupt order or PIT rate changes.
+  `make test-amiga` (`tests/amiga_replay.py`): the same at m01-logo on the 68030 model
+  (A1200 chipset, FS-UAE, `amiga/milestone.gdb.in`) from a diagnostic replay image,
+  plus the shown screen (bitplanes, colour table) decoded against the reference
+  framebuffer and DAC. The image (`XWING_REPLAY`, sync mode, built in
+  `tmp/amiga-replay/`) adds `rt_replay_point` hooks at the reference's interrupt,
+  snapshot and REP points and the service hooks in `rt_entry.s`; it posts each recorded
+  interrupt at its poll point and visit count, answers 3DAh with the recorded reads of
+  the same service interval, takes the recorded calendar and file clock, checks the
+  service history by a cumulative FNV hash (every 256 events and the last) and holds
+  at `rt_replay_done` when the last snapshot is reached with every service, interrupt,
+  REP slice and VGA read consumed. `make test-amiga-live`: the production image to the
+  m01 label in real time, not compared.
 - Display (D9 slice): only the graphics driver (`emit.GRAPHICS_DRIVER`,
   RTSVGA) writes video memory. Before each of its memory stores the
   lowering checks the segment for A000h and calls `rt_vram_mark` (offset,
@@ -369,8 +402,10 @@ caller's DS where the I2 analysis cannot see it; host runs check, I3) and `irq-s
   2026-10-26: they keep the reference on the original's timing). A native row is atomic
   to the interrupt (irq-plan RC5): loop heads in its body, callees and re-entries
   included, are not in the set. Only sync builds
-  (`SWOTL_SYNC`: host runs, replays, `make amiga-sync` for the bench) test at `access`,
-  `int`, `clear` and `loop` points; every build tests at `if` points. Production takes
+  (`XWING_SYNC`: host runs, replays, `make amiga-sync` for the bench) test at `access`,
+  `int`, `clear` and `loop` points; every build tests at `if` points and at the
+  `annotations/irq-polls.csv` points (ADLIB.IMS's calibration loops: their handler reads
+  the interrupted CX and DX, so its ticks are taken there with the registers live). Production takes
   IRQ0 at the CIA-B tick (below). A test is `tst.b G_IRQ(a6)`
   and `bne` to the poll's stub `X_irq`, placed after the next run that cannot
   fall through: d6 = CS << 16, d7 = IP, `jsr rt_irq`, back past the test to
@@ -385,11 +420,15 @@ caller's DS where the I2 analysis cannot see it; host runs check, I3) and `irq-s
   stack `B000:8000` down (frame with the sentinel CS:IP `B000:8000` its IRET must pop;
   68k registers, state block and `rt_r` restored after it; nothing posted is taken
   until it returns, the PIC's in-service IRQ0, irq-plan I4; on the Amiga the CIA-B
-  tick runs it at once through `rt_irq_interrupt` when `rt_irq0_ready`: IF set, none
+  tick runs it at once through `rt_irq_interrupt`, which hands the handler `rt_r`, not
+  the interrupted registers, only for the handler the footprint proof covers
+  (`irq0_async_handler`, `entries.csv`) and when `rt_irq0_ready`: IF set, none
   running, no runtime service (`rt_irq_mask`) or main-thread OPL index/data pair
   (`rt_opl_pair`), nothing posted, not `BENCH`; a stop raised in it unwinds through
   `rt_irq_abort` and is raised at the next poll; a tick posted while it could not run
-  is taken by the next CIA tick before its own, `rt_irq0_take`; host runs inject recorded ticks
+  is taken by the next CIA tick before its own, `rt_irq0_take`; with IVT 08h the
+  BIOS's, the CIA tick counts the tick at once under the same conditions, the posted
+  ones first, `rt_irq0_bios_tick`, so no backlog reaches a handler installed later; host runs inject recorded ticks
   the same way with `host_run.py --stress SEED`, `tests/irq_stress.py`, I6), another
   guest handler on a pushed frame, else the BIOS one (INT 08h ticks; INT 09h, posted in
   sync builds only, takes the next `rt_key_ring` event; production drains the ring at
@@ -414,11 +453,11 @@ caller's DS where the I2 analysis cannot see it; host runs check, I3) and `irq-s
   into the same paths at a frame or `pN`, N
   guest mouse reads after the previous step (host load moves frame
   timings), and `shot`/`quit` call `amiga_script_mark` for a gdb fixture;
-  `SWOTL_ARGS` in `amiga/debug.sh`); host run the reference's `irq` events, replayed at the
+  `XWING_ARGS` in `amiga/debug.sh`); host run the reference's `irq` events, replayed at the
   same visit of the same sync point after the same service event, one of a
   same-visit group per return of the guest handler to that point (the
   reference takes interrupts only at sync points, `build/gen/poll-points.csv`, IRQ0
-  edges only the gate held raised again in order, `dosbox-x-swotl-irq0-backlog.patch`;
+  edges only the gate held raised again in order, `dosbox-x-xwing-irq0-backlog.patch`;
   references are re-recorded when the sync set changes, irq-plan RC3).
 - IRQ0 footprint (irq-plan I2, `translator/irq.py`, run by `make gen`): the guest
   handler's memory, ports, IF changes, hooks and runtime calls, register

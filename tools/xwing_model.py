@@ -175,9 +175,11 @@ def events(trace: Path, kinds: tuple[str, ...] = ()):
 
 def runs(pattern: str = 'latest') -> list[Path]:
     """Traces of the runs matching a glob. 'latest' is the newest milestone set of
-    tools/reference.py: the base name of the most recent `*-m00-entry` run."""
+    tools/reference.py: the base name of the most recent `*-m00-entry` run, host
+    references (`host-*`, `--polls`: m00 and m01 only) excluded."""
     if pattern == 'latest':
-        entries = sorted(RUNS.glob('*-m00-entry'), key=lambda p: p.stat().st_mtime)
+        entries = sorted((p for p in RUNS.glob('*-m00-entry') if not p.name.startswith('host-')),
+                         key=lambda p: p.stat().st_mtime)
         if not entries:
             return []
         pattern = entries[-1].name[:-len('m00-entry')] + '*'

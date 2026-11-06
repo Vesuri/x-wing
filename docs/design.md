@@ -14,6 +14,9 @@
 | Memory | 8 MB Fast RAM is the target. The version started without WHDLoad uses as little memory as it can, but it gets what it needs (owner decision 2026-11-01) |
 | Sound | AdLib for music and everything else; Sound Blaster for PCM audio, in a later phase (owner decision 2026-11-01) |
 | Copy protection | Bypassed in the port (owner decision 2026-11-01) |
+| Music driver's flight callback at interrupt level | Deferred past P5 (owner decision 2026-11-05): the IRQ0 footprint proof ends at the driver's far callback (`annotations/irq-stops.csv`, ADLIB.IMS +006B6), whose generated call stops. On that flight-only path, the callback re-enters the driver, which queues stack words its caller never pushed, so DOS and the port would differ (open work) |
+| Music driver's request 0Fh at interrupt level | Allowed and tracked (owner decision 2026-11-05): the tick copies two never-written words of its own stack area into the request queue (ADLIB.IMS +2B4D, +2B6D; `translator/irq.py` STACK_COPIES, footprint runtime rows). DOS and the port can differ there; the host lockstep's RAM compare is the oracle (open work) |
+| Gate 5's Amiga half | The Amiga replay is part of gate 5 (owner decision 2026-11-06): live, m01's state depends on when the CIA ticks land, so a diagnostic image replays the reference's interrupts, REP slices, VGA status reads and clocks on the 68030 model and the strict compare runs on its capture; the production image's live run to the m01 label is a smoke test |
 | Chipset and release requirements | Not decided; 256-colour mode 13h implies AGA, as in Secret Weapons of the Luftwaffe |
 
 ## Faithfulness boundary
@@ -24,7 +27,8 @@ and platform integration. A Macintosh routine may replace a DOS one only when it
 to match the DOS behaviour against the DOS reference. Any behaviour-changing departure
 needs an explicit owner decision and validation against the original. The copy-protection
 bypass is one: from the bypass on, the port's state must equal the reference's after a
-correct answer ([port plan](port-plan.md), P6). No runtime has been copied or implemented.
+correct answer ([port plan](port-plan.md), P6). SWOTL's runtime is copied and adapted
+([port plan](port-plan.md), P5).
 
 The Macintosh application is a fat binary: 68k `CODE` resources and a PowerPC data fork.
 Only the 68k `CODE` is a donor; the PowerPC code is out of scope unless the owner decides

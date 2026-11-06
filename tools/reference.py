@@ -26,6 +26,13 @@ Checks per milestone:
   them instead). Equal pins in separate runs prove the runs repeat byte-exactly.
 
 The instruction count is reported only.
+
+`--polls` records host references (P5, tests/host_run.py): the same runs with the
+translator's poll points (build/gen/poll-points.csv, `make gen`), so hardware interrupts
+are taken only there and logged as `irq` events, and with the VGA status reads the host
+replays (`--retrace`, trace/retrace.csv) and the decoder slices of every REP at a poll
+point (`--rep-chunks`, trace/rep.csv). Their timing differs from the pinned
+runs, so the pins are not compared; the runs are named host-<time>-<id>-<milestone>.
 """
 
 from __future__ import annotations
@@ -47,6 +54,7 @@ TABLE = REPO / 'reference/milestones.csv'
 PINS = REPO / 'manifest/milestones.sha256'
 SITES = {'menu': 'FRONTEND.OVL+1808e', 'frame': 'FLIGHT.OVL+1b7d2'}
 PENDING_MAX = 4
+POLLS = REPO / 'build/gen/poll-points.csv'
 
 
 def site(token: str) -> str:
@@ -89,7 +97,7 @@ def service_balance(trace: Path) -> tuple[int, int]:
     return got.get('svc', 0), got.get('svc_ret', 0)
 
 
-def run(base: str, rows: dict[str, dict], name: str) -> tuple[list[str], dict[str, str], Path]:
+def run(base: str, rows: dict[str, dict], name: str, polls: bool = False) -> tuple[list[str], dict[str, str], Path]:
     m = rows[name]
     triggers = [site(t) for t in m['snapshots'].split()]
     names = [f'{name}-{i}' for i in range(len(triggers))]
@@ -98,6 +106,8 @@ def run(base: str, rows: dict[str, dict], name: str) -> tuple[list[str], dict[st
            '--time-limit', m['time_limit'],
            '--snapshots', ','.join(f'{n}@{t}' for n, t in zip(names, triggers)),
            '--exit-after', names[-1], '--keys', ','.join(keys(rows, name))]
+    if polls:
+        cmd += ['--polls', str(POLLS), '--retrace', '--rep-chunks']
     trace = REPO / 'ref/dosbox/runs' / run_name / 'trace'
     status = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT).returncode
     if status != 0:
@@ -140,13 +150,14 @@ def main() -> int:
     ap.add_argument('--name', help='run name base (default: ms-<time>-<id>)')
     ap.add_argument('--jobs', type=int, default=6)
     ap.add_argument('--print-manifest', action='store_true')
+    ap.add_argument('--polls', action='store_true', help='host references: poll points, no pins')
     args = ap.parse_args()
     with TABLE.open() as f:
         rows = {r['name']: r for r in csv.DictReader(f)}
     names = args.only or list(rows)
-    base = args.name or 'ms-' + time.strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
+    base = args.name or ('host-' if args.polls else 'ms-') + time.strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
     with ThreadPoolExecutor(args.jobs) as ex:
-        results = dict(zip(names, ex.map(lambda n: run(base, rows, n), names)))
+        results = dict(zip(names, ex.map(lambda n: run(base, rows, n, args.polls), names)))
     pins = {}
     if PINS.exists():
         for line in PINS.read_text().splitlines():
@@ -168,7 +179,7 @@ def main() -> int:
                     problems.append(f"frame {'equals' if same else 'differs from'} {other}")
         for key, digest in actual.items():
             lines.append(f'{digest}  {key}')
-            if not args.print_manifest and pins.get(key) != digest:
+            if not (args.print_manifest or args.polls) and pins.get(key) != digest:
                 problems.append(f'{key.split("/", 1)[1]} differs from its pin')
         failed |= bool(problems)
         print(f"{name:22} {'FAIL ' + '; '.join(problems) if problems else 'ok'}", flush=True)

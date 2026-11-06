@@ -18,10 +18,8 @@ build/gen/irq-footprint.csv (translator/irq.py, docs/irq-plan.md I2); a
 footprint violation fails generation.
 
 Copied from Secret Weapons of the Luftwaffe's translator/gen.py (commit pinned in
-manifest/references.tsv) and adapted to X-Wing's names. The IRQ0 footprint proof
-(translator/irq.py) still models SWOTL's SPAZ handler; until P5 adapts it to the
-music driver's INT 08h handlers, generation runs without it: no irq-footprint.csv,
-and the sync points are the loop heads alone.
+manifest/references.tsv) and adapted to X-Wing's names; the IRQ0 footprint proof
+(translator/irq.py) is adapted to the music driver's INT 08h handlers.
 """
 
 from __future__ import annotations
@@ -42,7 +40,6 @@ from . import cfg, emit, image, irq, support
 from .sem import lift
 
 VERSION = "xwing-gen 1 (ir, 68020)"
-IRQ_PROOF = False   # translator/irq.py is SWOTL's until P5 (module docstring)
 AUDIT = image.REPO / "tests/audit.csv"
 SUPPORT = "support"
 POLLS = "poll-points.csv"
@@ -149,7 +146,7 @@ def generate(out: Path, program: emit.Program | None = None) -> tuple[dict[str, 
     units = program.units if program is not None else cfg.build()
     out.mkdir(parents=True, exist_ok=True)
     proof = None
-    if program is None and IRQ_PROOF:
+    if program is None:
         # I2/I8: the footprint proof on the program with loop heads only gives the
         # sync points (irq.Proof.sync_points); they are leaders of the generated one
         proof = irq.prove(emit.Program(units, sync={}))

@@ -72,6 +72,10 @@ def main() -> int:
                         help='log every software INT from module code with entry/return registers')
     parser.add_argument('--joystick', action='store_true',
                         help='enable deterministic joystick inputs and record exact gameport accesses')
+    parser.add_argument('--retrace', action='store_true',
+                        help='record every VGA input status (3DAh) read by module code (trace/retrace.csv)')
+    parser.add_argument('--rep-chunks', action='store_true',
+                        help='record the decoder slices of every REP at a poll point (trace/rep.csv)')
     parser.add_argument('--opl', action='store_true',
                         help='log every AdLib register write with emulated ms (trace/opl.csv)')
     parser.add_argument('--probes', default='',
@@ -90,11 +94,15 @@ def main() -> int:
                XWING_FIXED_FILE_CLOCK='1', XWING_BIOS_TICKS=str(args.bios_ticks),
                XWING_SNAPSHOTS=args.snapshots, XWING_EXIT_AFTER=args.exit_after,
                XWING_KEYS=args.keys)
-    for var in ('XWING_JOYSTICK', 'XWING_SERVICES', 'XWING_OPL', 'XWING_PROBES', 'XWING_POLLS',
+    for var in ('XWING_JOYSTICK', 'XWING_RETRACE', 'XWING_SERVICES', 'XWING_OPL', 'XWING_PROBES', 'XWING_POLLS',
                 'XWING_KEY_HOLD', 'XWING_REP_CHUNKS', 'XWING_SCRIPT'):
         env.pop(var, None)
     if args.joystick:
         env['XWING_JOYSTICK'] = '1'
+    if args.retrace:
+        env['XWING_RETRACE'] = '1'
+    if args.rep_chunks:
+        env['XWING_REP_CHUNKS'] = '1'
     if args.services:
         env['XWING_SERVICES'] = '1'
     if args.opl:

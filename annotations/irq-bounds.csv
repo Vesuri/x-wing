@@ -1,1 +1,2 @@
 class,variable,width,lo,hi,reason
+0125,*,16,0x0011,0x0047,"the root timer callback's code-segment words: counters cs:0011..001A and the palette cycle it sends to DAC entry F4h, nine bytes from cs:[0019h]+1Bh, where cs:[0019h] steps by 9 below 2Dh (+01389..+0139B), so at most cs:0047 (DERIVED: the code); the proof's widening of the loop index is clamped here"

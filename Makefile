@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check test-m68k
+.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -22,6 +22,11 @@ help:
 	@echo 'make gen                    translate the in-scope modules -> build/gen (audit, coverage)'
 	@echo 'make gen-check              G1: headers, digests and byte-identical regeneration of build/gen'
 	@echo 'make test-m68k              gate 4: gen-check, then 68020 differential, blocks, guards, sabotage'
+	@echo 'make host                   link generated program + runtime for Unicorn 68020 -> build/host/xwing.elf'
+	@echo 'make test-host              gate 5 host: lockstep to m01 against its host reference (tests/host_run.py)'
+	@echo 'make amiga                  the A1200 image -> amiga/out/XWing.exe (SYNC=1: amiga-sync)'
+	@echo 'make test-amiga             gate 5: m01 replayed on the 68030 model (A1200 chipset, FS-UAE + GDB capture; AMIGA_CPU)'
+	@echo 'make test-amiga-live        the production image runs to the m01 label in real time (no compare)'
 
 verify-input:
 	@shasum -a 256 -c manifest/originals.sha256
@@ -128,3 +133,63 @@ t-guards:
 	$(call RUN,guards,python3 tests/test_guards.py)
 t-sab-m68k: t-m68k-boundary.0-of-1
 	$(call RUN,sabotage-m68k,python3 tests/m68k_sabotage.py)
+
+# P5: the generated program with the runtime for Unicorn 68020 (tests/host_run.py),
+# copied from Secret Weapons of the Luftwaffe's host build. XWING_SYNC: poll checks
+# at the sync points; interrupts are replayed there.
+CROSS     = $${AMIGA_TOOLCHAIN}/bin/m68k-amiga-elf-
+VASMELF   = $${VASM} -quiet -m68020 -Felf -x -nowarn=62
+RT_CFLAGS = -m68020 -O2 -ffreestanding -nostdlib -fomit-frame-pointer \
+	-fno-tree-loop-distribute-patterns -Wall -Wextra -Werror -Isrc/runtime -DXWING_SYNC
+RUNTIME_C = $(wildcard src/runtime/*.c)
+HOST_OBJ  = build/host/host_s.o build/host/host.o build/host/rt_entry.o \
+	$(patsubst src/runtime/%.c,build/host/%.o,$(RUNTIME_C)) build/host/program.o
+
+build/host/program.o: build/gen/program.s $(wildcard build/gen/*.s)
+	@mkdir -p $(dir $@)
+	@$(ENV) cd build/gen && $(VASMELF) -DXWING_SYNC=1 -o ../host/program.o program.s
+build/host/rt_entry.o: src/runtime/rt_entry.s
+	@mkdir -p $(dir $@)
+	@$(ENV) $(VASMELF) -Isrc/runtime -o $@ $<
+build/host/host_s.o: src/platform/host/host.s
+	@mkdir -p $(dir $@)
+	@$(ENV) $(VASMELF) -o $@ $<
+build/host/host.o: src/platform/host/host.c src/runtime/runtime.h src/runtime/platform.h
+	@mkdir -p $(dir $@)
+	@$(ENV) $(CROSS)gcc $(RT_CFLAGS) -c -o $@ $<
+build/host/%.o: src/runtime/%.c src/runtime/runtime.h src/runtime/platform.h
+	@mkdir -p $(dir $@)
+	@$(ENV) $(CROSS)gcc $(RT_CFLAGS) -c -o $@ $<
+build/host/xwing.elf: $(HOST_OBJ)
+	@$(ENV) $(CROSS)ld -Ttext=0x10000 -e _start -o $@ $(HOST_OBJ)
+host: gen-check build/host/xwing.elf
+
+HOST_MILESTONES = m01-logo
+t-host-%:
+	$(call RUN,host-$*,python3 tests/host_run.py --milestone $*)
+test-host: host
+	@$(MAKE) -s -k -j$(JOBS) $(HOST_MILESTONES:%=t-host-%)
+
+# The A1200 image (amiga/Makefile), copied from Secret Weapons of the Luftwaffe's.
+# test-amiga (gate 5): the diagnostic replay image (tests/amiga_replay.py) replays
+# the host reference's interrupts, REP slices, VGA status reads and clocks on the
+# 68030 model; its capture at the milestone gets the host run's checks.
+# test-amiga-live: the production image runs to the milestone label in real time
+# (amiga/milestone.gdb.in); its state is timing-dependent, so it is not compared.
+AMIGA_MILESTONE ?= m01-logo
+AMIGA_CPU       ?= 68030
+AMIGA_CAPTURE    = tmp/amiga-capture/$(AMIGA_MILESTONE)
+amiga: gen-check
+	@$(ENV) $(MAKE) -C amiga
+amiga-sync: gen-check
+	mkdir -p build/amiga-sync && ln -sf ../../amiga/Makefile build/amiga-sync/Makefile
+	@$(ENV) $(MAKE) -C build/amiga-sync REPO=../.. SYNC=1
+test-amiga: host
+	$(ENV) AMIGA_CPU=$(AMIGA_CPU) python3 tests/amiga_replay.py --milestone $(AMIGA_MILESTONE)
+test-amiga-live: amiga
+	@mkdir -p $(AMIGA_CAPTURE)
+	sed -e "s|@LABEL@|$$(python3 tests/host_run.py --label --milestone $(AMIGA_MILESTONE))|" \
+		-e "s|@OUT@|../$(AMIGA_CAPTURE)|" amiga/milestone.gdb.in > $(AMIGA_CAPTURE)/fixture.gdb
+	$(ENV) cd amiga && AMIGA_CPU=$(AMIGA_CPU) ./debug.sh "" "../$(AMIGA_CAPTURE)/fixture.gdb" 2>&1 | \
+		tee ../$(AMIGA_CAPTURE)/gdb.log
+	grep -q '^XWING_MILESTONE_OK$$' $(AMIGA_CAPTURE)/gdb.log

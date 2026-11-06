@@ -28,6 +28,9 @@ DOSBox-X tag `dosbox-x-v2026.08.31` (`4f19017c`) is built by `make dos-emulator`
   - code writes logged with their target module and offset at the time of the write.
 - **`dosbox-x-xwing-script.patch`:** the text-screen script used for the installer and for
   play.
+- **`dosbox-x-xwing-retrace.patch`:** `XWING_RETRACE=1` logs every read of the VGA input
+  status port 3DAh by module code to `retrace.csv`, as runs of one value per service-event
+  interval; the host run answers its own reads from them.
 
 A second build of the same tag serves as an oracle and is never used for reference runs:
 `make dos-oracle` (`tools/build_dosbox_x_debug.sh`) builds it unpatched with
@@ -137,7 +140,11 @@ Options are SWOTL's:
   - `writes.csv`: the last CPU writer of every module-owned byte since its load.
 - `--services` logs every software interrupt raised by module code, with all registers
   and FLAGS at entry (`svc`) and again at its return (`svc_ret`).
-- `--opl` logs every AdLib register write. `--probes` and `--polls` are as in SWOTL.
+- `--opl` logs every AdLib register write. `--probes` and `--polls` are as in SWOTL;
+  `--retrace` writes `retrace.csv` and `--rep-chunks` the REP slices (`rep.csv`: where
+  DOSBox-X restarts a REP at the end of its cycle slice). `tools/reference.py --polls`
+  adds both: the host references (`m00-entry`, `m01-logo`) are re-recorded whenever
+  generation changes the poll points.
 
 Outputs in `trace/`:
 - `events.csv.gz`: opens, reads, seeks, closes, `exec_overlay`, keys, snapshots, faults and

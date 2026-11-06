@@ -131,6 +131,7 @@ class Ctx:
     vram: bool = False                        # graphics driver: stores to A000h mark rows (D9)
     driver_call: bool = False                 # jump into the per-frame graphics call (D9; none yet)
     ret_mismatch: str = "rt_ret_mismatch"     # a return check's mismatch branch (emit.py: local)
+    ret_jump: int | None = None               # near RET to a pushed continuation: its IP (ret-jumps.csv)
     far_ret_mismatch: str = "rt_ret_far_mismatch"
     bp_direct: bool = False                   # guarded copy: [bp+d] direct (region.py, R6)
     rep_hook: tuple[int, str] | None = None  # diagnostic-only slice check and exact restart
@@ -585,14 +586,27 @@ class Lowering:
             self.x_cf = False
 
     # -- D9 display: the graphics driver's stores to video memory ------------
+    def vram_segment(self, slot: str, skip: str) -> None:
+        """a0 := the byte distance of the segment in `slot` from A0000h when its
+        64 KiB window meets the 64000-byte frame (9001h-AF9Fh), else to `skip`.
+        X-Wing draws the lower half through segments above A000h."""
+        self.e(f"move.w {slot}(a6),d7")
+        self.e("sub.w #$a000-$0fff,d7")
+        self.e("cmp.w #$1f9e,d7")
+        self.e(f"bhi.s {skip}")
+        self.e("sub.w #$0fff,d7")
+        self.e("ext.l d7")
+        self.e("lsl.l #4,d7")
+        self.e("movea.l d7,a0")
+
     def vram_mark(self, m: Mem) -> None:
-        """Before a store to `m` in the graphics driver: if its segment is
-        A000h, rt_vram_mark widens the changed rows (d7 = offset, d6 = bytes)."""
+        """Before a store to `m` in FRONTEND or FLIGHT: if its segment's window
+        meets the frame, rt_vram_mark widens the changed rows (d7 = offset,
+        d6 = bytes, a0 = the segment's distance from A0000h)."""
         if m.seg == "cs":
             return
         skip = self.local()
-        self.e(f"cmp.w #$a000,{SEGSLOT[m.seg]}(a6)")
-        self.e(f"bne.s {skip}")
+        self.vram_segment(SEGSLOT[m.seg], skip)
         self.offset_d7(m)
         self.e(f"moveq #{m.width // 8},d6")
         self.e("jsr rt_vram_mark")
@@ -603,8 +617,7 @@ class Lowering:
         """Before `stos`/`movs` (ES:DI, CX elements under REP): the bytes the
         instruction will write, in the direction of `step`."""
         skip = self.local()
-        self.e("cmp.w #$a000,G_ES(a6)")
-        self.e(f"bne.s {skip}")
+        self.vram_segment("G_ES", skip)
         n = abs(step)
         if self.i.rep:
             self.e("moveq #0,d6")
@@ -1318,6 +1331,15 @@ class Lowering:
         wrap) -> d7; low words valid. `zx`: zero-extend d7 where that is one
         moveq; returns whether it did."""
         base = self.seg_base(m.seg)
+        if not (m.base or m.index) and (m.disp & 0xFFFF) <= 0xFFFC:
+            # one 68k access (the IRQ0 handler writes some far pointers, irq.py
+            # check_atomic): reversed memory reads segment:offset as a long
+            self.e(f"move.l ({sx(0x7FFC - (m.disp & 0xFFFF))},{base}),d6")
+            self.e("move.l d6,d7")
+            if zx:
+                self.e("clr.w d7")
+            self.e("swap d7")
+            return zx
         if not (m.base or m.index):
             if zx:
                 self.e("moveq #0,d7")
@@ -1584,12 +1606,12 @@ class Lowering:
     def string_body(self, step: int, end: str) -> None:
         i = self.i
         op, w = i.op, i.width
+        if self.c.vram and op in ("movs", "stos"):
+            self.vram_mark_string(step)     # first: it clobbers a0, a CS source's base
         src = self.seg_base(i.seg or "ds") if op in ("movs", "cmps", "lods") else None
         sz = SZ[w]
         add = f"{'addq' if step > 0 else 'subq'}.w #{abs(step)}"
         top = self.local()
-        if self.c.vram and op in ("movs", "stos"):
-            self.vram_mark_string(step)
         if i.rep:
             if step > 0 and op != "lods" and self.c.rep_hook is None:
                 self.e("tst.w d1")
@@ -1977,7 +1999,10 @@ class Lowering:
             if done:
                 self.e(f"bra {done}")
             self.at(nxt)
-        if self.c.program:
+        if self.c.program and self.c.complete:
+            self.e("jmp rt_stop_unknown")  # irq-hooks.csv: outside the traced targets
+            self.stats["stop_unknown site"] += 1
+        elif self.c.program:
             self.e(f"{how} rt_dispatch_far")
             self.stats["dispatcher exit"] += 1
         else:
@@ -2132,6 +2157,12 @@ class Lowering:
             self.pop("d7")
         if i.operands:
             self.sub_const(i.operands[0].value, "d4")
+        if self.c.ret_jump is not None and not far:
+            # ret-jumps.csv: the popped IP must be the proved continuation
+            self.e(f"cmp.w #{hx(self.c.ret_jump)},d7")
+            self.e(f"bne {self.c.ret_mismatch}")
+            self.goto_near(self.c.ret_jump)
+            return
         self.e("rts")
 
     def op_iret(self):

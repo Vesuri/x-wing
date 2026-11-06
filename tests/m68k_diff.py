@@ -210,6 +210,8 @@ class M68k:
             elif n in compute_services:  # d7=0: exact fallback, as x86
                 self.e.reg_write(U.M68K['d7'], 0)
                 self.e.reg_write(U.M68K['pc'], addr + 2)
+            elif n == "rt_vram_mark":      # D9 changed rows: no guest state (d6, d7, a0
+                self.e.reg_write(U.M68K["pc"], addr + 2)   # scratch); host_run checks it
             elif n.startswith("rt_hle_"):  # EQ: the guest code runs (as x86)
                 self.e.reg_write(U.M68K["sr"], self.r("sr") | 4)
                 self.e.reg_write(U.M68K["pc"], addr + 2)

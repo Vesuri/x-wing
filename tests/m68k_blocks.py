@@ -458,6 +458,7 @@ def cache_cases(p: emit.Program, h, m, addr, stop_names, one, bad, steps: int) -
     a reload, whose own store plants the RET; entries inside a cached cell."""
     loads = {}      # (op, segment) -> node, source register (None: the stack)
     sites = {}      # kind -> [(node, insn)]: byte/word movs to CS memory a cache may see
+    site_delta = {}  # (node, walk label) -> the region offset of the site's CS offset 0
     for mod, u in p.units.items():
         for off, i in sorted(u.insns.items()):
             if i.op in ("mov", "pop") and isinstance(i.operands[0], Reg) and \
@@ -466,9 +467,12 @@ def cache_cases(p: emit.Program, h, m, addr, stop_names, one, bad, steps: int) -
                      i.operands[1].name in D.REGS and i.operands[1].name not in ("sp", "bp")):
                 loads.setdefault((i.op, i.operands[0].name),
                                  ((mod, off), None if i.op == "pop" else i.operands[1].name))
-            if i.op == "mov" and isinstance(i.operands[0], Mem) and i.operands[0].seg == "cs" \
-                    and (i.operands[0].base or i.operands[0].index) \
-                    and p.ctx(mod, off, Counter()).code_regions:
+            regions = (i.op == "mov" and isinstance(i.operands[0], Mem) and i.operands[0].seg == "cs"
+                       and (i.operands[0].base or i.operands[0].index)
+                       and p.ctx(mod, off, Counter()).code_regions)
+            if regions:
+                for delta, _n, lab in regions:   # region offset = the site's CS offset + delta
+                    site_delta[((mod, off), lab)] = delta
                 a, b = i.operands
                 kind = ("word" if a.width == 16 else "plant" if isinstance(b, Imm) and b.value == 0xC3
                         else "imm" if isinstance(b, Imm) else "reg")
@@ -487,14 +491,17 @@ def cache_cases(p: emit.Program, h, m, addr, stop_names, one, bad, steps: int) -
         m.restore(out[5] | {a for a0, d in patches for a in range(a0, a0 + len(d))})
         return out[-1]
 
-    def site_store(kind, target, value, code_at, code):
-        """One generated CS store (its lowering and hook) of `value` at IP
-        `target`; False when no site of the kind stores that value."""
+    def site_store(kind, wl, q, value, code_at, code):
+        """One generated CS store (its lowering and hook) of `value` at offset
+        `q` of region `wl`, addressed in the site's own CS (its code_regions
+        delta); False when no site of the kind stores that value."""
         options = [(n, i) for n, i in sites.get(kind, ())
-                   if not isinstance(i.operands[1], Imm) or i.operands[1].value == value]
+                   if (n, wl) in site_delta and
+                   (not isinstance(i.operands[1], Imm) or i.operands[1].value == value)]
         if not options:
             return False
         node, i = h.rng.choice(options)
+        target = q - site_delta[(node, wl)]
         a, b = i.operands
         force = {}
         regs = [r for r in (a.base, a.index) if r]
@@ -511,10 +518,10 @@ def cache_cases(p: emit.Program, h, m, addr, stop_names, one, bad, steps: int) -
             bad.append(f"{emit.label(*node)} store: stop {info['stop']} err {info['err']}")
         return True
 
-    def hook(wl, code_at, code, q, word=False, kind=None, value=None, ip=None):
+    def hook(wl, code_at, code, q, word=False, kind=None, value=None):
         """The store at region offset q is in `code`: a generated site's own
         store of the same value (when `kind` names one), else the hook alone."""
-        if kind and h.rng.randrange(2) and site_store(kind, ip + q, value, code_at, code):
+        if kind and h.rng.randrange(2) and site_store(kind, wl, q, value, code_at, code):
             return
         info = run_aux(addr[f"{wl}_ww" if word else f"{wl}_wb"], {}, [(code_at, bytes(code))],
                        {"d6": q + word + 1})
@@ -546,7 +553,7 @@ def cache_cases(p: emit.Program, h, m, addr, stop_names, one, bad, steps: int) -
                     q = touched = h.rng.choice(movs)
                     w = h.rng.randrange(0x10000)
                     cur[q + 2:q + 4] = w.to_bytes(2, "little")
-                    hook(wl, code_at, cur, q + 2, word=True, kind="word", value=w, ip=u.ip_of(lo))
+                    hook(wl, code_at, cur, q + 2, word=True, kind="word", value=w)
                 elif kind in (1, 2):    # cells rewritten unseen after a load or smc_expose
                     if kind == 1:
                         node, src = h.rng.choice(loads)
@@ -565,20 +572,23 @@ def cache_cases(p: emit.Program, h, m, addr, stop_names, one, bad, steps: int) -
                         touched = max(touched, q)
                 # a quarter of the RETs where the cells end (never cached): the walk
                 # must not stop at an earlier, restored one
-                ends = [e - lo + sum(len(smc._parse(f)[0]) for f in chain[:j])
-                        for j in range(len(chain) + 1)]
+                # X-Wing's runs of mov cells continue past the region's last cell
+                # start (hi): a RET is planted at a cell start inside the region
+                ends = [q for q in (e - lo + sum(len(smc._parse(f)[0]) for f in chain[:j])
+                                    for j in range(len(chain) + 1)) if q <= hi - lo]
                 after = [j for j, q in enumerate(ends) if q > touched]
-                k = len(chain) if h.rng.randrange(4) == 0 else h.rng.choice(after)
+                if not after:
+                    continue
+                k = len(ends) - 1 if h.rng.randrange(4) == 0 else h.rng.choice(after)
                 at = ends[k]
                 old = cur[at]
                 cur[at] = 0xC3
-                hook(wl, code_at, cur, at, kind="plant", value=0xC3, ip=u.ip_of(lo))
+                hook(wl, code_at, cur, at, kind="plant", value=0xC3)
                 if not one(mod, u, cs, lo, cur, e, cur, until_ret(cur, e - lo, forms), "T_RET",
                            f"warm step {step} ({kind}), RET after {k} cells", cold=False):
                     m.e.write(addr[f"{wl}_plant"], b"\0\0")   # not run (it stores over its cells)
                 cur[at] = old
-                hook(wl, code_at, cur, at, kind=h.rng.choice(("reg", "imm")), value=old,
-                     ip=u.ip_of(lo))
+                hook(wl, code_at, cur, at, kind=h.rng.choice(("reg", "imm")), value=old)
             for e in h.rng.sample(entries, min(4, len(entries))):
                 chain = cells(data, e - lo, forms)
                 runs = [r for r in mov_runs(data, e - lo, chain) if r[2] >= 2]
@@ -630,7 +640,8 @@ def cache_cases(p: emit.Program, h, m, addr, stop_names, one, bad, steps: int) -
         # with all non-CS segments outside the code region throughout.
         e = entries[0]
         q = e - lo
-        force = dict(ds=0x3000, es=0x3000, ss=0x3000, sp=0x8000, bx=0x1000, ax=0x5A)
+        far = (p.smc_limit + 0xFFF) & ~0xFFF   # above the segment window: reaches no region
+        force = dict(ds=far, es=far, ss=far, sp=0x8000, bx=0x1000, ax=0x5A)
         for lowered in (False, True):
             code = bytearray(images[0])
             code[q:q + 13] = bytes.fromhex("888700008887010088870200c3")
@@ -641,7 +652,7 @@ def cache_cases(p: emit.Program, h, m, addr, stop_names, one, bad, steps: int) -
                 cold=False, force=force)
             code[q + 4] = 0x88
             if lowered:
-                assert any(site_store("reg", u.ip_of(e) + 4, 0x88, code_at, code)
+                assert any(site_store("reg", wl, q + 4, 0x88, code_at, code)
                            for _ in range(32)), "no lowered register restore exercised"
             else:
                 hook(wl, code_at, code, q + 4)
@@ -659,7 +670,7 @@ def cache_cases(p: emit.Program, h, m, addr, stop_names, one, bad, steps: int) -
             one(mod, u, cs, lo, code, e, code, 4, "T_RET", "boundary control warms", force=force)
             run_aux(addr["smc_expose"], {}, [], {})
             code[q + 2:q + 4] = b"\x10\x00"  # unseen patch while the cache is invalid
-            assert any(site_store("reg", u.ip_of(lo) + delta, 0, code_at, code)
+            assert any(site_store("reg", wl, delta, 0, code_at, code)
                        for _ in range(32)), "no lowered zero store exercised"
             one(mod, u, cs, lo, code, e, code, 4, "T_RET",
                 f"zero store outside region at {delta}", cold=False, force=force)
@@ -930,6 +941,14 @@ def main(argv=None, on_batch=None) -> int:
             elif stop == "rt_stop_unknown":
                 mip, mcs = info["d7"], cs
                 exits["stop"] += 1
+            elif stop == "rt_ret_mismatch" and (mod, run[-1]) in p.ret_jumps:
+                # a ret-jumps.csv RET popping another IP than its continuation stops
+                want_ip = u.insns[p.ret_jumps[(mod, run[-1])]].ip
+                if out["ip"] == want_ip:
+                    diffs.append(f"ret-jump popped its continuation {want_ip:04x}, 68k {stop}")
+                mip, mcs = out["ip"], cs
+                live = set()
+                exits["ret-jump stop"] += 1
             else:
                 diffs.append(f"stopped at {stop} pc={pc:x}"
                              + (" (68k instruction budget exhausted)" if stop is None else ""))
@@ -1106,6 +1125,35 @@ def main(argv=None, on_batch=None) -> int:
                 table_rows += 1
             assert targets == set(p.succ[(mod, site)]), ("table target set", row)
             roots.update(targets)
+        # X-Wing: the proved MS C switch tables (indirect.csv switch_targets, a set).
+        # The table is read from its first entry until every proved target has
+        # appeared; each entry read must be one, and runs to its own label.
+        switch_rows = 0
+        for (mod, site), (proved, _traced) in sorted(p.indirect.items()):
+            if not proved:
+                continue
+            u = p.units[mod]
+            operand = u.insns[site].operands[0]
+            assert operand.seg == "cs" and operand.width == 16 and operand.base and not operand.index
+            offset = u.off_of(u.cs[site], operand.disp, site)
+            want, seen, k = set(proved), set(), 0
+            while seen != want:
+                assert k < 512, ("switch table: targets not all in its first 512 entries", mod, site)
+                words = bytes(reloc[mod][offset:offset + 2 * (k + 1)])
+                ip = int.from_bytes(words[2 * k:2 * k + 2], "little")
+                target = (mod, u.off_of(u.cs[site], ip, site))
+                assert target in want, ("switch table entry not a proved target", mod, site, k)
+                if target not in seen:
+                    before = count[mod]
+                    block_cases(mod, [site], 2, {operand.base: 2 * k},
+                                memory=[((SEG0[mod] + u.cs[site]) * 16 + operand.disp, words)],
+                                expected=emit.label(*target))
+                    assert count[mod] - before == 2, ("switch entry not compared", mod, site, k)
+                    seen.add(target)
+                    switch_rows += 1
+                k += 1
+            assert want == set(p.succ[(mod, site)]), ("switch target set", mod, site)
+        print(f"proved switch tables: {switch_rows} targets compared")
         reached, todo = set(), list(roots)
         while todo:
             node = todo.pop()

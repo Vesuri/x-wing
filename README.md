@@ -39,6 +39,10 @@ make dos-oracle             # unpatched heavy-debug DOSBox-X for the differentia
 make test-x86               # gate 3: Capstone cross-check, Unicorn differential, sabotage (AmigaXDev's Unicorn)
 make gen                    # translate the root, both overlays and ADLIB.IMS to build/gen (audit, coverage)
 make test-m68k              # gate 4: G1 regeneration, 68020 differential, block test, guards, sabotage (vasm)
+make test-host              # gate 5 host: lockstep to m01 against its host reference
+make test-amiga             # gate 5: m01 replayed on the 68030 model (FS-UAE + GDB), then the host lockstep against it
+make test-amiga-live        # the production image runs to the m01 label in real time (no compare)
+make amiga                  # the Amiga executable (amiga/out/XWing.exe); amiga-sync: the sync build
 make dos-play               # play on a period 386; the copy protection is answered for you
 make extract-original-data  # Macintosh demo: both forks and Finder data into tmp/runtime-data
 make reference              # fresh volume, configure, restart, launch; prints REFERENCE PASS

@@ -182,17 +182,34 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
   - `src/platform/amiga/` without `compute_*`, `tfh_paula` and `Swotl.*` (which becomes
     `XWing.*`);
   - the vendored framework, Kalms c2p and `amiga/` harness scripts;
-  - `tests/host_run.py`, `amiga_replay.*`.
+  - `tests/host_run.py`, `irq_monitor.py`, `rep_replay.py`.
 - Adapt:
-  - the command tail and environment;
-  - copy-free EMS mapping;
+  - the command tail and environment; paths under `C:\XWING` and relative paths
+    resolve against the game directory; the `EMMXXXX0` device's open, IOCTL and close;
+    the BIOS data area from the m00 snapshot (CRTC base 03D4h included);
+  - EMS: SWOTL's map-by-copy is kept; a copy-free mapping is open work;
   - the frame boundary for D9 (X-Wing's per-frame call);
-  - INT 09h, as a guest handler if the census shows one;
-  - `translator/irq.py` to the music driver's INT 08h handlers (P4 generates without it);
+  - INT 09h: the BIOS's handler (the census shows no guest one);
+  - `translator/irq.py` to the music driver's INT 08h handlers, with the driver's
+    flight callback deferred and its request-0Fh stack copies allowed (owner decisions
+    2026-11-05, [design](design.md)); `tests/irq_monitor.py` checks every access;
   - dispatch residency by descriptor index, the cell-cache segment window and the
-    driver's load segment (`DRVSEG`) as P4 emits them.
-- Gate: the LucasArts logo drawn by generated code on the A1200 model. Host lockstep to
-  m1: service log, registers, RAM, framebuffer and DAC.
+    driver's load segment (`DRVSEG`) as P4 emits them; m01 dispatches none of the seven
+    CS:IPs that overlay rows share, so `tests/host_run.py` probes `rt_lookup` on each
+    with one overlay resident at a time;
+  - pointer state: none (X-Wing keeps no pointer state for `pointer_guest`);
+  - REP slices: the reference records where DOSBox-X restarts a REP
+    (`tools/reference.py --polls` adds `--rep-chunks`), and `tests/rep_replay.py`
+    replays them in a diagnostic host image so an interrupt inside a REP lands where it did;
+  - the Amiga replay (SWOTL's `tests/amiga_replay.*`, owner decision 2026-11-06): a
+    diagnostic image (`XWING_REPLAY`, sync mode) delivers the reference's interrupts at
+    their recorded poll points, its REP slices, VGA status reads (`trace/retrace.csv`)
+    and calendar inputs; no joystick and no real-video capture; the service history is
+    checked by a cumulative hash every 256 events and the REP slices are a varint stream,
+    so the image fits the 8 MB Fast RAM model.
+- Gate: the LucasArts logo drawn by generated code on the 68030 model: the replay
+  (`make test-amiga`) matches registers, RAM, DAC and the shown screen at m01. Host
+  lockstep to m1: service log, registers, RAM, framebuffer and DAC.
 
 ### P6. Whole game (gate 6)
 
