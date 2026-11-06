@@ -18,8 +18,8 @@ Checks every guest memory access of a host run against I2's footprint
   (recorded: the services that must mask the tick, I6); any other generated or
   runtime access fails;
 - song data: per byte, the ticks the handler read it in; a generated main write of
-  a byte between the handler's first and last read of that byte fails (song_races),
-  a service's is recorded.
+  a byte between the handler's first and last read of that byte fails (song_races)
+  unless its site declares the span sync (irq-sync.csv), a service's is recorded.
 X-Wing's songs are huge objects the driver walks by far pointers (irq.py
 SEGMENT_WORDS, SEGMENT_LOADS); their extent is not in a table the monitor could read,
 so S is bounded by the fixed classes and video memory, not by a song window.
@@ -161,7 +161,7 @@ class Monitor:
         """deliver_guest reached: an IRQ0 delivery when it returns to rt_irq_async_back
         (sync) or rt_irq_interrupt_back (async, I6)."""
         if self.h.u32(self.h.r("a7")) not in self.backs:
-            return
+            return False
         if self.dirty:
             self.layout()
         g = self.h.guest_regs(8)
@@ -174,6 +174,7 @@ class Monitor:
                   for n in ("rt_deliver_cs", "rt_deliver_ip"))
         self.entries[f"{cs:04X}:{ip:04X}"] += 1
         self.in_handler = True
+        return True
 
     def returned(self):
         if self.in_handler:
@@ -240,6 +241,10 @@ class Monitor:
             who = self.site(self.node(pc))
         else:
             who = self.symbol(pc)
+        if song and not hit and generated and not self.h.in_service \
+                and self.covered(self.node(pc), lin, size):
+            self.found[who] += 1        # a declared sync write (irq-sync.csv)
+            return
         if song:
             self.song_writes.append((lin, size, who, generated and not self.h.in_service, self.tick))
         if not hit:

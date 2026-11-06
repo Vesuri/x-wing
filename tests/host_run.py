@@ -14,7 +14,8 @@ interrupts at the translator's poll points, the VGA status reads recorded):
   registers at entry and at return (the tracer's svc/svc_ret events);
 - at the milestone label: guest registers and guest RAM (COMPARE ranges);
   dead stack is masked: bytes in the DEAD_STACK window below SS:SP at a
-  service call or hardware interrupt that the guest did not write afterwards (DOSBox-X's own code
+  service call or hardware interrupt (at an IRQ0 delivery to the guest handler, its
+  frame and proved stack depth) that the guest did not write afterwards (DOSBox-X's own code
   and the interrupt frame's FLAGS word leave other values there, open-work 24),
   and the FLAGS images of annotations/flags.csv PUSHFs until rewritten;
 - every machine byte outside COMPARE (and the IRQ0 handler's private stack)
@@ -419,7 +420,9 @@ class Host:
             g = self.guest_regs(0)
             top = g["ss"] * 16 + g["sp"]
             self.masked.update(range(top - DEAD_STACK, top))
+            self.irq_top = top
 
+        self.irq_top = None
         for n in ("rt_irq", "rt_bios_int08"):
             e.hook_range(U.HOOK_CODE, irq_entry, self.syms[n], self.syms[n])
 
@@ -428,7 +431,11 @@ class Host:
 
         @U.CODE_CB
         def irq_deliver(h, addr, size, user):
-            self.irq.deliver()
+            # The reference runs the IRQ0 handler on the interrupted stack: its
+            # frame and its proved depth there (irq-footprint.csv stack row) are
+            # dead below SS:SP; ours runs it on the private stack (I4).
+            if self.irq.deliver() and self.irq_top is not None:
+                self.masked.update(range(self.irq_top - 6 - self.irq.depth, self.irq_top))
 
         @U.CODE_CB
         def irq_back(h, addr, size, user):

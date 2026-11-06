@@ -855,6 +855,12 @@ void rt_int21(uint16_t cs, uint16_t ip)
     }
     switch (ah) {
     case 0x0d: break;  /* DOSBox disk reset preserves registers and search slots. */
+    case 0x0e:  /* select drive: only C:, the current one; reference: 26 logical drives */
+        if (AL(rt_r.dx) != 2) {
+            rt_unsupported("select of a drive other than C:", 0x21, cs, ip);
+        }
+        SET_AL(rt_r.ax, 0x1a);
+        break;
     case 0x19: SET_AL(rt_r.ax, 2); break;  /* current drive C: */
     case 0x2a: get_date(); break;
     case 0x47: get_directory(cs, ip); break;

@@ -294,7 +294,8 @@ a profile choice, `tools/outline_sites.py` from `build/gen/outline-sites.csv`),
 `tools/seg_repeat.py`), `irq-bounds.csv` (value bounds of variables that index
 the IRQ0 handler's accesses, and class extents, I2), `irq-ds.csv` (entries that return the
 caller's DS where the I2 analysis cannot see it; host runs check, I3) and `irq-sync.csv`
-(monitored accesses the I3 monitor found meeting the footprint: sync for the declared span).
+(monitored accesses the I3 monitor found meeting the footprint, or writing song bytes the
+handler reads: sync for the declared span).
 
 #### Tests
 
@@ -333,7 +334,9 @@ caller's DS where the I2 analysis cannot see it; host runs check, I3) and `irq-s
   guest writes are kept in memory); every software
   INT's registers at entry and return vs the tracer's service log; registers
   and RAM (environment MCB to A0000h) vs the snapshot, dead stack masked
-  (below SS:SP at a service, and the FLAGS image of an `annotations/flags.csv`
+  (below SS:SP at a service or hardware interrupt; at an IRQ0 delivery to the
+  guest handler, which the reference runs on the interrupted stack, its frame and
+  the depth `irq-footprint.csv` proves; and the FLAGS image of an `annotations/flags.csv`
   PUSHF, until the guest rewrites it); at m1b-logo the A0000h window and the
   DAC; machine bytes the guest read hold reference values; every guest
   access against the IRQ0 footprint (`tests/irq_monitor.py`, irq-plan I3:
