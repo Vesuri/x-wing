@@ -5,7 +5,8 @@ Output per module `build/gen/<module>.ir` (decoded IR listing) and
 `build/gen/support.s` (flag/BCD helpers) and `build/gen/program.s` (assembly root:
 state equates, runtime xrefs, module includes, dispatch table); never edited by hand
 (G1). Header: generator version, SHA-256 of the inputs (translator sources,
-tools/xwing_model.py, annotations/, the module file) and of the body.
+tools/xwing_model.py, annotations/ with prose columns as presence only, the
+module file) and of the body.
 Alignment pads (R8, emit.align) are sized here: the program is assembled
 with vasm and pads grown in two-byte steps until every requested residue
 is verified in the assembled object. Nonconvergence fails generation.
@@ -58,8 +59,28 @@ def inputs_digest(module: str) -> str:
         files.append(M.REF / module)
     for f in files:
         h.update(f.relative_to(image.REPO).as_posix().encode() + b"\0")
-        h.update(f.read_bytes())
+        h.update(digest_bytes(f))
     return h.hexdigest()
+
+
+# Prose columns the generator reads only for presence (emit.py: a compute row needs a
+# reason and an oracle): their text is digested as present or absent, so editing it
+# leaves the generated files fresh.
+PROSE = {"hle.csv": ("reason", "oracle")}
+
+
+def digest_bytes(f) -> bytes:
+    cols = PROSE.get(f.name) if f.parent == image.ANNOTATIONS else None
+    if not cols:
+        return f.read_bytes()
+    with f.open(newline="") as fh:
+        rows = list(csv.reader(fh))
+    at = [rows[0].index(c) for c in cols]
+    for r in rows[1:]:
+        for i in at:
+            if i < len(r):
+                r[i] = "1" if r[i] else ""
+    return "\n".join("\0".join(r) for r in rows).encode()
 
 
 def header(module: str, body: bytes) -> bytes:
