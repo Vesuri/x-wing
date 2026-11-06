@@ -38,6 +38,8 @@ G_DS	equ	1
 	xdef	rt_dispatch_near
 	xdef	rt_dispatch_far
 	xdef	rt_stop_unknown
+	xdef	rt_hle_copy_protection
+	xref	rt_hle_copy_protection_c
 	xdef	rt_run_guest
 	xdef	rt_vram_mark
 	xdef	rt_vdrv_return
@@ -320,6 +322,16 @@ rt_fault:
 	jsr	rt_fault_c
 	addq.l	#8,a7
 	bra	deliver_or_return
+
+; HLE copy_protection (annotations/hle.csv, protection.c): the protection
+; screen's call is replaced by a correct first answer. NE skips the call.
+; Clobbers d7 and a0; load_regs reloads the guest registers (AX = 1) and bases.
+rt_hle_copy_protection:
+	bsr	save_regs
+	jsr	rt_hle_copy_protection_c
+	bsr	load_regs
+	moveq	#1,d7
+	rts
 
 rt_halt:
 	bsr	save_regs

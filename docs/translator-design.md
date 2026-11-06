@@ -474,7 +474,8 @@ handler reads: sync for the declared span).
   Output `build/gen/irq-footprint.csv`; `t-irq-footprint` and its sabotage.
 - HLE (`annotations/hle.csv`, G3): at a range's first instruction
   `jsr rt_hle_<service>`; NE skips to the instruction after `last`, EQ runs
-  the guest code. `args`: up to two guest word registers (not SP, BP), in d7
+  the guest code. X-Wing's only entry is `copy_protection` ([port plan](port-plan.md),
+  P6); the SWOTL entries below are not used. `args`: up to two guest word registers (not SP, BP), in d7
   and d6. Both ends are leaders, the first's live-in includes the
   resume's, and a hook where the CCR holds live flags fails `make gen`. The
   block differential runs the guest path. Entries: `sfx_start` (observe

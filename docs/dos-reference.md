@@ -217,6 +217,8 @@ milestone can differ slightly between runs with equal pins, so they are reported
 | m02-title | none | Star Wars title, `menu` #2,000,000 and 100,000 later |
 | m03-question | Enter (skips the intro), Enter (freezes the glyphs) | "See Manual Page 11" |
 | m03c-wrong-answer | MASSASSI, Enter | The dialog stays and the field is cleared: the frame equals m03-question outside the text field |
+| m03p-protection-passed | BRIGGIA, Enter | The protection screen's return (`FRONTEND.OVL+79843`, 3273:0B03): the bypass oracle's reference |
+| m03q-protection-passed-late | none after: Enter (skips the intro), Enter later (`menu` #2,600,000: page 6), ITHOR typed slower, Enter | The same return after another question answered later: its bytes that differ from m03p's depend on the screen's timing |
 | m04-registration | BRIGGIA, Enter | Registration desk; the frame differs from m03-question |
 | m05-pilot-named | LUKE, Enter | Pilot record shown |
 | m06-concourse-pilot-saved | Pointer to the left door ("Enter Spaceport"), click | Concourse; `LUKE.PLT` is written on leaving the desk and pinned |

@@ -1,0 +1,12 @@
+first,last,reason
+0947:0011,0947:0011,"the root timer callback's countdown (class 0125 +11h; reference writer XWING.EXE +01351 at interrupt level), run out while the screen was shown: 0 in both correct-answer references"
+3926:0000,3926:0277,"the screen's window object, at the segment of its window pointer 3E9E:003C (reference writers FRONTEND.OVL +0A478..+0B360, the window code)"
+3A54:0004,3A54:0004,"the screen loop's mouse word (reference writer FRONTEND.OVL +09DEE, 0DCC:024E)"
+3A54:01AE,3A54:01B0,"the mouse position the screen's loop recorded (reference writer FRONTEND.OVL +10349)"
+3E9E:003C,3E9E:003F,"the screen's window pointer (reference writer 3273:35D1)"
+3E9E:0742,3E9E:074D,"the screen's text-field window pointers (reference writers FRONTEND.OVL +7C45A..+7C54B)"
+4229:5BE0,4229:5C1B,"the mouse code's state (0F4B; reference writers FRONTEND.OVL +0B494, +0B8DB, +0B8E7): the screen's mouse position"
+4229:5EEE,4229:5EF1,"a word pair the screen's loop wrote (reference writer FRONTEND.OVL +17A0E, 1BA9:009E)"
+4229:6E14,4229:6E59,"the arrow's rectangle at the screen's mouse position (DGROUP BSS, no module writer: INFERRED from its values)"
+4229:8A0E,4229:8B56,"the background under the arrow, 16 rows of 9 bytes at stride 20h (DGROUP BSS: INFERRED from its values)"
+522A:5000,522A:6FFF,"the music driver's data and channel state: equal in both correct-answer references, 146M instructions apart, so set while the screen ran and not by its duration (MEASURED)"

@@ -755,6 +755,41 @@ class Host:
               for lab in {t[0] for t, _ in steps} | {lab for _, lab, _, _ in self.irqs} | rep_labels}
         canon = {a: lab for lab, addrs in at.items() for a in addrs}
 
+        # --bypass: the copy-protection hook (annotations/hle.csv) replaces the
+        # screen. The reference's service events from the hook to the screen's
+        # return (its first snapshot, at the return site) are the screen's:
+        # they stand in the service log unrun, so the interrupts, REP slices
+        # and VGA reads after the return keep their service-event keys; the
+        # screen's own are dropped. From the hook on only the snapshot steps
+        # remain; the first is the return site itself.
+        self.bypass_n = None
+        if script and script.get("bypass"):
+            first_snapshot = len(script["keys"])
+            n1, want = script["bypass"]
+
+            @U.CODE_CB
+            def bypass(h, addr, size, user):
+                n0 = self.bypass_n = len(self.services)
+                for kind, regs in want[n0:n1]:  # in the host's form (guest_regs)
+                    f = regs["flags"]
+                    self.services.append((kind, dict(regs, cf=f & 1, zf=f >> 6 & 1,
+                                                     **{"if": f >> 9 & 1}, df=f >> 10 & 1)))
+                i = self.irq_i
+                while i < len(self.irqs) and self.irqs[i][0] < n1:
+                    i += 1
+                self.bypass_irqs = i - self.irq_i
+                del self.irqs[self.irq_i:i]
+                while self.retrace_i < len(self.retrace) and self.retrace[self.retrace_i][0] < n1:
+                    self.retrace_i, self.retrace_used = self.retrace_i + 1, 0
+                if rep is not None:
+                    while rep.index < len(rep.chunks) and rep.chunks[rep.index].service < n1:
+                        rep.index += 1
+                    rep.active = False
+                self.step, self.hits, self.release = max(self.step, first_snapshot), 0, None
+
+            a = self.syms["rt_hle_copy_protection"]
+            self.e.hook_range(U.HOOK_CODE, bypass, a, a)
+
         @U.CODE_CB
         def hit(h, addr, size, user):
             if self.step == len(steps):
@@ -1009,11 +1044,21 @@ def compare_ram(ram: bytes, ref: bytes, residency: Path, masked: set[int]) -> li
     return bad
 
 
-def compare_frame(ram: bytes, dac: bytes, snap: Path, size: int = FRAME[1] - FRAME[0]) -> list[str]:
+def compare_frame(ram: bytes, dac: bytes, snap: Path, size: int = FRAME[1] - FRAME[0],
+                  boxes: int = 0) -> list[str]:
+    """boxes: up to that many 16x16 boxes of differing pixels are the mouse arrow's
+    (--bypass: drawn at the screen's mouse position in the reference)."""
     planes = (snap / "vram.bin").read_bytes()
     lo = FRAME[0]
     ref = bytes(planes[((a & ~3) << 2) | (a & 3)] for a in range(size))
     bad = [a for a in range(size) if ram[lo + a] != ref[a]]
+    corners: list[tuple[int, int]] = []
+    for a in bad:
+        x, y = a % 320, a // 320
+        if not any(cx <= x < cx + 16 and cy <= y < cy + 16 for cx, cy in corners):
+            corners.append((x, y))  # raster order: the arrow's tip, its top-left
+    if boxes and len(corners) <= boxes:
+        bad = []
     out = [f"frame: {len(bad)} bytes differ, first at A000:{bad[0]:04X} ours "
            f"{ram[lo + bad[0]]:02x} reference {ref[bad[0]]:02x}"] if bad else []
     want = (snap / "dac.bin").read_bytes()
@@ -1081,13 +1126,17 @@ def compare_video(png: Path, snap: Path) -> list[str]:
             f"y={a // 320} shown {px[ox + 2 * (a % 320), oy + 2 * (a // 320)]}"]
 
 
-def check_capture(tag, regs, state, ram, dac, ref_regs, ref, snap, h) -> list[str]:
+def check_capture(tag, regs, state, ram, dac, ref_regs, ref, snap, h, exempt=None) -> list[str]:
     """Registers (state block: segments), RAM, framebuffer and DAC (dac None:
-    not compared) of one capture vs the snapshot."""
+    not compared) of one capture vs the snapshot. exempt (--bypass, bypass_exempt):
+    registers, frame boxes and machine bytes that are the screen's."""
     problems = []
+    exempt = exempt or {}
     seg = {"es": state[4:6], "ss": state[2:4], "ds": state[0:2]}  # G_ES +5, G_SS +3, G_DS +1
     regs = dict(regs, **{n: int.from_bytes(v, "big") for n, v in seg.items()})
     for n in REGS + ("es", "ss", "ds"):
+        if n in exempt.get("regs", ()):
+            continue
         if regs[n] != int(ref_regs[n], 16):
             problems.append(f"{tag}: register {n} {regs[n]:04x} reference {ref_regs[n]}")
     dead = sum(ram[a] != ref[a] for a in h.masked if a < len(ref))
@@ -1095,8 +1144,10 @@ def check_capture(tag, regs, state, ram, dac, ref_regs, ref, snap, h) -> list[st
     problems += [f"{tag}: {p}" for p in compare_ram(ram, ref, snap / "residency.csv",
                                                      h.masked)]
     if dac is not None:
-        problems += [f"{tag}: {p}" for p in compare_frame(ram, dac, snap)]
-    reads = sorted(a for a in h.machine_reads if a < len(ref) and ram[a] != ref[a])
+        problems += [f"{tag}: {p}" for p in compare_frame(ram, dac, snap, boxes=exempt.get("boxes", 0))]
+    lo, hi = exempt.get("machine", (0, 0))
+    reads = sorted(a for a in h.machine_reads if a < len(ref) and ram[a] != ref[a]
+                   and not lo <= a < hi)
     print(f"{tag}: machine bytes read by the guest {len(h.machine_reads)}, {len(reads)} differ")
     for a in reads[:20]:
         problems.append(f"{tag}: machine byte {a:05X} read by the guest: ours {ram[a]:02x} "
@@ -1112,10 +1163,24 @@ def main(argv=None) -> int:
     ap.add_argument("--label", action="store_true", help="print the milestone's label and exit")
     ap.add_argument("--sabotage", action="store_true",
                     help="each planted runtime fault (SABOTAGE) must fail the check")
+    ap.add_argument("--bypass", action="store_true",
+                    help="the copy-protection hook replaces the screen: lockstep to it, "
+                         "then the state at the milestone (its return) outside the screen's")
     args = ap.parse_args(argv)
     if args.label:
         print(milestone_script(args.milestone)["snapshots"][-1][0])
         return 0
+    if args.sabotage and args.bypass:
+        missed = []
+        for name, (what, *_) in BYPASS_SABOTAGE.items():
+            problems = check(args.milestone, args.timeout, None, None, bypass=True,
+                             bypass_sabotage=name)
+            print(f"bypass sabotage {name:9} ({what}): {len(problems)} problems, first: "
+                  f"{problems[0] if problems else '-'}", flush=True)
+            if not problems:
+                missed.append(name)
+        print(f"bypass sabotage: {'all caught' if not missed else 'MISSED ' + ' '.join(missed)}")
+        return 1 if missed else 0
     if args.sabotage:
         missed = []
         for name, what in SABOTAGE.items():
@@ -1126,7 +1191,7 @@ def main(argv=None) -> int:
                 missed.append(name)
         print("not caught: " + ", ".join(missed) if missed else "all sabotages caught")
         return 1 if missed else 0
-    problems = check(args.milestone, args.timeout, args.amiga, None)
+    problems = check(args.milestone, args.timeout, args.amiga, None, bypass=args.bypass)
     for p in problems:
         print(p)
     print(f"host run to {args.milestone}: {'ok' if not problems else 'FAIL'}")
@@ -1245,8 +1310,64 @@ def reference_clocks(trace):
     return calendar, clock
 
 
+# --bypass (annotations/hle.csv copy_protection; owner decision 2026-11-06): at the
+# protection screen's return, the state outside the screen's equals the reference's
+# after a correct first answer (m03p-protection-passed). The screen's state:
+# - the regions of tests/bypass-screen.csv, each with its evidence;
+# - bytes that differ between two correct-answer references (m03p and
+#   m03q-protection-passed-late: another question, frozen and answered later),
+#   which depend on when the screen's keys came (MEASURED at each check);
+# - the stack below SS:SP (the screen's frames);
+# - BX, CX, DX and ES, which the screen (MS C) need not preserve; the caller
+#   reads none of them before writing it (3273:0B03..0B18);
+# - the mouse arrow, drawn at the screen's mouse position: two 16x16 boxes;
+# - the EMS page frame E0000h..EFFFFh, which holds the pages the screen mapped last.
+BYPASS_TABLE = REPO / "tests/bypass-screen.csv"
+BYPASS_STACK = 0x200
+BYPASS_EXEMPT = {"regs": ("bx", "cx", "dx", "es"), "boxes": 2, "machine": (0xE0000, 0xF0000)}
+# Controls: each leaves a state a correct first answer does not, and must fail.
+BYPASS_SABOTAGE = {
+    "tries": ("a wrong try left ([6562h]:000E = 1)", 0x6562, 0x000E, 1),
+    "frozen": ("the glyphs not frozen ([6562h]:003A = 0)", 0x6562, 0x003A, 0),
+    "question": ("another question than the glyphs' ([6562h]:0E06 = 17)", 0x6562, 0x0E06, 17),
+}
+
+
+def bypass_masked(g: dict) -> set[int]:
+    def lin(so: str) -> int:
+        seg, off = so.split(":")
+        return int(seg, 16) * 16 + int(off, 16)
+    out = set()
+    for r in csv.DictReader(BYPASS_TABLE.open()):
+        out.update(range(lin(r["first"]), lin(r["last"]) + 1))
+    runs = []
+    for name in ("m03p-protection-passed", "m03q-protection-passed-late"):
+        found = sorted(RUNS.glob(f"ms-*-{name}"))
+        if not found:
+            raise SystemExit(f"no pinned run of {name}: python3 tools/reference.py {name}")
+        runs.append((found[-1] / f"trace/snap-{name}-0/ram.bin").read_bytes())
+    out.update(a for a in range(len(runs[0])) if runs[0][a] != runs[1][a])
+    top = g["ss"] * 16 + g["sp"]
+    out.update(range(top - BYPASS_STACK, top))
+    return out
+
+
+def bypass_return(trace: Path) -> int:
+    """--bypass: the service events before the reference's first snapshot, the
+    protection screen's return (reference/milestones.csv FRONTEND.OVL+79843)."""
+    n = 0
+    with events(trace) as f:
+        for r in csv.DictReader(f):
+            if r["kind"] in ("svc", "svc_ret"):
+                n += 1
+            elif r["kind"] == "snapshot":
+                return n
+    raise ValueError(f"{trace}: no snapshot event")
+
+
 def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None,
-          trace: Path | None = None, elf: Path | None = None) -> list[str]:
+          trace: Path | None = None, elf: Path | None = None, bypass: bool = False,
+          bypass_sabotage: str | None = None) -> list[str]:
     script = milestone_script(milestone)
     frame = script["frame"]
     trace = trace or host_reference(milestone)
@@ -1259,6 +1380,8 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     h = Host(image.M.REF, sabotage, elf=elf or rep_replay.host_image(rep.labels),
              retrace=retrace_runs(trace))
     h.calendar_date, h.file_clock = reference_clocks(trace)
+    if bypass:
+        script["bypass"] = (bypass_return(trace), reference_services(trace))
     label = script["snapshots"][-1][0]
     script["irqs"], script["releases"] = reference_inputs(trace, exact_releases=True)
     summary = dict(kv.split("=", 1) for kv in (trace / "summary.txt").read_text().split())
@@ -1268,6 +1391,13 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     t0 = time.monotonic()
     h.run(script, timeout)
     print(f"host run: {time.monotonic() - t0:.0f} s")
+    if bypass:
+        if h.bypass_n is None:
+            problems.append("bypass: the copy-protection hook was not reached")
+        else:
+            print(f"bypass: hook after {h.bypass_n} service events; the screen's "
+                  f"{script['bypass'][0] - h.bypass_n} service events and {h.bypass_irqs} "
+                  f"interrupts are the reference's only")
     try:
         rep.complete()
     except ValueError as error:
@@ -1282,7 +1412,7 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
         problems.append(h.display_miss)
     problems += h.irq.finish(REPO / "tmp/test" / f"irq-monitor-{milestone}{'-' + sabotage if sabotage else ''}.json")
     if h.stopped_at == label:
-        problems += check_opl(h, trace)
+        problems += check_opl(h, trace, counts=not bypass)
     marked = bytearray(64000)  # stored since the last present: still marked (rt_vram_rows)
     rows = h.mem(h.syms["rt_vram_rows"], 800)
     for y in range(200):
@@ -1308,9 +1438,25 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
         ref_regs = dict(kv.split("=") for kv in (snap / "regs.txt").read_text().split())
         ref = (snap / "ram.bin").read_bytes()
         g = h.guest_regs(0)
+        exempt = None
+        if bypass:
+            if bypass_sabotage:
+                seg, off, value = BYPASS_SABOTAGE[bypass_sabotage][1:]
+                a = int.from_bytes(h.gmem(g["ds"] * 16 + seg, 2), "little") * 16 + off
+                h.e.write(TOP - a - 1, struct.pack(">H", value))  # reversed: the high byte first
+            h.masked |= bypass_masked(g)
+            exempt = BYPASS_EXEMPT
+            # The question and its glyphs depend on when the glyphs froze (the timing
+            # mask): any question is a correct first answer's, but its glyphs must be
+            # the ones its table row holds (3273:3939, [6562h]:1222h + 6 * question).
+            base = int.from_bytes(h.gmem(g["ds"] * 16 + 0x6562, 2), "little") * 16
+            q = int.from_bytes(h.gmem(base + 0xE06, 2), "little")
+            if not q < 32 or h.gmem(base, 6) != h.gmem(base + 0x1222 + 6 * q, 6):
+                problems.append(f"bypass: question {q} and the glyphs "
+                                f"{h.gmem(base, 6).hex()} disagree")
         problems += check_capture("host", g, h.mem(STATE, 16), h.gmem(0, 0x100000),
                                   h.mem(h.syms["rt_dac"], 768) if frame else None,
-                                  ref_regs, ref, snap, h)
+                                  ref_regs, ref, snap, h, exempt)
         if amiga:
             regs = dict(kv.split("=") for kv in (amiga / "regs.txt").read_text().split())
             ga = {n: int(regs[n], 16) for n in REGS}

@@ -217,12 +217,24 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
 - Runtime surfaces complete, exit path included.
 - Lockstep clean over every milestone on the host and on FS-UAE (`make test-amiga`).
 - Copy-protection bypass:
-  - P2 locates the check routine and the state its result decides.
-  - The bypass is one `annotations/hle.csv` entry: the guest range, the reason (owner
-    decision 2026-11-01) and the oracle. The check's code is still translated.
-  - Oracle: from the bypass on, the port's state equals the reference's after the correct
-    answer, apart from bytes listed with evidence as the dialog's own. Lockstep continues
-    from there, and the wrong-answer control still diverges.
+  - The check is the protection screen, FRONTEND.OVL 3273:3470, called once from
+    3273:0AFF. It picks a question (`[6562h]:0E06`), shows its glyphs (`[6562h]:0000`),
+    freezes them (`:003A`), counts wrong tries (`:000E`) and returns AX = 1 when the
+    lowercased answer equals the question's code-name. No other code reads that state.
+  - The bypass is one `annotations/hle.csv` entry, `copy_protection`, at the call: the
+    screen is never built or shown, and `src/runtime/protection.c` leaves the state of a
+    correct first answer (the reference's question 16, page 11, BRIGGIA). The screen's
+    code is still translated.
+  - Oracle (owner decision 2026-11-06): `tests/host_run.py --milestone
+    m03p-protection-passed --bypass` runs in lockstep to the hook, then compares RAM and
+    registers at the return with the reference's after BRIGGIA. The screen's own state
+    is exempt with evidence (`tests/bypass-screen.csv`, bytes that differ between two
+    correct-answer references, the stack below SP, the scratch registers, the mouse
+    arrow, the EMS page frame). `--bypass --sabotage` leaves a wrong try, unfrozen glyphs
+    or another question, and each must fail. Byte-exact lockstep past the return cannot
+    hold: the skipped screen's EMS map calls leave the game's resource mapping
+    differently, so later milestones are checked from the bypass on separately (open
+    work).
 - Gate: all milestones in lockstep; zero unclassified; `indirect-coverage` reviewed; the
   bypass oracle passes.
 

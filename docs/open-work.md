@@ -7,26 +7,34 @@ first vertical slice (P5: `make test-amiga`, the Amiga replay and the host locks
 are in place.
 
 1. P1: the two milestones not yet reached ([DOS reference](dos-reference.md#not-yet-reached)).
-   The rest of P1 is in place: `make dos-reference` passes 17 pinned milestones.
+   The rest of P1 is in place: `make dos-reference` passes 19 pinned milestones.
    Acceptance:
    - A film-room replay: a flight is ended and its film played back in the film room.
    - A Star Destroyer battle, or the heaviest combat scene a reachable pilot state allows,
      chosen by a measured cost. Instructions per frame rank scenes only if the flight does
      not pace its frames, which is not yet known.
-2. The music driver's interrupt-level paths the P5 proof defers or allows
+2. P6: the milestones after the copy-protection screen, checked from the bypass on
+   ([port plan](port-plan.md), P6). The bypass is checked at the screen's return
+   (`tests/host_run.py --milestone m03p-protection-passed --bypass`), but the references
+   past it answer the screen, whose EMS map calls leave the resource mapping differently,
+   so byte-exact lockstep from the hook on fails at the first EMS map after the return.
+   Acceptance: m04-registration and the later milestones are reached by the bypassed port
+   with a check against the reference that holds across that mapping difference, and a
+   control in which the bypass leaves a wrong answer fails.
+3. The music driver's interrupt-level paths the P5 proof defers or allows
    ([design](design.md), owner decisions 2026-11-05).
    Acceptance: the driver's far callback (ADLIB.IMS +006B6, `annotations/irq-stops.csv`)
    runs at interrupt level in flight with the footprint proved through its re-entry into
    the driver, and the stack words that re-entry and request 0Fh queue (`irq.py`
    STACK_COPIES) equal the reference's in a host lockstep that queues them.
-3. Copy-free EMS mapping in place of SWOTL's map-by-copy (`src/runtime/ems.c`).
+4. Copy-free EMS mapping in place of SWOTL's map-by-copy (`src/runtime/ems.c`).
    Acceptance: no EMS map copies a page; the host lockstep to m01 still passes.
-4. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
+5. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
    `--seed 7` a walk case's x86 store faults at an unmapped address and the oracle then
    reads its recorded writes back, raising UC_ERR_READ_UNMAPPED (the same at P4's commit).
    Acceptance: `tests/m68k_blocks.py` completes for seeds 1–8; a faulting store is
    compared as an exception, not a crash.
-5. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh reference reach named milestones and
+6. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh reference reach named milestones and
    map its 68k CODE.
    Acceptance: a bounded run reaches a positively identified game state by guest state,
    writes a framebuffer read from video memory and a trap log, and reproduces their pinned

@@ -4,6 +4,8 @@ m01-logo,,60,,menu#600000 menu#100000,FRONTEND.OVL ADLIB.IMS,13,,
 m02-title,,60,,menu#2000000 menu#100000,FRONTEND.OVL ADLIB.IMS,13,,
 m03-question,,120,menu#400000=enter menu#2000000=enter,menu#1000000,FRONTEND.OVL,13,,
 m03c-wrong-answer,m03-question,160,menu#200000=m menu#200000=a menu#200000=s menu#200000=s menu#200000=a menu#200000=s menu#200000=s menu#200000=i menu#200000=enter,menu#1000000,FRONTEND.OVL,13,=m03-question@100 108 192 124,
+m03p-protection-passed,m03-question,160,menu#200000=b menu#200000=r menu#200000=i menu#200000=g menu#200000=g menu#200000=i menu#200000=a menu#200000=enter,FRONTEND.OVL+79843,FRONTEND.OVL,13,,
+m03q-protection-passed-late,,160,menu#400000=enter menu#2600000=enter menu#600000=i menu#300000=t menu#300000=h menu#300000=o menu#300000=r menu#300000=enter,FRONTEND.OVL+79843,FRONTEND.OVL,13,,
 m04-registration,m03-question,160,menu#200000=b menu#200000=r menu#200000=i menu#200000=g menu#200000=g menu#200000=i menu#200000=a menu#200000=enter,menu#1000000,FRONTEND.OVL,13,!=m03-question,
 m05-pilot-named,m04-registration,200,menu#400000=l menu#400000=u menu#400000=k menu#400000=e menu#400000=enter,menu#1000000,FRONTEND.OVL,13,,
 m06-concourse-pilot-saved,m05-pilot-named,240,menu#400000=mx-40 menu#10=my-40 menu#100000=mb1 menu#50000=mb0,menu#1500000 menu#500000,FRONTEND.OVL,13,,LUKE.PLT
