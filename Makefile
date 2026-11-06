@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live
+.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -21,6 +21,7 @@ help:
 	@echo 'make test-x86               gate 3: decoder cross-check, Unicorn differential, sabotage'
 	@echo 'make gen                    translate the in-scope modules -> build/gen (audit, coverage)'
 	@echo 'make gen-check              G1: headers, digests and byte-identical regeneration of build/gen'
+	@echo 'make gen-fresh              G1 headers and digests only (what make host and make amiga run)'
 	@echo 'make test-m68k              gate 4: gen-check, then 68020 differential, blocks, guards, sabotage'
 	@echo 'make host                   link generated program + runtime for Unicorn 68020 -> build/host/xwing.elf'
 	@echo 'make test-host              gate 5 host: lockstep to m01 against its host reference (tests/host_run.py)'
@@ -119,6 +120,10 @@ gen:
 	@$(ENV) python3 -m translator.gen
 gen-check:
 	@$(ENV) python3 -m translator.check gen --regen
+# The image builds need only fresh, unedited build/gen (G1 headers and digests);
+# the byte-identical regeneration is gen-check's, run by test-m68k.
+gen-fresh:
+	@$(ENV) python3 -m translator.check gen
 test-m68k: gen
 	@$(MAKE) -s gen-check
 	@$(MAKE) -s -k -j$(JOBS) $(M68K_TESTS)
@@ -162,7 +167,7 @@ build/host/%.o: src/runtime/%.c src/runtime/runtime.h src/runtime/platform.h
 	@$(ENV) $(CROSS)gcc $(RT_CFLAGS) -c -o $@ $<
 build/host/xwing.elf: $(HOST_OBJ)
 	@$(ENV) $(CROSS)ld -Ttext=0x10000 -e _start -o $@ $(HOST_OBJ)
-host: gen-check build/host/xwing.elf
+host: gen-fresh build/host/xwing.elf
 
 HOST_MILESTONES = m01-logo
 t-host-%:
@@ -179,9 +184,9 @@ test-host: host
 AMIGA_MILESTONE ?= m01-logo
 AMIGA_CPU       ?= 68030
 AMIGA_CAPTURE    = tmp/amiga-capture/$(AMIGA_MILESTONE)
-amiga: gen-check
+amiga: gen-fresh
 	@$(ENV) $(MAKE) -C amiga
-amiga-sync: gen-check
+amiga-sync: gen-fresh
 	mkdir -p build/amiga-sync && ln -sf ../../amiga/Makefile build/amiga-sync/Makefile
 	@$(ENV) $(MAKE) -C build/amiga-sync REPO=../.. SYNC=1
 test-amiga: host

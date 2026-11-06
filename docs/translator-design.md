@@ -265,8 +265,10 @@ diffs directly); relocated words in instructions are emitted as
 - Generated files: `build/gen/<module>.s`, `support.s` and `program.s`
   (equates, runtime xrefs, includes, dispatch table, `load_segment`,
   `overlay_table`), header = SHA-256 of translator sources, annotations and
-  input image (`make gen-check`). One assembly unit (`vasm -Felf`), linked
-  with the runtime: `make host` (`build/host/swotl.elf`), `make amiga`.
+  input image (`make gen-fresh`; `make gen-check` also regenerates and requires
+  byte-identical output). One assembly unit (`vasm -Felf`), linked with the
+  runtime: `make host` (`build/host/xwing.elf`), `make amiga`; both check only
+  `gen-fresh`.
 - Overlays (D2 = a): every translated module resident in native code; the
   guest's own PLINK manager runs translated and loads the overlay bytes into
   guest RAM (data, CS-relative reads, RAM equal to the reference).
