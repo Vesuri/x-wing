@@ -38,6 +38,10 @@ P5 adapted the rest to the first vertical slice:
   the other byte of a word slot. An unwritten word of the handler's own stack area is
   interrupted state; `DEAD_READS` names one whose value is unused and `STACK_COPIES`
   the two stores of such words the owner allowed (`docs/design.md`).
+  A byte variable at a constant address shifted by an immediate lowers to a load and a
+  `cas.b` that retries if the byte changed, so the CIA tick cannot split the x86
+  read-modify-write (the driver's random generator at G:0300); the check accepts that
+  form as one commit.
   `annotations/irq-hooks.csv` lists the indirect calls the handler reaches; each
   follows its traced targets and its generated call stops on any other.
   `annotations/irq-stops.csv` lists calls on a deferred interrupt-level path: the
@@ -281,7 +285,12 @@ diffs directly); relocated words in instructions are emitted as
 
 `entries.csv`, `indirect.csv` (site -> targets; written by `make map`),
 `tables.csv` (cs: word tables sized by evidence other than an MS C bounds
-check, read by the sweep), `runtime.csv` (MS C runtime entries: name,
+check, read by the sweep), `data-tables.csv` (near call sites whose target comes from a
+word table in a data segment: the table's module offset, entries and evidence; the sweep
+reads the words from the file into the site's proved targets), `code-pointers.csv`
+(far functions found statically by `make map`: far pointer constants `mov r,offset;
+mov r,seg` with the segment relocated and a prologue at the target, and prologues right
+after a decoded RETF; cfg seeds them, so they are far dispatch rows), `runtime.csv` (MS C runtime entries: name,
 class, evidence), `self-modifying.csv` (D16 regions and cell forms),
 `flags.csv` (PUSHF/POPF pairs that only save and restore FLAGS),
 `noreturn.csv` (X-Wing: calls with no fall-through, read by cfg and the sweep; the

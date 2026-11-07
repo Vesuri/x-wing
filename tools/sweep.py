@@ -106,6 +106,23 @@ def dispatch_tables() -> dict[tuple[str, int], int]:
         return {(r['module'], int(r['site'], 16)): int(r['entries']) for r in csv.DictReader(f)}
 
 
+def data_tables() -> dict[tuple[str, int], tuple[str, int, int]]:
+    """annotations/data-tables.csv: indirect near call/jmp sites whose target is read from
+    a word table in a data segment -> (table module, table module offset, entries). The
+    words are read from the module file; the rows' evidence shows the bound and that the
+    table is not written."""
+    with (M.REPO / 'annotations/data-tables.csv').open() as f:
+        return {(r['module'], int(r['site'], 16)):
+                (r['table'].split('+')[0], int(r['table'].split('+')[1], 16), int(r['entries']))
+                for r in csv.DictReader(f)}
+
+
+# A far function pointer built in registers (MS C: mov ax,offset; mov dx,seg; push dx;
+# push ax): two moves of an immediate, the second's a relocated segment, the target the
+# start of a function (enter, or push bp; mov bp,sp).
+PROLOGUES = (b'\xc8', b'\x55\x8b\xec')
+
+
 class Sweep:
     def __init__(self, mods: dict[str, M.Module], us: dict[str, Unit], bases: dict[str, dict[int, int]],
                  thunk_jumps: dict[int, int]):
@@ -127,7 +144,12 @@ class Sweep:
             self.noreturn = {(r['module'], int(r['offset'], 16)) for r in csv.DictReader(f)}
         self.smc_conflicts = 0
         self.curated = dispatch_tables()
+        self.data_tables = data_tables()
+        self.code_ptrs: set[tuple[str, int, str, int, int]] = set()  # load site -> target, CS
+        self.retf_funcs: set[tuple[str, int]] = set()            # far functions after a RETF
         self.index_unit = {int(n.split('#')[1]): n for n in us if '#' in n}
+        self.fixups = {f: set(mods[f].fixups) for f in self.cls}
+        self.fixups = {f: set(mods[f].fixups) for f in self.cls}
 
     def in_smc(self, file: str, off: int) -> bool:
         return any(lo <= off <= hi for lo, hi in self.smc.get(file, ()))
@@ -195,6 +217,9 @@ class Sweep:
         ops = i.operands
         if i.mnemonic not in ('jmp', 'call') or not ops or ops[0].type != x86.X86_OP_MEM:
             return
+        if (u.file, off) in self.data_tables:
+            self.data_table(u, off, seg)
+            return
         mem = ops[0].mem
         if i.reg_name(mem.segment) != 'cs' or mem.index:
             return
@@ -234,9 +259,77 @@ class Sweep:
         for t in targets:
             self.seed(u.name, t, f'switch {f}+{off:X}', seg)
 
+    def data_table(self, u: Unit, off: int, seg: int) -> None:
+        tm, to, n = self.data_tables[(u.file, off)]
+        data = self.mods[tm].data
+        if not 0 < n <= 512 or to + 2 * n > len(data):
+            self.conflicts.append((u.file, off, 'data table out of range'))
+            return
+        targets = []
+        for k in range(n):
+            ip, = struct.unpack_from('<H', data, to + 2 * k)
+            t = u.from_link(seg * 16 + ip)
+            if not u.has(t):
+                self.conflicts.append((u.file, off, f'data table entry {k} outside {u.name}'))
+                return
+            targets.append(t)
+        self.tables[(u.file, off)] = targets
+        for t in targets:
+            self.seed(u.name, t, f'switch {u.file}+{off:X}', seg)
+
+    def code_pointers(self) -> bool:
+        """Seed the far code pointers among the decoded instructions; True if any is new."""
+        new = False
+        for u in self.us.values():
+            ins = self.insn[u.file]
+            for at in [o for o in ins if u.has(o) and o - 3 in ins and ins[o].mnemonic == 'mov']:
+                n = len(self.code_ptrs)
+                self.code_pointer(u, at, ins[at - 3], ins[at])
+                new |= len(self.code_ptrs) > n
+        return new
+
+    def after_retf(self) -> bool:
+        """Seed the far functions that start right after a decoded RETF (MS C lays far
+        functions out back to back): an undecoded prologue there; True if any is new."""
+        new = False
+        for u in self.us.values():
+            cls, data = self.cls[u.file], self.mods[u.file].data
+            for at, i in list(self.insn[u.file].items()):
+                nxt = at + i.size
+                if i.mnemonic != 'retf' or not u.has(at) or not u.has(nxt) or cls[nxt] \
+                        or not any(data.startswith(p, nxt) for p in PROLOGUES):
+                    continue
+                if (u.file, nxt) not in self.retf_funcs:
+                    self.retf_funcs.add((u.file, nxt))
+                    self.seed(u.name, nxt, f'after retf {u.name}+{at:X}')
+                    new = True
+        return new
+
+    def code_pointer(self, u: Unit, at: int, prev, i) -> None:
+        """A far code pointer loaded by prev (offset) and i (segment, relocated)."""
+        fix = self.fixups[u.file]
+        if not (prev and prev.mnemonic == 'mov' and i.mnemonic == 'mov' and i.size == 3
+                and len(prev.operands) == 2 and prev.operands[1].type == x86.X86_OP_IMM
+                and prev.operands[0].type == x86.X86_OP_REG and prev.size == 3
+                and i.operands[1].type == x86.X86_OP_IMM and (at + 1) in fix):
+            return
+        seg, ip = i.operands[1].imm & 0xFFFF, prev.operands[1].imm & 0xFFFF
+        owners = self.resolve(u, seg * 16 + ip)
+        if len(owners) != 1:
+            return
+        t = self.us[owners[0]]
+        dst = t.from_link(seg * 16 + ip)
+        if not t.has(dst) or not any(self.mods[t.file].data.startswith(p, dst) for p in PROLOGUES):
+            return
+        if (u.file, at - prev.size, t.file, dst, seg) in self.code_ptrs:
+            return
+        self.code_ptrs.add((u.file, at - prev.size, t.file, dst, seg))
+        self.add_base(t.name, seg, seg * 16 + ip)
+        self.seed(t.name, dst, f'far pointer {u.name}+{at - prev.size:X}', seg)
+
     def run(self) -> None:
         """Drain the worklist; switch dispatches resolve once their bounds check is decoded."""
-        while self.work or self.switch_sites:
+        while self.work or self.switch_sites or self.code_pointers() or self.after_retf():
             while self.work:
                 self.flow(*self.work.pop())
             pending, self.switch_sites = self.switch_sites, []
@@ -425,10 +518,19 @@ def main() -> int:
             w.writerow(['module', 'offset', 'instruction', 'executed', 'switch_targets',
                         'traced_targets'])
             w.writerows(rows)
+    for path in [OUT / 'code-pointers.csv'] + ([M.REPO / 'annotations/code-pointers.csv'] if args.annotations else []):
+        with path.open('w', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(['module', 'offset', 'kind', 'target', 'segment'])
+            rows = [(mod, at, 'pointer', f'{tm}+0x{to:05x}', f'0x{seg:04x}')
+                    for mod, at, tm, to, seg in sw.code_ptrs]
+            rows += [(mod, nxt, 'after retf', f'{mod}+0x{nxt:05x}', '') for mod, nxt in sw.retf_funcs]
+            for mod, at, kind, t, seg in sorted(rows):
+                w.writerow([mod, f'0x{at:05x}', kind, t, seg])
     with (OUT / 'coverage.csv').open() as f:
         print(f.read(), end='')
     print(f'conflicts {len(set(sw.conflicts))} (+{sw.smc_conflicts} in self-modified regions), '
-          f'far refs {len(set(sw.far_refs))}, traces {len(traces)}')
+          f'far refs {len(set(sw.far_refs))}, code pointers {len(sw.code_ptrs)}, after retf {len(sw.retf_funcs)}, traces {len(traces)}')
     return 0
 
 

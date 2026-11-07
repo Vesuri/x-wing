@@ -3,3 +3,8 @@ ADLIB.IMS,0x00a1b,"INT 08h handler, installed by AX=2508h at +0093E..00A13; chai
 ADLIB.IMS,0x00978,"INT 08h calibration handler: mov dx,0978h; AX=2508h at +00938, counts ticks at [64h] while +0094D waits for 4, then the previous vector is restored at +00968 (MEASURED: interrupts.csv)"
 XWING.EXE,0x058e6,"continuation pushed as a return address: mov bx,0236h; push bx at +058BE (CS 056Bh), reached by ret at +05915 (MEASURED: edges.csv)"
 XWING.EXE,0x01198,"INT 00h (divide error) handler: AX=2500h with DS:DX = CS:0328h at +01174 (CS 00E7h); not raised in the corpus (MEASURED: interrupts.csv)"
+FRONTEND.OVL,0x6e7aa,"far callback of lcall es:[si+1Ch] at +0C28E: traced in unpinned runs (edges.csv), no pointer constant in the files; starts after a RETF without a prologue (MEASURED)"
+FRONTEND.OVL,0x6f06a,"far callback of lcall es:[si+1Ch] at +0C28E: traced in unpinned runs (edges.csv), no pointer constant in the files; starts after a RETF without a prologue (MEASURED)"
+FRONTEND.OVL,0x6f94c,"far callback of lcall es:[si+1Ch] at +0C28E: traced in unpinned runs (edges.csv), no pointer constant in the files; starts after a RETF without a prologue (MEASURED)"
+FRONTEND.OVL,0x70396,"far callback of lcall es:[si+1Ch] at +0C28E: traced in unpinned runs (edges.csv), no pointer constant in the files; starts after a RETF without a prologue (MEASURED)"
+FRONTEND.OVL,0x81804,"far callback of lcall es:[si+1Ch] at +0C28E: traced in unpinned runs (edges.csv), no pointer constant in the files; starts after a RETF without a prologue (MEASURED)"

@@ -16,3 +16,5 @@ ADLIB.IMS,0x01f1f,G,0x0984,0x0993,w,"the next record's +12h words (MEASURED: tes
 ADLIB.IMS,0x01f27,G,0x0974,0x0983,w,"the next record's +02h words (MEASURED: tests/irq_monitor.py at m03-question)"
 FRONTEND.OVL,0x0c74a,03DF,0x013a,0x01f9,w,"offset word of a far pointer stored into the driver's 30h-entry song table (03DF:013A, reached through the interface block at DS:6E2Ah +8) that the handler scans each tick (MEASURED: tests/irq_monitor.py at m03-question)"
 FRONTEND.OVL,0x0c74d,03DF,0x013a,0x01f9,w,"segment word of that far pointer (MEASURED: tests/irq_monitor.py at m03-question)"
+ADLIB.IMS,0x000c3,G,0x06d8,0x06d9,w,"the driver entry restoring the saved far pointer at [06D8h] after its request call (+0007A, 19 proved targets, DS not followed through them); the handler uses it too (MEASURED: tests/irq_monitor.py at m01-logo)"
+ADLIB.IMS,0x000c6,G,0x06da,0x06db,w,"its segment word (MEASURED: tests/irq_monitor.py at m01-logo)"

@@ -48,7 +48,8 @@ displacement lies in a footprint interval of its segment) or monitored (segment 
 offset unknown, or not reached; host runs check them, I3; annotations/irq-sync.csv
 declares the ones they found meeting it: sync for the declared span); the worst
 context counts. Song segments (S) are only located at run time (I3). A sync access to a
-handler-written byte must lower to one 68k instruction that touches memory, no
+handler-written byte must lower to one 68k instruction that touches memory (or a
+load and a CAS store that retries on change), no
 compute row may contain a sync access, and every main write of a bounded G
 variable must keep its irq-bounds.csv bound, else Violation.
 Output build/gen/irq-footprint.csv: kind (mem, port, if, hook, runtime, exit, extent,
@@ -1603,6 +1604,10 @@ class Proof:
                 self.errors.append(f"{site(n)}: lowering for the atomicity check failed: {e}")
                 continue
             mem = [x for x in lines if MEMLINE.search(x) and not x.strip().startswith("lea")]
+            # a load whose store is a CAS that retries on change (lower.shift) commits once
+            if [x.split()[0] for x in mem] == ["move.b", "cas.b"] and mem[0].strip() == \
+                    "move.b (a0),d6" and mem[1].strip() == "cas.b d6,d7,(a0)":
+                continue
             if len(mem) != 1:
                 self.errors.append(f"{site(n)}: {i} meets handler-written {cls}:{lo:04X}..{hi:04X} "
                                    f"in {len(mem)} 68k memory accesses ({'; '.join(m.strip() for m in mem)})")

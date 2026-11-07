@@ -1026,7 +1026,22 @@ class Lowering:
             count = "d7"
         many = n is not None and n != 1  # an immediate count but 1: OF undefined
         r = self.dest_reg(a) or "d6"
-        if r == "d6":
+        # A byte variable at a constant address shifted by an immediate: the x86 RMW is
+        # one instruction, which the CIA tick cannot split (D8), so the store is a CAS
+        # that retries if the byte changed since the load; the shift is then redone on
+        # the loaded byte in d6 for the result, CCR and X.
+        atomic = isinstance(a, Mem) and w == 8 and a.base is None and a.index is None \
+            and op in ("shl", "shr", "sar") and isinstance(cnt, Imm) and n <= 8
+        if atomic:
+            retry = self.local()
+            self.at(retry)
+            self.e("move.b (a0),d6")
+            self.e("move.b d6,d7")
+            self.e(f"{m68}.b {count},d7")
+            self.e("cas.b d6,d7,(a0)")
+            self.e(f"bne {retry}")
+            self.stats["atomic shift"] += 1
+        elif r == "d6":
             self.load_dest(a, "d6")
         self.e(f"{m68}.{sz} {count},{r}")
         self.x_cf = isinstance(cnt, Imm) and op in ("shl", "shr", "sar", "rcl", "rcr")
@@ -1066,7 +1081,7 @@ class Lowering:
             self.stats["full-flag materialization"] += 1
         if not self.c.fuse:
             self.ccr = set()
-        if r == "d6":
+        if r == "d6" and not atomic:
             self.store_dest(a, "d6")
         if skip:
             self.at(skip)

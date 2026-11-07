@@ -5,7 +5,8 @@ manifest/references.tsv) and adapted to X-Wing's overlay manager
 (docs/overlay-manager.md; the same unit and resolution rules as tools/sweep.py).
 
 Seeds (all from annotations/ and the images, no traces): MZ entry, the manager's thunks,
-`entries.csv`, `runtime.csv`, the switch and traced targets of `indirect.csv`. Follows
+`entries.csv`, `runtime.csv`, `code-pointers.csv` (far functions), the switch and traced
+targets of `indirect.csv`. Follows
 fall-through and direct near/far transfers; a call listed in `noreturn.csv` has no
 fall-through; a near RET listed in `ret-jumps.csv` continues at its target. Code is split into segment ranges: the root
 (without the overlay area), each overlay segment (its code bytes in its file, at its
@@ -121,6 +122,13 @@ def seeds(mods: dict[str, M.Module]) -> list[tuple[str, int, str, int | None]]:
         out.append((r["module"], int(r["offset"], 16), r["reason"], None))
     for r in image.rows("runtime.csv"):
         out.append((r["module"], int(r["offset"], 16), f"runtime {r['name']}", None))
+    for r in image.rows("code-pointers.csv"):   # far functions (tools/sweep.py)
+        mod, off = r["target"].split("+")
+        if r["kind"] == "pointer":                # a far pointer constant: its CS
+            out.append((mod, int(off, 16), f"far pointer {r['module']}+{r['offset']}",
+                        int(r["segment"], 16)))
+        else:                                     # after a RETF: the segment rule
+            out.append((mod, int(off, 16), f"after retf {r['module']}+{r['offset']}", None))
     for r in image.rows("indirect.csv"):
         site = f"{r['module']}+{r['offset']}"
         for col in ("switch_targets", "traced_targets"):
@@ -270,6 +278,9 @@ def build(mods: dict[str, M.Module] | None = None) -> dict[str, Unit]:
         d = _Descent(mods, rs, bases)
         for s in start:
             d.seed(*s)
+            if s[2].startswith("far pointer") and s[0] in d.units:  # a far entry: its CS is a base
+                r = d.units[s[0]].range_at(s[1])
+                d.add_base(r, s[3], r.to_link(s[1]))
         d.run()
         grown = {n: {b: min(bases[n].get(b, s), s) for b, s in {**d.far_entries[n], **bases[n]}.items()}
                  for n in bases}

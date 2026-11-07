@@ -1,0 +1,9 @@
+module,site,table,entries,evidence
+ADLIB.IMS,0x0007a,ADLIB.IMS+0x04d3c,19,"driver entry: cmp si,13h; jge at +00053, then [si+3Ch] of the driver's data segment (+04D00, DS 56FA at load 522A); file equals RAM at m12-m14 (MEASURED)"
+ADLIB.IMS,0x00ddf,ADLIB.IMS+0x04da0,26,"driver function table: cmp dx,1Ah; jl at +00D8C, then [bx+0A0h] of the driver's data segment into [bp-2]; kinds 0 and 2 (+00DCA, +00E0E) call here; file equals RAM at m12-m14 (MEASURED)"
+ADLIB.IMS,0x00e03,ADLIB.IMS+0x04da0,26,"driver function table as +00DDF; kinds 1 and 4 (+00DEA, +00E5A) call here (MEASURED)"
+ADLIB.IMS,0x00e4f,ADLIB.IMS+0x04da0,26,"driver function table as +00DDF; kinds 3 and 5 (+00E34, +00E6C) call here (MEASURED)"
+FLIGHT.OVL,0x1d959,XWING.EXE+0x3cddc,16,"[bx+2D6Ch] of DGROUP, bx a byte from the record (even, 0 skipped); 16 words to the next table at 2D8Ch; file equals RAM at m13 (bound INFERRED, contents MEASURED)"
+FLIGHT.OVL,0x1d969,XWING.EXE+0x3cddc,16,"as +1D959 (bound INFERRED, contents MEASURED)"
+FLIGHT.OVL,0x1da68,XWING.EXE+0x3cdfc,16,"[bx+2D8Ch] of DGROUP, bx a byte from the record (even, 0 skipped); 16 words, zero in the file after them; file equals RAM at m13 (bound INFERRED, contents MEASURED)"
+FLIGHT.OVL,0x1da78,XWING.EXE+0x3cdfc,16,"as +1DA68 (bound INFERRED, contents MEASURED)"
