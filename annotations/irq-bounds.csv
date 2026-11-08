@@ -1,2 +1,3 @@
 class,variable,width,lo,hi,reason
 0125,*,16,0x0011,0x0047,"the root timer callback's code-segment words: counters cs:0011..001A and the palette cycle it sends to DAC entry F4h, nine bytes from cs:[0019h]+1Bh, where cs:[0019h] steps by 9 below 2Dh (+01389..+0139B), so at most cs:0047 (DERIVED: the code); the proof's widening of the loop index is clamped here"
+3A07,0xd826,16,0x01fc,0x01fc,"the offset of the flight's far pointer to the driver entry pointer (FLIGHT.OVL +02EB1 stores it; the wrappers' les bx,[D826h]): 0C01h:01FCh, the root's dword the driver install sets to 522A:0000 (XWING.EXE +00A28) (MEASURED: every flight snapshot, ms-p2c m12-m14)"

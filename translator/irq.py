@@ -14,14 +14,16 @@ the song pointers SEGMENT_WORDS and SEGMENT_LOADS name, huge pointers with their
 carries), `BDA` (the BIOS tick the BIOS chain runs, rt_bios_int08), `K` (the
 interrupted stack), `NULL` (a null far pointer's segment, never dereferenced).
 Calls the handler reaches through a pointer follow their traced targets
-(annotations/irq-hooks.csv) and proved switch tables all entries; a call on a
-deferred path stops (annotations/irq-stops.csv). Unsigned and equality branches
+(annotations/irq-hooks.csv), or the one target a CONST_TABLES word gives (the driver
+image's, a known index; I3 fails any write into those tables), and proved switch tables
+all entries; a call on a deferred path stops (annotations/irq-stops.csv). A register
+half keeps a known low byte under an unknown high byte (`q`). Unsigned and equality branches
 after cmp r16,imm narrow the register on each edge. Indexed offsets are ranges; loads of annotations/irq-bounds.csv variables
 take its bounds, and accesses of a class with an extent row (`*`) are clamped to it
 (I3's monitor checks every handler access against the footprint).
 Proved, else Violation: no interrupted register, flag or stack word is read but
-to save it (a push or its copy; STACK_COPIES names the stores of unwritten handler
-words the owner allowed), every exit (IRET, or the chain to the BIOS
+to save it (a push or its copy), no unwritten word of the handler's stack area and no
+stack address is stored outside it, every exit (IRET, or the chain to the BIOS
 handler with the frame in place) has every register, SP and the frame as on entry,
 no DF read, every port in PORTS, no software interrupt, recursion or indirect
 transfer but the BIOS chain. A possible divide fault is listed (runtime row).
@@ -144,6 +146,10 @@ SEGMENT_WORDS = {
     ("G", 0x0E38): "S",                # the current event's huge song pointer (+025EC, +02658)
     ("G", 0x6D8): "3A07",              # the API caller's DS (+00022, +001F3), loaded around the
                                        # far callback (+006AA) (MEASURED: 4229h in flight, DGROUP)
+    ("3A07", 0xD828): "03DF",          # the segment of the flight's pointer to the driver entry
+                                       # pointer (FLIGHT.OVL +02EB4; les bx,[D826h] in its music
+                                       # wrappers): 0C01h, root paragraph 03DFh, whose word 01FCh
+                                       # holds the driver entry (MEASURED: flight snapshots)
     ("0125", 0x0015): "3A07",          # the root timer callback's DGROUP (XWING.EXE +01356)
                                        # (MEASURED: 4229h at m01 and in flight)
 }
@@ -161,6 +167,7 @@ def para_name(mod: str, para: int) -> str:
 
 # Class aliases for the segment-word table: G is the driver's DS, its
 # load paragraph 04D0 (ADLIB +00BEF mov ax,04D0h; MEASURED: G = DRVSEG + 04D0h)
+GAME_DS_PARA = 0x04D0
 CLASS_ALIAS = {"A04D0": "G"}
 
 # Segment loads: (module, offset) -> class of the segment word the instruction loads,
@@ -183,17 +190,23 @@ DEAD_READS = {
                                   # and that match wrote DI (+011AB) (DERIVED: the code)
 }
 
-# Stack copies: handler stores of a word of its own stack area it never wrote on the
-# path (an unwritten handler-local, X). On DOS the word is what the interrupted program
-# left below its SP; in the port, the private stack's. Allowed at these sites only and
-# listed in the footprint; the host lockstep's RAM compare fails if a copied word
-# differs (owner decision 2026-11-05, docs/design.md; open work)
-STACK_COPIES = {
-    (DRIVER, 0x02B4D): "request 0Fh: the tick (+02C79) pushes two locals only the other "
-                       "requests write (+02C71, +02C76); the voice table's entry 0Fh is the "
-                       "enqueue (+02AF4, MEASURED: image, m01, flight), which copies them",
-    (DRIVER, 0x02B6D): "the same request record's next word",
+# Constant tables: (class, first, last) of G words the driver image initialises and no
+# code writes (only indexed loads read them). A handler load at a known offset gives
+# the image's word; a call through one keeps that target of its irq-hooks.csv row.
+CONST_TABLES = {
+    ("G", 0x003C, 0x0061): "the API function table (19 near pointers) the driver entry "
+                           "(+0005A) and its far dispatcher (+00114) index by a request's "
+                           "low byte (DERIVED: the code; no store addresses it, Proof "
+                           "check_const; MEASURED: the image's words in flight, ms-p2c m12)",
+    ("G", 0x00A0, 0x00D3): "the voice request functions (26 near pointers) the voice "
+                           "function +00D84 indexes by the request code (+00D98)",
+    ("G", 0x00D4, 0x00ED): "the voice requests' argument kinds (26 bytes, +00DA8) that "
+                           "select the case of its switch",
+    ("A0000", 0x0DBE, 0x0DC9): "that switch's six cases (jmp cs:[bx+0DBEh] at +00DB9) "
+                               "(all three: DERIVED: the code; MEASURED: the image's bytes in "
+                               "flight and at m01, ms-p2c m01, m12, m14)",
 }
+CONST_BASE = {"G": GAME_DS_PARA * 16, "A0000": 0}   # the classes' offsets in the driver image
 
 # -- abstract values -----------------------------------------------------------
 def rng(v, w):
@@ -205,6 +218,9 @@ def rng(v, w):
         return (v[1], v[2]) if v[2] <= mask(w) else (0, mask(w))
     if k in ("l", "s"):
         return 0, mask(w)
+    if k == "q":
+        a, b = rng(v[1], 8), rng(v[2], 8)
+        return (a[0] | b[0] << 8, a[1] | b[1] << 8) if w == 16 else a
     return None
 
 
@@ -223,7 +239,7 @@ def split(v, k):
             else ("r", 0, 0xFF)
     if t == "e":
         return ("h", v[1], k)
-    if t == "p":
+    if t in ("p", "q"):
         return v[1 + k]
     if t in ("l", "s"):
         return ("r", 0, 0xFF)
@@ -237,6 +253,9 @@ def combine(lo, hi):
         return ("e", lo[1])
     if lo[0] in TAINT or hi[0] in TAINT:
         return ("p", lo, hi)
+    if lo[0] == "c" and hi[0] != "c":
+        return ("q", lo, hi)    # a known low byte the range would lose (mov al,[bp+7]; cbw in
+                                # a register that held a segment); a known high byte stays a range
     a, b = rng(lo, 8), rng(hi, 8)
     return mk(a[0] | b[0] << 8, a[1] | b[1] << 8, 16)
 
@@ -257,7 +276,7 @@ def join(a, b):
         return ("s", a[1] | b[1])
     if {a[0], b[0]} == {"s", "c"} and (a if a[0] == "c" else b)[1] == 0:
         return ("s", (a if a[0] == "s" else b)[1] | {NULL})    # a null far pointer's segment
-    if a[0] in ("e", "p") or b[0] in ("e", "p"):
+    if a[0] in ("e", "p", "q") or b[0] in ("e", "p", "q"):
         return combine(join8(split(a, 0), split(b, 0)), join8(split(a, 1), split(b, 1)))
     if a[0] in TAINT or b[0] in TAINT or a[0] in ("sp", "s") or b[0] in ("sp", "s"):
         return X
@@ -266,7 +285,7 @@ def join(a, b):
 
 
 def widen(v):
-    return ("r", 0, 0xFFFF) if v[0] == "r" else v
+    return ("r", 0, 0xFFFF) if v[0] in ("r", "q") else v
 
 
 @dataclass
@@ -516,6 +535,14 @@ class Handler:
                     continue
                 if n in self.hooks:
                     targets = self.hooks[n]    # irq-hooks.csv: other targets stop
+                    t = ex[1] if kind == "call" else None
+                    ip = t if isinstance(t, int) else t[1] if isinstance(t, tuple) and t[0] == "c" else None
+                    if ip is not None:         # a known target (a CONST_TABLES word)
+                        one = (mod, u.off_of(u.cs[off], ip, off))
+                        if one not in targets:
+                            self.err(n, f"calls {site(one)}, not a traced target")
+                            continue
+                        targets = [one]
                 elif kind == "call":
                     t = ex[1]
                     if not isinstance(t, int):
@@ -644,6 +671,8 @@ class Handler:
             if not seg[1]:
                 self.err(n, "access through a null segment")
                 return X
+        # the driver's DS by its relocated paragraph (+00BEF mov ax,04D0h) is G
+        seg = ("s", frozenset(CLASS_ALIAS.get(c, c) for c in seg[1]))
         r = rng(off, 16)
         if r is None:
             self.err(n, f"offset {off} from interrupted state")
@@ -659,21 +688,34 @@ class Handler:
                     self.fp.mem[(cls, a, b, kind)].add(site(n))
             var = self.disp if self.disp is not None else lo
             if kind == "w":
-                if val == X and n in STACK_COPIES:
-                    self.fp.runtime[f"stack copy into {cls} (irq.py STACK_COPIES)"].add(site(n))
-                elif val is not None and val[0] in TAINT + ("sp",):
+                if val is not None and val[0] in TAINT + ("sp",):
                     self.err(n, f"stores {val} (interrupted state) to {cls}")
                 held = SEGMENT_WORDS.get((CLASS_ALIAS.get(cls, cls), var))
                 if held and (w != 16 or self.seg_value(n, val) != ("s", frozenset({held}))):
                     self.err(n, f"stores {val} into a segment word of class {held}")
                 continue
             got = ("l", cls, var)
-            if (cls, var, w) in self.bounds:
+            const = self.const_word(cls, lo, hi, w)
+            if const is not None:
+                got = const
+            elif (cls, var, w) in self.bounds:
                 got = mk(*self.bounds[(cls, var, w)], w)
             if n in SEGMENT_LOADS and w == 16:
                 got = ("s", frozenset({SEGMENT_LOADS[n]}))
             out = got if out is None else join(out, got)
         return out
+
+    def const_word(self, cls, lo, hi, w):
+        """A load at one known offset of a CONST_TABLES word: the driver image's."""
+        cls = CLASS_ALIAS.get(cls, cls)
+        if lo + w // 8 - 1 != hi:
+            return None
+        for (c, first, last) in CONST_TABLES:
+            if c == cls and first <= lo and hi <= last:
+                data = self.prog.units[DRIVER].module.data
+                at = CONST_BASE[c] + lo
+                return ("c", int.from_bytes(data[at:at + w // 8], "little"))
+        return None
 
     @staticmethod
     def seg_class(v):

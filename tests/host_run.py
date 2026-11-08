@@ -36,6 +36,7 @@ Exit 1 on any difference, a runtime stop or the time limit.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import gzip
 import csv
@@ -150,16 +151,18 @@ def events(trace: Path):
     return gzip.open(trace / "events.csv.gz", "rt")
 
 
-def reference_services(trace: Path) -> list[tuple[str, dict]]:
-    out = []
+def iter_services(trace: Path):
     with events(trace) as f:
         for r in csv.DictReader(f):
             if r["kind"] in ("svc", "svc_ret"):
                 vec, *kv = r["detail"].split()
                 regs = {k: int(v, 16) for k, v in (x.split("=") for x in kv)}
                 regs["vector"] = int(vec, 16)
-                out.append((r["kind"], regs))
-    return out
+                yield r["kind"], regs
+
+
+def reference_services(trace: Path) -> list[tuple[str, dict]]:
+    return list(iter_services(trace))
 
 
 def reference_inputs(trace: Path, *, exact_releases: bool = False) -> tuple[list, list]:
@@ -235,6 +238,7 @@ SABOTAGE = {
     "irq-sentinel": "rt_irq_async expects another sentinel CS:IP than its frame holds (I4)",
     "keyon": "rt_out8 counts no AdLib key-on edge (its addq dropped)",
     "resident": "the descriptors' resident bit ignored (machine.c resident: every row resident)",
+    "song-requests": "the monitor counts no driver request (song buffer reloads become races)",
 }
 
 
@@ -442,9 +446,29 @@ class Host:
             self.irq.returned()
 
         e.hook_range(U.HOOK_CODE, irq_deliver, self.syms["deliver_guest"], self.syms["deliver_guest"])
+
+        # the music driver's flight callback (FLIGHT.OVL +19424, called by ADLIB.IMS
+        # +006B6 from the tick) and the request-0Fh enqueue's stores of argument
+        # words (+02B4D, +02B6D) at interrupt level: the lockstep must run them
+        # where the reference did (translator/irq.py; docs/design.md)
+        self.irq_counts = Counter()
+        for name, what in (("FLT_19424", "callback"), ("AD_02B4D", "enqueue"), ("AD_02B6D", "enqueue")):
+            if name in self.syms:
+                @U.CODE_CB
+                def count(h, addr, size, user, what=what):
+                    self.irq_counts[what + (" irq" if self.irq.in_handler else " main")] += 1
+                e.hook_range(U.HOOK_CODE, count, self.syms[name], self.syms[name])
         for n in ("rt_irq_async_back", "rt_irq_interrupt_back"):
             if n in self.syms:
                 e.hook_range(U.HOOK_CODE, irq_back, self.syms[n], self.syms[n])
+
+        # a main-code driver request (the API entry, ADLIB.IMS +0000): song reuse
+        # boundaries for the monitor's race check
+        @U.CODE_CB
+        def driver_request(h, addr, size, user):
+            if self.sabotage != "song-requests":
+                self.irq.request()
+        e.hook_range(U.HOOK_CODE, driver_request, self.syms["AD_00000"], self.syms["AD_00000"])
 
         # memory watch from the guest entry on (rt_start's own writes are not watched)
         self.in_service = False
@@ -824,6 +848,23 @@ class Host:
             a = self.syms["rt_hle_copy_protection"]
             self.e.hook_range(U.HOOK_CODE, bypass, a, a)
 
+        # --screen: the hook returns Z set, so the generated code goes on with the
+        # call it replaces and the translated protection screen runs on the
+        # reference's keys (annotations/hle.csv; byte-exact lockstep through it)
+        if script and script.get("screen"):
+            @U.CODE_CB
+            def screen(h, addr, size, user):
+                sp = self.r("a7")
+                self.e.reg_write(U.M68K["a7"], sp + 4)
+                self.e.reg_write(U.M68K["d7"], 0)
+                self.e.reg_write(U.M68K["sr"], self.r("sr") | 4)
+                self.e.reg_write(U.M68K["pc"], self.u32(sp))
+                self.screen_n = len(self.services)
+
+            self.screen_n = None
+            a = self.syms["rt_hle_copy_protection"]
+            self.e.hook_range(U.HOOK_CODE, screen, a, a)
+
         @U.CODE_CB
         def hit(h, addr, size, user):
             if self.step == len(steps):
@@ -1197,6 +1238,9 @@ def main(argv=None) -> int:
     ap.add_argument("--label", action="store_true", help="print the milestone's label and exit")
     ap.add_argument("--sabotage", action="store_true",
                     help="each planted runtime fault (SABOTAGE) must fail the check")
+    ap.add_argument("--screen", action="store_true",
+                    help="the copy-protection hook declines: the translated screen runs on the "
+                         "reference's keys, byte-exact lockstep through it (diagnostic)")
     ap.add_argument("--bypass", action="store_true",
                     help="the copy-protection hook replaces the screen: lockstep to it, "
                          "then the state at the milestone (its return) outside the screen's")
@@ -1225,7 +1269,10 @@ def main(argv=None) -> int:
                 missed.append(name)
         print("not caught: " + ", ".join(missed) if missed else "all sabotages caught")
         return 1 if missed else 0
-    problems = check(args.milestone, args.timeout, args.amiga, None, bypass=args.bypass)
+    if args.screen and args.bypass:
+        raise SystemExit("--screen and --bypass exclude each other")
+    problems = check(args.milestone, args.timeout, args.amiga, None, bypass=args.bypass,
+                     screen=args.screen)
     for p in problems:
         print(p)
     print(f"host run to {args.milestone}: {'ok' if not problems else 'FAIL'}")
@@ -1399,10 +1446,29 @@ def bypass_return(trace: Path) -> int:
     raise ValueError(f"{trace}: no snapshot event")
 
 
+BYPASS_MILESTONE = "m03p-protection-passed"
+
+
+def bypass_script(milestone: str, trace: Path) -> tuple[int, list]:
+    """--bypass: (service events to the protection screen's return, the
+    reference's service log). A milestone past the screen takes the return
+    from the BYPASS_MILESTONE reference; its own log must equal that
+    reference's up to there (the scripted runs repeat: tools/reference.py)."""
+    want = reference_services(trace)
+    if milestone == BYPASS_MILESTONE:
+        return bypass_return(trace), want
+    ret = host_reference(BYPASS_MILESTONE)
+    n = bypass_return(ret)
+    if any(a != b for a, b in zip(iter_services(ret), want[:n])):
+        raise SystemExit(f"bypass: {trace} differs from {ret} before the protection screen's return")
+    return n, want
+
+
 def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None,
           trace: Path | None = None, elf: Path | None = None, bypass: bool = False,
-          bypass_sabotage: str | None = None) -> list[str]:
+          bypass_sabotage: str | None = None, screen: bool = False) -> list[str]:
     script = milestone_script(milestone)
+    script["screen"] = screen
     frame = script["frame"]
     trace = trace or host_reference(milestone)
     snap = trace / f"snap-{milestone}-{len(script['snapshots']) - 1}"  # where the run stops
@@ -1415,7 +1481,7 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
              retrace=retrace_runs(trace))
     h.calendar_date, h.file_clock = reference_clocks(trace)
     if bypass:
-        script["bypass"] = (bypass_return(trace), reference_services(trace))
+        script["bypass"] = bypass_script(milestone, trace)
     label = script["snapshots"][-1][0]
     script["irqs"], script["releases"] = reference_inputs(trace, exact_releases=True)
     summary = dict(kv.split("=", 1) for kv in (trace / "summary.txt").read_text().split())
@@ -1444,6 +1510,13 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
         problems.append(f"VGA status: {h.retrace_left()} reference reads not made")
     if h.display_miss:
         problems.append(h.display_miss)
+    print("music driver at interrupt level: flight callback "
+          f"{h.irq_counts['callback irq']} runs, request 0Fh enqueue stores {h.irq_counts['enqueue irq']} "
+          f"(main code: {h.irq_counts['callback main']}, {h.irq_counts['enqueue main']})")
+    ran = (trace / "executed-ADLIB.IMS.bin").read_bytes()
+    if h.stopped_at == label and len(ran) > 0x6B6 and ran[0x6B6] and not h.irq_counts["callback irq"]:
+        problems.append("the reference ran the driver's flight callback (ADLIB.IMS +006B6); "
+                        "the host run never did at interrupt level")
     print(f"EMS: {h.ems_alias_reads} guest bytes read through a page mapped at two frame "
           f"pages, {len(h.ems_alias_bad)} differ from another copy")
     if h.ems_alias_bad:

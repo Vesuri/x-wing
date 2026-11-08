@@ -36,8 +36,14 @@ P5 adapted the rest to the first vertical slice:
   equality and unsigned branches after `cmp r16,imm` narrow the register, flags of
   interrupted state are tainted rather than fatal until read, and a byte write keeps
   the other byte of a word slot. An unwritten word of the handler's own stack area is
-  interrupted state; `DEAD_READS` names one whose value is unused and `STACK_COPIES`
-  the two stores of such words the owner allowed (`docs/design.md`).
+  interrupted state; `DEAD_READS` names one whose value is unused. No such word and no
+  stack address may be stored outside the stack. A register half keeps a known low byte
+  under an unknown high byte (`mov al,[bp+7]; cbw` after a segment in AX), so a
+  request's code stays constant through the driver entry. `CONST_TABLES` are driver
+  tables the image initialises and no code writes (the API and voice function tables
+  and the voice switch): a load at a known index gives the image's word and a call
+  through it keeps that one target of its `irq-hooks.csv` row; `tests/irq_monitor.py`
+  fails any write into them. The relocated paragraph 04D0h of the driver's DS is G.
   A byte variable at a constant address shifted by an immediate lowers to a load and a
   `cas.b` that retries if the byte changed, so the CIA tick cannot split the x86
   read-modify-write (the driver's random generator at G:0300); the check accepts that
@@ -45,8 +51,8 @@ P5 adapted the rest to the first vertical slice:
   `annotations/irq-hooks.csv` lists the indirect calls the handler reaches; each
   follows its traced targets and its generated call stops on any other.
   `annotations/irq-stops.csv` lists calls on a deferred interrupt-level path: the
-  generated call stops and the proof ends the path (the driver's flight callback,
-  `docs/design.md`). An `annotations/irq-sync.csv` row also covers an access the proof
+  generated call stops and the proof ends the path (none: the driver's flight callback
+  FLIGHT.OVL +19424 and its re-entries into the driver are hooks, `docs/design.md`). An `annotations/irq-sync.csv` row also covers an access the proof
   cannot type, such as a string instruction's implicit operand or an unreached site.
   The rows cover two root clears that run before the driver is loaded and the driver's
   pointer-argument routines that its requests call on the handler's data. The monitor
@@ -353,7 +359,9 @@ handler reads: sync for the declared span).
   DAC; machine bytes the guest read hold reference values; every guest
   access against the IRQ0 footprint (`tests/irq_monitor.py`, irq-plan I3:
   handler accesses inside it, main accesses meeting it only from sync
-  instructions, IF clear or services; record `tmp/test/irq-monitor-<run>.json`).
+  instructions, IF clear or services; a main write of a song byte the handler reads
+  before and after with no main-code driver request on either side is a race, a
+  buffer reloaded around requests is reuse; record `tmp/test/irq-monitor-<run>.json`).
   `make test-amiga` (`tests/amiga_replay.py`): the same at m01-logo on the 68030 model
   (A1200 chipset, FS-UAE, `amiga/milestone.gdb.in`) from a diagnostic replay image,
   plus the shown screen (bitplanes, colour table) decoded against the reference

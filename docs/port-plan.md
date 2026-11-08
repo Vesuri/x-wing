@@ -194,9 +194,9 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
     against the other copies (`EMS: ... differ`);
   - the frame boundary for D9 (X-Wing's per-frame call);
   - INT 09h: the BIOS's handler (the census shows no guest one);
-  - `translator/irq.py` to the music driver's INT 08h handlers, with the driver's
-    flight callback deferred and its request-0Fh stack copies allowed (owner decisions
-    2026-11-05, [design](design.md)); `tests/irq_monitor.py` checks every access;
+  - `translator/irq.py` to the music driver's INT 08h handlers, the driver's flight
+    callback and its re-entries included ([design](design.md)); `tests/irq_monitor.py`
+    checks every access;
   - dispatch residency by descriptor index, the cell-cache segment window and the
     driver's load segment (`DRVSEG`) as P4 emits them; m01 dispatches none of the seven
     CS:IPs that overlay rows share, so `tests/host_run.py` probes `rt_lookup` on each
@@ -239,6 +239,9 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
     hold: the skipped screen's EMS map calls leave the game's resource mapping
     differently, so later milestones are checked from the bypass on separately (open
     work).
+  - `tests/host_run.py --screen` (diagnostic): the hook declines, so the translated
+    screen runs on the reference's keys and the lockstep stays byte-exact through it
+    and on to the later milestones.
 - Gate: all milestones in lockstep; zero unclassified; `indirect-coverage` reviewed; the
   bypass oracle passes.
 

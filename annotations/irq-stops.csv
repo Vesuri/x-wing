@@ -1,2 +1,1 @@
 module,offset,reason
-ADLIB.IMS,0x006b6,"callf dword ptr [bp+4] in the API function +0067C, reached from the tick when song data names it: the far callback its arguments carry (traced to FLIGHT.OVL +19424, flight only). The callback re-enters the driver entry (+00000), which forwards seven argument words where the flight wrappers push two or three, so it queues words of the stack the tick runs on: the interrupted stack on DOS, the private one in the port. Deferred past P5 (owner decision 2026-11-05, docs/design.md): the generated call stops here, the proof ends the path"

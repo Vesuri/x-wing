@@ -10,19 +10,22 @@ Checks every guest memory access of a host run against I2's footprint
   lies in the footprint for its kind: the fixed classes (paragraphs at run time:
   the root's link paragraphs + the load segment, `A` and the driver's + DRVSEG,
   G = the word at DRVSEG:0911, BDA), song data (S, located at run time: a read of
-  conventional memory outside every fixed class), or the handler's stack from the
+  conventional memory outside every fixed class, or of the EMS page frame), or the handler's stack from the
   frame down by the proved depth (K);
 - in main code, an access that meets the footprint (a read of a handler-written
   byte, a write of a handler-accessed byte) comes from a sync instruction whose
   row covers the address, runs with guest IF clear, or from a runtime service
   (recorded: the services that must mask the tick, I6); any other generated or
   runtime access fails;
-- song data: per byte, the ticks the handler read it in; a generated main write of
-  a byte between the handler's first and last read of that byte fails (song_races)
-  unless its site declares the span sync (irq-sync.csv), a service's is recorded.
+- song data: per byte, the handler's reads; a generated main write of a byte the
+  handler read before and reads again after, with no main-code driver request (an
+  entry at ADLIB.IMS +0000, the API) between the earlier read and the write nor
+  between the write and the later read, fails (song races): the music played across
+  the write. A buffer the game loads, plays, leaves and reloads around requests is
+  reuse. A write declared sync (irq-sync.csv) passes; a service's is recorded.
 X-Wing's songs are huge objects the driver walks by far pointers (irq.py
 SEGMENT_WORDS, SEGMENT_LOADS); their extent is not in a table the monitor could read,
-so S is bounded by the fixed classes and video memory, not by a song window.
+so S is bounded by the fixed classes, video memory and the EMS frame, not by a song window.
 Records the sync sites hit, IF-clear accesses, services and song bytes in
 tmp/test/irq-monitor-<run>.json.
 """
@@ -39,29 +42,33 @@ REPO = Path(__file__).resolve().parents[1]
 FOOTPRINT = REPO / "build/gen/irq-footprint.csv"
 from translator.lower import DRVSEG  # noqa: E402
 GAME_DS_SLOT = DRVSEG * 16 + 0x911  # translator/irq.py GAME_DS_SLOT (linear)
-SONG_LIMIT = 0xA0000               # S: conventional memory only
+SONG_LIMIT = 0xA0000               # S: conventional memory,
+EMS_FRAME = (0xE0000, 0xF0000)     # and the EMS page frame (ems.c EMS_FRAME): a song the
+                                   # game keeps in EMS (MEASURED: m12-training-flight);
+                                   # its remaps are INT 67h services, which hold the tick off
 WRITTEN, ACCESSED, READ_OK, WRITE_OK, LAYOUT = 1, 2, 4, 8, 16
 LIMIT = 20
 # Runtime code that runs as an interrupt handler, not main code: the BIOS tick
 # (IRQ0 while IVT 08h is the BIOS's, and the end of the driver's chain)
 INTERRUPT_SIDE = {"bios_tick"}
 PRIVATE_STACK = (0xB000, 0x8000 - 6)   # runtime.h RT_IRQ_SS:RT_IRQ_SP, frame pushed
+# translator/irq.py CONST_TABLES: the proof takes their words from the driver image,
+# so no write may reach them (linear: G = DRVSEG + 04D0h, A0000 = DRVSEG)
+from translator.irq import CONST_BASE, CONST_TABLES  # noqa: E402
+CONST_SPANS = [(DRVSEG * 16 + CONST_BASE[c] + lo, DRVSEG * 16 + CONST_BASE[c] + hi, f"{c}:{lo:04X}")
+               for c, lo, hi in CONST_TABLES]
 
 
-def song_races(reads: dict[int, list], writes) -> list[str]:
-    """Generated main writes of a song byte between the handler's first and last
-    read of that byte. reads: linear -> [first tick, last tick, song]; writes:
-    (linear, size, who, generated, tick). A write after a byte's last read (a
-    reload of bytes already played) is no race."""
-    out = []
-    for lin, size, who, generated, tick in writes:
-        for a in range(lin, lin + size):
-            r = reads.get(a)
-            if generated and r and r[0] <= tick <= r[1]:
-                out.append(f"irq monitor: main write of {a:05X} into song {r[2]}'s buffer "
-                           f"at {who} (tick {tick}, byte read in ticks {r[0]}-{r[1]})")
-                break
-    return out
+def song_race(a: int, read: list, write: tuple, tick: int, epoch: int) -> str | None:
+    """The handler reads song byte a at tick (request epoch epoch) after a pending
+    generated main write (tick, epoch, the epoch of the byte's read before it, who):
+    a race when no request separates the earlier read, the write and this read. A
+    write no read follows (a reload of bytes already played) is no race."""
+    w_tick, w_epoch, r_epoch, who = write
+    if r_epoch == w_epoch == epoch:
+        return (f"main write of {a:05X} into song {read[2]}'s buffer at {who} "
+                f"(tick {w_tick}, read at ticks {read[1]} and {tick}, no driver request between)")
+    return None
 
 
 class Monitor:
@@ -98,7 +105,9 @@ class Monitor:
         self.mask = None
         self.dirty = True
         self.song_span = (1, 0)               # all song bytes read: quick reject
-        self.song_reads: dict[int, list] = {}  # linear -> [first tick, last tick, "S"]
+        self.song_reads: dict[int, list] = {}  # linear -> [first tick, last tick, "S", epoch]
+        self.song_pending: dict[int, tuple] = {}  # linear -> (tick, epoch, read epoch, who)
+        self.epoch = 0                        # main-code driver requests so far
         self.in_handler = False
         self.k = (0, -1)
         self.tick = 0
@@ -176,6 +185,11 @@ class Monitor:
         self.in_handler = True
         return True
 
+    def request(self):
+        """A main-code entry into the driver's API (ADLIB.IMS +0000)."""
+        if not self.in_handler:
+            self.epoch += 1
+
     def returned(self):
         if self.in_handler:
             self.in_handler = False
@@ -189,6 +203,15 @@ class Monitor:
             self.main_access(False, lin, size)
 
     def write(self, lin: int, size: int):
+        # the root's memset and the driver's load (INT 21h AX=4B03h) write them before
+        # the driver's install sets its DS slot
+        installed = self.word(GAME_DS_SLOT) if self.mask is not None else 0
+        for lo, hi, name in CONST_SPANS:
+            if installed and lin <= hi and lo <= lin + size - 1 and not self.h.in_service:
+                pc = self.h.r("pc")
+                where = self.site(self.node(pc)) if self.h.code[0] <= pc < self.h.code[1] else self.symbol(pc)
+                self.fail(f"write of {lin:05X} into the constant table {name} (irq.py CONST_TABLES) "
+                          f"at {where}")
         m = self.mask
         if self.in_handler or self.dirty or m is None:
             return self.access(True, lin, size)
@@ -210,9 +233,13 @@ class Monitor:
         for a in range(lin, lin + size):
             if self.k[0] <= a <= self.k[1] or self.mask[a] & need:
                 continue
-            if not write and a < SONG_LIMIT and not self.mask[a] & ACCESSED:
-                r = self.song_reads.setdefault(a, [self.tick, self.tick, "S"])
-                r[1] = self.tick
+            if not write and (a < SONG_LIMIT or EMS_FRAME[0] <= a < EMS_FRAME[1]) \
+                    and not self.mask[a] & ACCESSED:
+                r = self.song_reads.setdefault(a, [self.tick, self.tick, "S", self.epoch])
+                w = self.song_pending.pop(a, None)
+                if w and (race := song_race(a, r, w, self.tick, self.epoch)):
+                    self.fail(race)
+                r[1], r[3] = self.tick, self.epoch
                 lo, hi = self.song_span
                 self.song_span = (a, a) if lo > hi else (min(lo, a), max(hi, a))
                 continue
@@ -247,6 +274,11 @@ class Monitor:
             return
         if song:
             self.song_writes.append((lin, size, who, generated and not self.h.in_service, self.tick))
+            if generated and not self.h.in_service:
+                for a in range(lin, lin + size):
+                    r = self.song_reads.get(a)
+                    if r:
+                        self.song_pending.setdefault(a, (self.tick, self.epoch, r[3], who))
         if not hit:
             return
         if self.h.in_service or (not generated and who in INTERRUPT_SIDE):
@@ -283,7 +315,7 @@ class Monitor:
 
     # -- result ----------------------------------------------------------------
     def finish(self, out: Path | None) -> list[str]:
-        problems = list(self.problems) + song_races(self.song_reads, self.song_writes)
+        problems = list(self.problems)
         song = sorted(self.song_reads)
         record = dict(ticks=self.tick, handler_entries=dict(self.entries), g=self.g and f"{self.g:04X}",
                       sync_sites=dict(sorted(self.found.items())),
