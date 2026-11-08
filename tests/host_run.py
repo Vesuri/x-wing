@@ -563,6 +563,7 @@ class Host:
                 matches = [p for p in path.iterdir() if p.name.upper() == part] if path.is_dir() else []
                 path = matches[0] if matches else self.root / "\0"
             on_disk = path.is_file() and name not in self.deleted
+            is_dir = path.is_dir() and path != self.root / "\0"
         if n == "plat_alloc":
             size = (args[0] + 3) & ~3
             for i, (address, length) in enumerate(self.free_spans):
@@ -587,9 +588,11 @@ class Host:
             disk = {p.name for p in path.iterdir()
                     if p.is_file() and len(p.name) <= 12 and prefix + p.name.upper() not in self.deleted} \
                 if path.is_dir() else set()
+            dirs = {p.name + "/" for p in path.iterdir() if p.is_dir() and len(p.name) <= 12} \
+                if path.is_dir() else set()
             disk.update(w[len(prefix):] for w in self.written
                         if w.startswith(prefix) and "/" not in w[len(prefix):])
-            packed = b"".join(n.encode() + b"\0" for n in sorted(disk))
+            packed = b"".join(n.encode() + b"\0" for n in sorted(disk | dirs))
             fit = packed[:args[2]]
             fit = fit[:fit.rfind(b"\0") + 1]
             if fit:
@@ -598,8 +601,9 @@ class Host:
         elif n == "plat_file_info":
             if name in self.written:
                 self.e.write(args[1], struct.pack(">IHH", len(self.written[name]), *self.file_stamps[name]))
-            elif on_disk:
+            elif on_disk or is_dir:   # a directory: its host stat, as DOSBox-X's FindNext
                 self.e.write(args[1], struct.pack(">IHH", path.stat().st_size, *dos_file_stamp(path.stat().st_mtime)))
+                res = int(is_dir)
             else:
                 res = -1
         elif n == "plat_open":

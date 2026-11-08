@@ -228,15 +228,18 @@ int32_t plat_dir_names(const char *dir, char *buffer, uint32_t size)
             while (fib->fib_FileName[k] && k <= 12) {
                 ++k;
             }
-            if (fib->fib_DirEntryType >= 0 || k > 12) {  /* longer: not 8.3 */
+            int dir = fib->fib_DirEntryType > 0 && fib->fib_DirEntryType != ST_SOFTLINK;
+            if ((fib->fib_DirEntryType >= 0 && !dir) || k > 12) {  /* longer: not 8.3 */
                 continue;
             }
-            if ((uint32_t)bytes + k + 1 <= size) {
-                for (int c = 0; c <= k; ++c) {
+            if ((uint32_t)bytes + k + 1 + dir <= size) {
+                for (int c = 0; c < k; ++c) {
                     buffer[bytes + c] = fib->fib_FileName[c];
                 }
+                if (dir) buffer[bytes + k] = '/';
+                buffer[bytes + k + dir] = 0;
             }
-            bytes += k + 1;
+            bytes += k + 1 + dir;
         }
     }
     if (fib) {
@@ -255,11 +258,11 @@ int32_t plat_file_info(const char *path, struct plat_file_info *info)
     amiga_io_begin();
     BPTR lock = Lock((CONST_STRPTR)path, ACCESS_READ);
     struct FileInfoBlock *fib = AllocDosObject(DOS_FIB, 0);
-    if (lock && fib && Examine(lock, fib) && fib->fib_DirEntryType < 0) {
+    if (lock && fib && Examine(lock, fib) && fib->fib_DirEntryType != ST_SOFTLINK) {
         info->size = (uint32_t)fib->fib_Size;
         amiga_file_date(fib->fib_Date.ds_Days, fib->fib_Date.ds_Minute,
                         fib->fib_Date.ds_Tick, &info->dos_time, &info->dos_date);
-        found = 0;
+        found = fib->fib_DirEntryType > 0;
     }
     if (fib) {
         FreeDosObject(DOS_FIB, fib);

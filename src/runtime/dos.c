@@ -47,7 +47,7 @@ static void set_dta(uint16_t seg, uint16_t off)
 
 /* DOSBox's search slots are independent of the DTA and its pattern. */
 #define SEARCH_SLOTS 2048
-struct search_name { struct search_name *next; char name[13]; };
+struct search_name { struct search_name *next; char name[13]; uint8_t dir; };
 static struct { char directory[80]; struct search_name *remaining; uint8_t active; } searches[SEARCH_SLOTS];
 static uint16_t next_search;
 
@@ -74,6 +74,21 @@ static int name_order(const char *a, const char *b)
     return (uint8_t)*a - (uint8_t)*b;
 }
 
+/* DOSBox's FindFirst order (drive_cache.cpp SortByDirName): directories first,
+ * then by name. */
+static int entry_order(const struct search_name *a, const struct search_name *b)
+{
+    return a->dir != b->dir ? b->dir - a->dir : name_order(a->name, b->name);
+}
+
+static void search_insert(uint16_t slot, struct search_name *p)
+{
+    struct search_name **link = &searches[slot].remaining;
+    while (*link && entry_order(*link, p) < 0) link = &(*link)->next;
+    p->next = *link;
+    *link = p;
+}
+
 static void search_snapshot(uint16_t slot)
 {
     const char *dir = searches[slot].directory;
@@ -81,6 +96,16 @@ static void search_snapshot(uint16_t slot)
     char *names = bytes > 0 ? plat_alloc((uint32_t)bytes) : 0;
     if (bytes > 0 && (!names || plat_dir_names(dir, names, (uint32_t)bytes) != bytes)) {
         rt_stop("directory snapshot", slot, (uint32_t)bytes);
+    }
+    /* every game directory is a DOS subdirectory (C:\XWING...): DOSBox's host
+     * directory read gives its "." and ".." entries */
+    static const char *const dots[] = {".", ".."};
+    for (int d = 0; d < 2; ++d) {
+        struct search_name *p = plat_alloc(sizeof *p);
+        if (!p) rt_stop("directory snapshot allocation", slot, 0);
+        for (int k = 0; (p->name[k] = dots[d][k]) != 0; ++k) {}
+        p->dir = 1;
+        search_insert(slot, p);
     }
     for (int32_t at = 0; at < bytes;) {
         struct search_name *p = plat_alloc(sizeof *p);
@@ -90,10 +115,9 @@ static void search_snapshot(uint16_t slot)
             char c = names[at++];
             p->name[k] = c >= 'a' && c <= 'z' ? (char)(c - 32) : c;
         } while (p->name[k++]);
-        struct search_name **link = &searches[slot].remaining;
-        while (*link && name_order((*link)->name, p->name) < 0) link = &(*link)->next;
-        p->next = *link;
-        *link = p;
+        p->dir = k >= 2 && p->name[k - 2] == '/';  /* plat_dir_names marks a directory */
+        if (p->dir) p->name[k - 2] = 0;
+        search_insert(slot, p);
     }
     if (names) plat_free(names);
 }
@@ -101,14 +125,16 @@ static void search_snapshot(uint16_t slot)
 /* Names are snapshotted; as DOSBox, a FindNext matches the name first and
  * then reads the surviving file's metadata. New files cannot enter a search
  * already in progress. */
+/* The next snapshotted name: 1 a file, 2 a directory, 0 none left. */
 static int search_next(uint16_t slot, char *name)
 {
     struct search_name *p = searches[slot].remaining;
     if (!p) return 0;
     searches[slot].remaining = p->next;
     for (int k = 0;; ++k) { name[k] = p->name[k]; if (!name[k]) break; }
+    int kind = p->dir ? 2 : 1;
     plat_free(p);
-    return 1;
+    return kind;
 }
 
 uint16_t rt_psp(void)
@@ -748,7 +774,12 @@ static int find_next_entry(void)
     }
     fcb_form(spname, field_len(dta + DTA_SPNAME, 8), spext, field_len(dta + DTA_SPEXT, 3), pat);
     struct plat_file_info info;
-    while (search_next(slot, name)) {
+    int kind;
+    while ((kind = search_next(slot, name)) != 0) {
+        int dir = kind == 2;
+        if (dir && !(rd8(dta + DTA_SATTR) & 0x10)) {
+            continue;  /* DOSBox: a directory only for a search with attribute 10h */
+        }
         int n = 0;
         for (; name[n]; ++n) {
             name[n] = name[n] >= 'a' && name[n] <= 'z' ? (char)(name[n] - 32) : name[n];
@@ -758,6 +789,9 @@ static int find_next_entry(void)
             dot = name[k] == '.' ? name + k : dot;
         }
         int base = dot ? (int)(dot - name) : n, ext = dot ? n - base - 1 : 0;
+        if (name[0] == '.') {
+            base = n, ext = 0, dot = 0;  /* "." and "..": a name without extension */
+        }
         if (!fcb_form(name, base, dot ? dot + 1 : "", ext, fcb)) {
             continue;  /* not an 8.3 name: DOS cannot see it */
         }
@@ -773,10 +807,17 @@ static int find_next_entry(void)
         for (const char *d = searches[slot].directory; *d; ++d) path[at++] = *d;
         if (at) path[at++] = '/';
         for (int k = 0; k <= n; ++k) path[at + k] = name[k];
-        if (plat_file_info(path, &info) < 0) {
-            continue;  /* gone since the snapshot */
+        if (name[0] == '.') {
+            /* "." is the searched directory; ".." the game directory's parent is
+             * outside the game's files: the game directory stands for it */
+            at = 0;
+            for (const char *d = searches[slot].directory; *d; ++d) path[at++] = *d;
+            path[at] = 0;
         }
-        wr8(dta + DTA_ATTR, 0x20);  /* archive, as AH=43h */
+        if (plat_file_info(path, &info) != dir) {
+            continue;  /* gone since the snapshot, or no longer of its kind */
+        }
+        wr8(dta + DTA_ATTR, dir ? 0x10 : 0x20);  /* DOSBox: a directory, else archive (AH=43h) */
         wr16(dta + DTA_TIME, info.dos_time);
         wr16(dta + DTA_DATE, info.dos_date);
         wr32(dta + DTA_SIZE, info.size);

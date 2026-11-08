@@ -29,13 +29,14 @@ void plat_close(int32_t handle);
 uint32_t plat_calendar_date(void);
 /* Retain this explicit DOS timestamp when the open file is closed. */
 void plat_file_stamp(int32_t handle, uint32_t dos_time, uint32_t dos_date);
-/* The names of the files in directory `dir` (game-relative as above, "" the
- * game directory), up to 12 chars each, case as stored, NUL-terminated and
- * packed, in one directory pass: the bytes they need (0 for none or a missing
- * directory); only names that fit completely are written to buffer[size]. */
+/* The names of the files and directories in directory `dir` (game-relative as
+ * above, "" the game directory), up to 12 chars each, case as stored, a
+ * directory's followed by '/', NUL-terminated and packed, in one directory
+ * pass: the bytes they need (0 for none or a missing directory); only names
+ * that fit completely are written to buffer[size]. */
 int32_t plat_dir_names(const char *dir, char *buffer, uint32_t size);
-/* Metadata of file `path` (local calendar, DOS packed time/date); < 0 if it is
- * missing or not a file. */
+/* Metadata of file or directory `path` (local calendar, DOS packed time/date;
+ * the size the filesystem gives): 0 a file, 1 a directory, < 0 missing. */
 struct plat_file_info { uint32_t size; uint16_t dos_time, dos_date; };
 int32_t plat_file_info(const char *path, struct plat_file_info *info);
 /* PIT channel 0 now fires every `divisor` input clocks (1..65536, 1193182 Hz):
