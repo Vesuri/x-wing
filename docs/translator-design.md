@@ -244,7 +244,10 @@ diffs directly); relocated words in instructions are emitted as
   range checks retained (R22). Table rows (`program.s`): the cfg seeds (MZ
   entry, PLINK thunks, `runtime.csv`, `indirect.csv` targets) as (CS, IP,
   overlay id, far, label); overlays sharing an area share CS:IP, so the row whose
-  overlay is resident (PLINK record bit 15) wins; anything else stops.
+  overlay is resident (PLINK record bit 15) wins; anything else stops. A far
+  target CS:IP that two overlays share stays out of the compare chain and goes to
+  `rt_dispatch_far` (`FRONTEND.OVL+0A6D2`, 3273:1738 and one more); on a site with a
+  complete target set it is a generation error.
   `far` = 0 for a row seeded only as a target of indirect near `jmp`/`call`
   sites: `rt_dispatch_far` (and interrupt delivery, the guest entry) stops
   there (R14e).

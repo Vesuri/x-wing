@@ -932,14 +932,23 @@ class Program:
             near_t = tuple(u.ip_of(o) for m, o in sw + tr if m == mod and not self.region(m, o))
             smc_t = self.near_walks(mod, off)
         if i.op in ("jmpf", "callf") and not isinstance(i.operands[0], Far):
-            keys = []
+            keys, shared = [], set()
             for m, o in sw + tr:
                 if m not in self.units or o not in self.units[m].insns:
                     continue
                 k = (cs_expr(self.units[m].cs[o], m), self.units[m].ip_of(o))
+                if k in far_map and far_map[k] != label(m, o):
+                    shared.add(k)
                 far_map[k] = label(m, o)
                 keys.append(k)
-            far_t = tuple(keys)
+            # Overlays loaded in one area share CS:IP (dispatch_rows): such a
+            # target is the resident overlay's, which rt_dispatch_far picks.
+            if shared and (bool(sw) or (mod, off) in self.irq_hooks):
+                raise LowerError(f"{mod}+{off:05X}: a complete far target set shares CS:IP "
+                                 f"between overlays ({sorted(shared)})")
+            far_t = tuple(dict.fromkeys(k for k in keys if k not in shared))
+            for k in shared:
+                del far_map[k]
         if mod not in self.fixups:
             self.fixups[mod] = sorted(u.module.fixups)
         fx = self.fixups[mod]
