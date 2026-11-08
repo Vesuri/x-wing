@@ -31,6 +31,9 @@ DOSBox-X tag `dosbox-x-v2026.08.31` (`4f19017c`) is built by `make dos-emulator`
 - **`dosbox-x-xwing-retrace.patch`:** `XWING_RETRACE=1` logs every read of the VGA input
   status port 3DAh by module code to `retrace.csv`, as runs of one value per service-event
   interval; the host run answers its own reads from them.
+- **`dosbox-x-xwing-bypass.patch`:** `XWING_BYPASS=MODULE+HEX:LEN:QUESTION` applies the
+  port's copy-protection bypass (`src/runtime/protection.c`) at that call: the same state
+  writes, AX = 1, the call's LEN bytes skipped, and a `bypass` event.
 
 A second build of the same tag serves as an oracle and is never used for reference runs:
 `make dos-oracle` (`tools/build_dosbox_x_debug.sh`) builds it unpatched with
@@ -144,7 +147,9 @@ Options are SWOTL's:
   `--retrace` writes `retrace.csv` and `--rep-chunks` the REP slices (`rep.csv`: where
   DOSBox-X restarts a REP at the end of its cycle slice). `tools/reference.py --polls`
   adds both: the host references (`m00-entry`, `m01-logo`) are re-recorded whenever
-  generation changes the poll points.
+  generation changes the poll points. `--bypass` (`pc_run.py`) applies the port's
+  copy-protection bypass; `tools/reference.py --polls --bypass` passes it, from the
+  annotation's site and the bypass's question, for the bypassed host references.
 
 Outputs in `trace/`:
 - `events.csv.gz`: opens, reads, seeks, closes, `exec_overlay`, keys, snapshots, faults and
@@ -190,7 +195,10 @@ Bytes of a row past the end of a module's file or image count as "beyond".
 
 `make dos-reference` (`tools/reference.py`) runs `reference/milestones.csv`, one traced
 run with `--services` per milestone, six at a time. A milestone's keys are those of its
-`after` milestone followed by its own. Input sites:
+`after` milestone followed by its own. The `bypass` column marks the milestones past the
+copy-protection screen, which `--polls --bypass` records as bypassed host references
+(`hostb-*`): `drop` where the milestone's own keys are typed into the screen and are left
+out, `keep` otherwise. Input sites:
 - `menu`: `FRONTEND.OVL+1808E`, the frontend's mouse poll (INT 33h AX=3). It runs in busy
   loops, about 200,000 times per emulated second.
 - `frame`: `FLIGHT.OVL+1B7D2`, the flight's once-per-frame mouse poll.

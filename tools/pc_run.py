@@ -82,6 +82,8 @@ def main() -> int:
                         help='MODULE+HEX:N=name,...: log entry ms and N far-call stack words')
     parser.add_argument('--polls', type=Path,
                         help='translator poll points: hardware interrupts only there, logged')
+    parser.add_argument('--bypass', default='',
+                        help="MODULE+HEX:LEN:QUESTION: the port's copy-protection bypass at that call")
     parser.add_argument('--set', action='append', default=[], help='extra DOSBox-X setting')
     args = parser.parse_args()
 
@@ -95,7 +97,7 @@ def main() -> int:
                XWING_SNAPSHOTS=args.snapshots, XWING_EXIT_AFTER=args.exit_after,
                XWING_KEYS=args.keys)
     for var in ('XWING_JOYSTICK', 'XWING_RETRACE', 'XWING_SERVICES', 'XWING_OPL', 'XWING_PROBES', 'XWING_POLLS',
-                'XWING_KEY_HOLD', 'XWING_REP_CHUNKS', 'XWING_SCRIPT'):
+                'XWING_KEY_HOLD', 'XWING_REP_CHUNKS', 'XWING_SCRIPT', 'XWING_BYPASS'):
         env.pop(var, None)
     if args.joystick:
         env['XWING_JOYSTICK'] = '1'
@@ -111,6 +113,8 @@ def main() -> int:
         env['XWING_PROBES'] = args.probes
     if args.polls:
         env['XWING_POLLS'] = str(args.polls.resolve())
+    if args.bypass:
+        env['XWING_BYPASS'] = args.bypass
     if args.key_hold is not None:
         env['XWING_KEY_HOLD'] = str(args.key_hold)
     command = [str(DOSBOX), '-conf', str(CONF), '-nogui', '-nomenu', '-silent', '-fastlaunch',

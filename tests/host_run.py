@@ -848,6 +848,32 @@ class Host:
             a = self.syms["rt_hle_copy_protection"]
             self.e.hook_range(U.HOOK_CODE, bypass, a, a)
 
+        # --bypass past the screen: the hook runs as in the production image; the
+        # reference applied the same bypass at the same call (tools/reference.py
+        # --bypass). Control "answer": the bypass leaves AX = 0, a wrong answer.
+        self.bypass_hits = 0
+        if script and "bypassed" in script:
+            wrong = script["bypassed"] == "answer"
+            ret = self.syms[RETURN_SITE]
+            armed = []
+
+            @U.CODE_CB
+            def bypassed(h, addr, size, user):
+                if not self.bypass_hits:
+                    self.bypass_n = len(self.services)
+                self.bypass_hits += 1
+                armed.append(True)
+
+            @U.CODE_CB
+            def returned(h, addr, size, user):
+                if armed and wrong:
+                    self.e.reg_write(U.M68K["d0"], self.r("d0") & 0xFFFF0000)
+                armed.clear()
+
+            a = self.syms["rt_hle_copy_protection"]
+            self.e.hook_range(U.HOOK_CODE, bypassed, a, a)
+            self.e.hook_range(U.HOOK_CODE, returned, ret, ret)
+
         # --screen: the hook returns Z set, so the generated code goes on with the
         # call it replaces and the translated protection screen runs on the
         # reference's keys (annotations/hle.csv; byte-exact lockstep through it)
@@ -1026,27 +1052,44 @@ def trigger(spec: str) -> tuple[str, int, int]:
     return emit.label(mod, int(off, 16)), int(off, 16), int(n or 1)
 
 
-def milestone_script(name: str) -> dict:
+def milestone_script(name: str, bypassed: bool = False) -> dict:
     """reference/milestones.csv row: the run stops at the last snapshot trigger;
     keys (those of `after`, then its own: tools/reference.py) are pressed in order,
     each counted from the previous key's release (the tracer's rules); the frame
-    is compared at vga_mode 13."""
+    is compared at vga_mode 13. bypassed: the keys of a bypassed reference (those
+    typed into the screen left out: tools/reference.py --bypass)."""
     rows = {r["name"]: r for r in csv.DictReader(TABLE.open())}
     r = rows[name]
     keys = []
-    for k in R.keys(rows, name):
+    for k in R.keys(rows, name, bypassed):
         spec, _, key = k.rpartition("=")
         keys.append((trigger(spec), key if key.startswith(("mx", "my", "mb")) else key_code(key)))
     return {"keys": keys, "snapshots": [trigger(R.site(t)) for t in r["snapshots"].split()],
             "frame": r["vga_mode"] == "13"}
 
 
-def host_reference(milestone: str) -> Path:
-    """The newest host reference run's trace (tools/reference.py --polls)."""
-    runs = sorted(RUNS.glob(f"host-*-{milestone}"))
+def host_reference(milestone: str, bypassed: bool = False) -> Path:
+    """The newest host reference run's trace (tools/reference.py --polls; bypassed:
+    --polls --bypass, the port's copy-protection bypass applied in the reference)."""
+    runs = sorted(RUNS.glob(f"{'hostb' if bypassed else 'host'}-*-{milestone}"))
     if not runs:
-        raise SystemExit(f"no host reference for {milestone}: python3 tools/reference.py --polls {milestone}")
+        raise SystemExit(f"no host reference for {milestone}: python3 tools/reference.py --polls "
+                         f"{'--bypass ' if bypassed else ''}{milestone}")
     return runs[-1] / "trace"
+
+
+def reference_bypass(trace: Path) -> int:
+    """A bypassed reference: the service events before its one bypass event."""
+    n, at = 0, []
+    with events(trace) as f:
+        for r in csv.DictReader(f):
+            if r["kind"] in ("svc", "svc_ret"):
+                n += 1
+            elif r["kind"] == "bypass":
+                at.append(n)
+    if len(at) != 1:
+        raise SystemExit(f"{trace}: {len(at)} bypass events, not one")
+    return at[0]
 
 
 def retrace_runs(trace: Path) -> list[tuple[int, int, int]]:
@@ -1242,15 +1285,18 @@ def main(argv=None) -> int:
                     help="the copy-protection hook declines: the translated screen runs on the "
                          "reference's keys, byte-exact lockstep through it (diagnostic)")
     ap.add_argument("--bypass", action="store_true",
-                    help="the copy-protection hook replaces the screen: lockstep to it, "
-                         "then the state at the milestone (its return) outside the screen's")
+                    help="the copy-protection hook replaces the screen: at "
+                         f"{BYPASS_MILESTONE} lockstep to it, then the state at the return "
+                         "outside the screen's; past it, lockstep with the bypassed reference")
     args = ap.parse_args(argv)
     if args.label:
         print(milestone_script(args.milestone)["snapshots"][-1][0])
         return 0
     if args.sabotage and args.bypass:
         missed = []
-        for name, (what, *_) in BYPASS_SABOTAGE.items():
+        controls = BYPASS_SABOTAGE if args.milestone == BYPASS_MILESTONE else {
+            n: (w,) for n, w in BYPASS_LATE_SABOTAGE.items()}
+        for name, (what, *_) in controls.items():
             problems = check(args.milestone, args.timeout, None, None, bypass=True,
                              bypass_sabotage=name)
             print(f"bypass sabotage {name:9} ({what}): {len(problems)} problems, first: "
@@ -1447,6 +1493,9 @@ def bypass_return(trace: Path) -> int:
 
 
 BYPASS_MILESTONE = "m03p-protection-passed"
+RETURN_SITE = "FE_79843"   # the protection screen's return, 3273:0B03 (annotations/hle.csv)
+# Control past the screen: the bypass answers wrongly, and the lockstep must fail.
+BYPASS_LATE_SABOTAGE = {"answer": "the bypass leaves AX = 0, a wrong answer"}
 
 
 def bypass_script(milestone: str, trace: Path) -> tuple[int, list]:
@@ -1467,10 +1516,13 @@ def bypass_script(milestone: str, trace: Path) -> tuple[int, list]:
 def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None,
           trace: Path | None = None, elf: Path | None = None, bypass: bool = False,
           bypass_sabotage: str | None = None, screen: bool = False) -> list[str]:
-    script = milestone_script(milestone)
+    # past the screen (BYPASS_MILESTONE's return) the bypassed port runs in lockstep
+    # with the bypassed reference (owner decision 2026-11-08): no state is exempt
+    late = bypass and milestone != BYPASS_MILESTONE
+    script = milestone_script(milestone, bypassed=late)
     script["screen"] = screen
     frame = script["frame"]
-    trace = trace or host_reference(milestone)
+    trace = trace or host_reference(milestone, bypassed=late)
     snap = trace / f"snap-{milestone}-{len(script['snapshots']) - 1}"  # where the run stops
     # REP slices (rep_replay.py): a diagnostic image with REP hooks replays the
     # reference's decoder slices, so an interrupt inside a REP lands where it did
@@ -1480,8 +1532,10 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     h = Host(image.M.REF, sabotage, elf=elf or rep_replay.host_image(rep.labels),
              retrace=retrace_runs(trace))
     h.calendar_date, h.file_clock = reference_clocks(trace)
-    if bypass:
+    if bypass and not late:
         script["bypass"] = bypass_script(milestone, trace)
+    if late:
+        script["bypassed"] = bypass_sabotage
     label = script["snapshots"][-1][0]
     script["irqs"], script["releases"] = reference_inputs(trace, exact_releases=True)
     summary = dict(kv.split("=", 1) for kv in (trace / "summary.txt").read_text().split())
@@ -1491,7 +1545,15 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     t0 = time.monotonic()
     h.run(script, timeout)
     print(f"host run: {time.monotonic() - t0:.0f} s")
-    if bypass:
+    if late:
+        want_n = reference_bypass(trace)
+        if h.bypass_hits != 1 or h.bypass_n != want_n:
+            problems.append(f"bypass: the hook ran {h.bypass_hits} times, first after "
+                            f"{h.bypass_n} service events; the reference's after {want_n}")
+        else:
+            print(f"bypass: hook after {h.bypass_n} service events, the reference's at the same "
+                  "point; lockstep on from the return")
+    elif bypass:
         if h.bypass_n is None:
             problems.append("bypass: the copy-protection hook was not reached")
         else:
@@ -1525,7 +1587,7 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
                         f"at frame page {k}")
     problems += h.irq.finish(REPO / "tmp/test" / f"irq-monitor-{milestone}{'-' + sabotage if sabotage else ''}.json")
     if h.stopped_at == label:
-        problems += check_opl(h, trace, counts=not bypass)
+        problems += check_opl(h, trace, counts=not bypass or late)
     marked = bytearray(64000)  # stored since the last present: still marked (rt_vram_rows)
     rows = h.mem(h.syms["rt_vram_rows"], 800)
     for y in range(200):
@@ -1552,7 +1614,7 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
         ref = (snap / "ram.bin").read_bytes()
         g = h.guest_regs(0)
         exempt = None
-        if bypass:
+        if bypass and not late:
             if bypass_sabotage:
                 seg, off, value = BYPASS_SABOTAGE[bypass_sabotage][1:]
                 a = int.from_bytes(h.gmem(g["ds"] * 16 + seg, 2), "little") * 16 + off

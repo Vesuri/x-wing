@@ -33,6 +33,14 @@ are taken only there and logged as `irq` events, and with the VGA status reads t
 replays (`--retrace`, trace/retrace.csv) and the decoder slices of every REP at a poll
 point (`--rep-chunks`, trace/rep.csv). Their timing differs from the pinned
 runs, so the pins are not compared; the runs are named host-<time>-<id>-<milestone>.
+
+`--polls --bypass` records the bypassed host references (P6, owner decision 2026-11-08):
+the same runs with the port's copy-protection bypass applied at its call (annotations/hle.csv
+copy_protection, the question of src/runtime/protection.c; `--bypass` of tools/pc_run.py),
+so the screen is never shown. Only the milestones past the screen run (column `bypass`):
+`drop` marks a milestone whose own keys are typed into the screen and are left out of every
+bypassed key script, `keep` one whose keys are kept. The runs are named
+hostb-<time>-<id>-<milestone>.
 """
 
 from __future__ import annotations
@@ -40,6 +48,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import re
 import subprocess
 import sys
 import time
@@ -55,6 +64,19 @@ PINS = REPO / 'manifest/milestones.sha256'
 SITES = {'menu': 'FRONTEND.OVL+1808e', 'frame': 'FLIGHT.OVL+1b7d2'}
 PENDING_MAX = 4
 POLLS = REPO / 'build/gen/poll-points.csv'
+HLE = REPO / 'annotations/hle.csv'
+PROTECTION = REPO / 'src/runtime/protection.c'
+
+
+def bypass_spec() -> str:
+    """MODULE+HEX:LEN:QUESTION of the port's bypass: its annotation and its question."""
+    with HLE.open() as f:
+        row = next(r for r in csv.DictReader(f) if r['service'] == 'copy_protection')
+    first, last = int(row['first'], 16), int(row['last'], 16)
+    # push cs (1 byte at first) and call near (3 bytes from last): the bytes replaced
+    length = last - first + 3
+    question = re.search(r'#define QUESTION (\d+)', PROTECTION.read_text()).group(1)
+    return f"{row['module']}+{first:x}:{length:x}:{question}"
 
 
 def site(token: str) -> str:
@@ -64,10 +86,12 @@ def site(token: str) -> str:
     return token
 
 
-def keys(rows: dict[str, dict], name: str) -> list[str]:
+def keys(rows: dict[str, dict], name: str, bypass: bool = False) -> list[str]:
     m = rows[name]
-    before = keys(rows, m['after']) if m['after'] else []
+    before = keys(rows, m['after'], bypass) if m['after'] else []
     own = []
+    if bypass and m['bypass'] == 'drop':
+        return before
     for token in m['keys'].split():
         trigger, key = token.rsplit('=', 1)
         own.append(f'{site(trigger)}={key}')
@@ -97,7 +121,14 @@ def service_balance(trace: Path) -> tuple[int, int]:
     return got.get('svc', 0), got.get('svc_ret', 0)
 
 
-def run(base: str, rows: dict[str, dict], name: str, polls: bool = False) -> tuple[list[str], dict[str, str], Path]:
+def bypass_events(trace: Path) -> int:
+    return int(subprocess.run(
+        f'gzip -dc "{M.events_path(trace)}" | cut -d, -f2 | grep -c "^bypass$" || true',
+        shell=True, capture_output=True, text=True, check=True).stdout.strip() or 0)
+
+
+def run(base: str, rows: dict[str, dict], name: str, polls: bool = False,
+        bypass: bool = False) -> tuple[list[str], dict[str, str], Path]:
     m = rows[name]
     triggers = [site(t) for t in m['snapshots'].split()]
     names = [f'{name}-{i}' for i in range(len(triggers))]
@@ -105,9 +136,11 @@ def run(base: str, rows: dict[str, dict], name: str, polls: bool = False) -> tup
     cmd = [sys.executable, str(REPO / 'tools/pc_run.py'), run_name, '--services',
            '--time-limit', m['time_limit'],
            '--snapshots', ','.join(f'{n}@{t}' for n, t in zip(names, triggers)),
-           '--exit-after', names[-1], '--keys', ','.join(keys(rows, name))]
+           '--exit-after', names[-1], '--keys', ','.join(keys(rows, name, bypass))]
     if polls:
         cmd += ['--polls', str(POLLS), '--retrace', '--rep-chunks']
+    if bypass:
+        cmd += ['--bypass', bypass_spec()]
     trace = REPO / 'ref/dosbox/runs' / run_name / 'trace'
     status = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT).returncode
     if status != 0:
@@ -133,6 +166,11 @@ def run(base: str, rows: dict[str, dict], name: str, polls: bool = False) -> tup
     svc, ret = service_balance(trace)
     if (not svc and int(regs['icount']) > 1) or not 0 <= svc - ret <= PENDING_MAX:
         problems.append(f'services: {svc} svc, {ret} svc_ret')
+    bypassed = bypass_events(trace)
+    if bypass and bypassed != 1:
+        problems.append(f'bypass applied {bypassed} times, not once')
+    if not bypass and bypassed:
+        problems.append(f'bypass applied {bypassed} times in an unbypassed run')
     actual = {f'{name}/ram': sha((last / 'ram.bin').read_bytes())}
     if int(regs['vga_mode'], 16) != 3:  # text screens hold DOSBox-X's messages with host paths
         actual[f'{name}/vram'] = sha((last / 'vram.bin').read_bytes())
@@ -151,13 +189,22 @@ def main() -> int:
     ap.add_argument('--jobs', type=int, default=6)
     ap.add_argument('--print-manifest', action='store_true')
     ap.add_argument('--polls', action='store_true', help='host references: poll points, no pins')
+    ap.add_argument('--bypass', action='store_true',
+                    help="with --polls: bypassed host references, the milestones past the screen")
     args = ap.parse_args()
+    if args.bypass and not args.polls:
+        ap.error('--bypass records host references only: add --polls')
     with TABLE.open() as f:
         rows = {r['name']: r for r in csv.DictReader(f)}
-    names = args.only or list(rows)
-    base = args.name or ('host-' if args.polls else 'ms-') + time.strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
+    names = args.only or [n for n in rows if rows[n]['bypass'] or not args.bypass]
+    if args.bypass:
+        before = [n for n in names if not rows[n]['bypass']]
+        if before:
+            ap.error(f"not past the protection screen (column bypass): {' '.join(before)}")
+    prefix = ('hostb-' if args.bypass else 'host-') if args.polls else 'ms-'
+    base = args.name or prefix + time.strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
     with ThreadPoolExecutor(args.jobs) as ex:
-        results = dict(zip(names, ex.map(lambda n: run(base, rows, n, args.polls), names)))
+        results = dict(zip(names, ex.map(lambda n: run(base, rows, n, args.polls, args.bypass), names)))
     pins = {}
     if PINS.exists():
         for line in PINS.read_text().splitlines():
@@ -168,7 +215,9 @@ def main() -> int:
     for name in names:
         problems, actual, last = results[name]
         ref = rows[name]['frame']
-        if ref and actual:
+        other = ref.lstrip('!=').partition('@')[0]
+        # a bypassed run never shows the screen a milestone's frame is compared with
+        if ref and actual and not (args.bypass and not rows.get(other, {}).get('bypass')):
             other, _, rect = ref.lstrip('!=').partition('@')
             mask = tuple(int(v) for v in rect.split()) if rect else None
             if other not in results or not results[other][1]:

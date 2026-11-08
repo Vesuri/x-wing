@@ -1,0 +1,115 @@
+diff --git a/include/xwing_trace.h b/include/xwing_trace.h
+--- a/include/xwing_trace.h
++++ b/include/xwing_trace.h
+@@ -20,6 +20,11 @@
+ bool XWING_IrqPoint(uint32_t linear);
+ 
+ void XWING_Instruction(uint32_t linear);
++/* XWING_BYPASS: the copy-protection bypass of the port (annotations/hle.csv
++ * copy_protection) applied at its call site; true if the instruction there was
++ * replaced (IP moved past the call: the core reloads it). */
++extern bool xwing_bypass;
++bool XWING_Bypass(uint32_t linear);
+ void XWING_TimeLimit();
+ void XWING_RepChunk(uint32_t linear, uint16_t cx, uint16_t si, uint16_t di, bool restart);
+ void XWING_MemoryAccess(bool write, uint32_t address, uint8_t width);
+diff --git a/src/cpu/core_normal.cpp b/src/cpu/core_normal.cpp
+--- a/src/cpu/core_normal.cpp
++++ b/src/cpu/core_normal.cpp
+@@ -169,6 +169,7 @@
+ 			return CBRET_NONE;
+ 		}
+ 		XWING_Instruction(core.cseip);
++		if (xwing_bypass && XWING_Bypass(core.cseip)) continue;
+ 		last_prefix=MP_NONE;
+ 		core.opcode_index=cpu.code.big*(Bitu)0x200u;
+ 		core.prefixes=cpu.code.big;
+diff --git a/src/cpu/core_normal_286.cpp b/src/cpu/core_normal_286.cpp
+--- a/src/cpu/core_normal_286.cpp
++++ b/src/cpu/core_normal_286.cpp
+@@ -187,6 +187,7 @@
+ 			return CBRET_NONE;
+ 		}
+ 		XWING_Instruction(core.cseip);
++		if (xwing_bypass && XWING_Bypass(core.cseip)) continue;
+ 		core.prefixes=0;
+ 		core.opcode_index=0;
+ 		last_ea86_offset=0;
+diff --git a/src/misc/xwing_trace.cpp b/src/misc/xwing_trace.cpp
+--- a/src/misc/xwing_trace.cpp
++++ b/src/misc/xwing_trace.cpp
+@@ -11,6 +11,8 @@
+  * XWING_EXIT_AFTER=name                    exit(0) after that snapshot
+  * XWING_KEYS=MODULE+HEX[#N]=key,...        press key when reached (in order)
+  * XWING_KEY_HOLD=instructions              release delay (default 600000)
++ * XWING_BYPASS=MODULE+HEX:LEN:Q            the port's copy-protection bypass at
++ *                                          that call (LEN bytes): see XWING_Bypass
+  * XWING_BIOS_TICKS=n                       BIOS tick count set at arming
+  *                                          (default 0; DOS time and INT 1Ah
+  *                                          derive from it, host time does not
+@@ -46,6 +48,7 @@
+ #include <vector>
+ 
+ bool xwing_active = false;
++bool xwing_bypass = false;
+ bool xwing_irq_gate = false, xwing_irq_open = false;
+ 
+ extern HostPt MemBase;
+@@ -182,6 +185,8 @@
+  * latest service event. Diagnostic metadata only; never drives input. */
+ uint64_t held_trigger_hits = 0;
+ std::string exit_after;
++Trigger bypass_at;
++uint32_t bypass_len = 0, bypass_question = 0, bypass_hits = 0;
+ /* Service log (XWING_SERVICES=1): every software INT raised by module code, with
+  * full registers at entry ("svc") and when execution is back at its return
+  * address with the entry SP ("svc_ret"). */
+@@ -500,6 +505,16 @@
+ 	if (const char *hold = getenv("XWING_KEY_HOLD")) key_hold = strtoull(hold, nullptr, 10);
+ 	if (const char *e = getenv("XWING_EXIT_AFTER")) exit_after = e;
+ 	if (const char *v = getenv("XWING_SERVICES")) log_services = *v && strcmp(v, "0") != 0;
++	if (const char *b = getenv("XWING_BYPASS")) {
++		const std::string spec = b;
++		const auto c1 = spec.find(':'), c2 = spec.find(':', c1 + 1);
++		if (c1 == std::string::npos || c2 == std::string::npos || !ParseTarget(spec.substr(0, c1), bypass_at))
++			E_Exit("XWING: bad bypass spec '%s'", b);
++		bypass_len = (uint32_t)strtoul(spec.substr(c1 + 1, c2 - c1 - 1).c_str(), nullptr, 16);
++		bypass_question = (uint32_t)strtoul(spec.c_str() + c2 + 1, nullptr, 10);
++		if (!bypass_len || bypass_question >= 32) E_Exit("XWING: bad bypass spec '%s'", b);
++		xwing_bypass = true;
++	}
+ 	for (const auto &spec : Split(getenv("XWING_SNAPSHOTS"), ',')) {
+ 		Trigger t;
+ 		const auto at = spec.find('@');
+@@ -793,6 +808,31 @@
+ 		key_release_at = icount + key_hold;
+ 		Event("key_down", "%s", t.name.c_str());
+ 	}
++}
++
++/* The port's bypass (src/runtime/protection.c), the same steps: the screen's
++ * data segment is the DGROUP word 6562h; its glyph triple at +0 is the
++ * question's row of the table at +1222h, the wrong tries at +0Eh are 0, the
++ * triple is frozen (+3Ah = 1), the question index at +0E06h; AX = 1 and the
++ * call (push cs; call near) is skipped. Every other register and the flags
++ * stay as they were at the call. */
++bool XWING_Bypass(const uint32_t linear) {
++	if (!xwing_active) return false;
++	const Location here = Locate(linear);
++	if (here.module != bypass_at.module || here.offset != bypass_at.offset) return false;
++	const uint32_t seg = (uint32_t)mem_readw(SegPhys(ds) + 0x6562) << 4;
++	for (uint32_t i = 0; i < 3; ++i)
++		mem_writew(seg + 2 * i, mem_readw(seg + 0x1222 + 2 * (bypass_question * 3 + i)));
++	mem_writew(seg + 0x0e, 0);
++	mem_writew(seg + 0x3a, 1);
++	mem_writew(seg + 0xe06, (uint16_t)bypass_question);
++	reg_ax = 1;
++	reg_eip = (uint16_t)(reg_eip + bypass_len);
++	++bypass_hits;
++	Event("bypass", "%s+0x%05x question=%u", bypass_at.module_name.c_str(), bypass_at.offset,
++	      bypass_question);
++	LOG_MSG("XWING: copy-protection bypass at icount %llu", (unsigned long long)icount);
++	return true;
+ }
+ 
+ void XWING_MemoryAccess(const bool write, const uint32_t address, const uint8_t width) {

@@ -237,10 +237,16 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
     is exempt with evidence (`tests/bypass-screen.csv`, bytes that differ between two
     correct-answer references, the stack below SP, the scratch registers, the mouse
     arrow, the EMS page frame). `--bypass --sabotage` leaves a wrong try, unfrozen glyphs
-    or another question, and each must fail. Byte-exact lockstep past the return cannot
-    hold: the skipped screen's EMS map calls leave the game's resource mapping
-    differently, so later milestones are checked from the bypass on separately (open
-    work).
+    or another question, and each must fail.
+  - Past the return (owner decision 2026-11-08): the game reads state the skipped screen
+    leaves (the mouse position it recorded, which picks the next menu's EMS pages; the
+    music and timer state of its duration; its EMS frame), so the unbypassed references
+    cannot be matched. `tools/reference.py --polls --bypass` records the milestones past
+    the screen with the same bypass applied in DOSBox-X at the same call
+    (`dosbox-x-xwing-bypass.patch`, `XWING_BYPASS`), and `tests/host_run.py --milestone
+    <later> --bypass` runs in byte-exact lockstep with them from the start. Control:
+    `--bypass --sabotage` at a later milestone leaves AX = 0, a wrong answer, and must
+    fail.
   - `tests/host_run.py --screen` (diagnostic): the hook declines, so the translated
     screen runs on the reference's keys and the lockstep stays byte-exact through it
     and on to the later milestones.

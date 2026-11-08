@@ -13,22 +13,14 @@ are in place.
    - A Star Destroyer battle, or the heaviest combat scene a reachable pilot state allows,
      chosen by a measured cost. Instructions per frame rank scenes only if the flight does
      not pace its frames, which is not yet known.
-2. P6: the milestones after the copy-protection screen, checked from the bypass on
-   ([port plan](port-plan.md), P6). The bypass is checked at the screen's return
-   (`tests/host_run.py --milestone m03p-protection-passed --bypass`), but the references
-   past it answer the screen, whose EMS map calls leave the resource mapping differently,
-   so byte-exact lockstep from the hook on fails at the first EMS map after the return.
-   Acceptance: m04-registration and the later milestones are reached by the bypassed port
-   with a check against the reference that holds across that mapping difference, and a
-   control in which the bypass leaves a wrong answer fails.
-3. Copy-free EMS mapping in place of SWOTL's map-by-copy (`src/runtime/ems.c`).
+2. Copy-free EMS mapping in place of SWOTL's map-by-copy (`src/runtime/ems.c`).
    Acceptance: no EMS map copies a page; the host lockstep to m01 still passes.
-4. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
+3. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
    `--seed 7` a walk case's x86 store faults at an unmapped address and the oracle then
    reads its recorded writes back, raising UC_ERR_READ_UNMAPPED (the same at P4's commit).
    Acceptance: `tests/m68k_blocks.py` completes for seeds 1–8; a faulting store is
    compared as an exception, not a crash.
-5. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh reference reach named milestones and
+4. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh reference reach named milestones and
    map its 68k CODE.
    Acceptance: a bounded run reaches a positively identified game state by guest state,
    writes a framebuffer read from video memory and a trap log, and reproduces their pinned
