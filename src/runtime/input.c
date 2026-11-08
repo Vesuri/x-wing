@@ -280,32 +280,54 @@ uint16_t rt_key_take(void)
     return key;
 }
 
-/* An enhanced combination (low byte F0h, or E0h with a scan code) is what
- * DOSBox-X's AH=00h/01h translate or skip; not modelled: a stop. */
-static uint16_t plain_key(uint16_t key)
+/* DOSBox-X's IsEnhancedKey (src/ints/bios_keyboard.cpp, US code page) for
+ * AH=00h/01h: E0xxh (keypad Enter and /) becomes 1Cxxh or 35xxh; a scan code
+ * above 84h or a low byte F0h is an enhanced key, which they drop; a low byte
+ * E0h with a scan code (the grey cursor block) is cleared. 1: enhanced. */
+static int enhanced_key(uint16_t *key)
 {
-    uint8_t c = (uint8_t)key;
-    if ((c == 0xf0 || c == 0xe0) && key >> 8) {
-        rt_stop("keyboard: enhanced key at INT 16h AH=00h/01h", key, 0);
+    uint16_t k = *key;
+    uint8_t c = (uint8_t)k, scan = k >> 8;
+    if (scan == 0xe0) {
+        *key = c | (c == 0x0a || c == 0x0d ? 0x1c00 : 0x3500);
+        return 0;
     }
-    return key;
+    if (scan > 0x84 || (c == 0xf0 && scan)) {
+        return 1;
+    }
+    if (scan && c == 0xe0) {
+        *key = k & 0xff00;
+    }
+    return 0;
 }
 
 void rt_int16(void)
 {
+    uint16_t key;
     switch (AH(rt_r.ax)) {
-    case 0x00:  /* read a key; the host and the reference never wait */
-        if (!rt_key_available()) {
-            rt_unsupported("keyboard read with no key buffered", 0x16, 0, 0);
+    case 0x00:  /* read a key, dropping enhanced ones; the host and the reference never wait */
+        for (;;) {
+            if (!rt_key_available()) {
+                rt_unsupported("keyboard read with no key buffered", 0x16, 0, 0);
+            }
+            key = rt_key_take();
+            if (!enhanced_key(&key)) {
+                break;
+            }
         }
-        rt_r.ax = plain_key(rt_key_take());
+        rt_r.ax = key;
         break;
-    case 0x01:  /* key status: ZF clear and AX the key, without taking it */
-        if (rt_key_available()) {
-            rt_r.ax = plain_key(rd16(0x400 + rd16(BDA_HEAD)));
-            set_zf(0);
-        } else {
-            set_zf(1);
+    case 0x01:  /* key status: ZF clear and AX the key, without taking it;
+                 * an enhanced key at the head is taken and dropped */
+        set_zf(1);
+        while (rt_key_available()) {
+            key = rd16(0x400 + rd16(BDA_HEAD));
+            if (!enhanced_key(&key)) {
+                rt_r.ax = key;
+                set_zf(0);
+                break;
+            }
+            rt_key_take();
         }
         break;
     case 0x02:  /* shift flags */
