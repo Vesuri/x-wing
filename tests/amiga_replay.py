@@ -194,7 +194,13 @@ def run(name, out, trace, work):
     env = dict(os.environ, DEBUG_PORT=str(port), FSUAE_PORT_PINNED='1',
                AMIGA_CPU=os.environ.get('AMIGA_CPU', '68030'),
                XWING_ELF=str(work / 'out/XWing.elf'), FSUAE_RUN=os.path.relpath(run_dir, ROOT / 'amiga'),
-               FSUAE_CLAIM_STRICT='1', XWING_ARGS='')
+               FSUAE_CLAIM_STRICT='1', XWING_ARGS='',
+               # The diagnostic image carries the reference (replay_data.h, 2.3 MB of
+               # .rodata) beside the code: with the target's 8 MB of Fast RAM the
+               # guest block no longer fits ("X-Wing not enough memory"). The extra
+               # Zorro III board is for that data; the production image keeps the
+               # 8 MB target (make test-amiga-live).
+               EXTRA_ARGS='--zorro_iii_memory=8192')
     with (capture / 'gdb.log').open('w') as log:
         command = [str(ROOT / 'amiga/debug.sh'), '', str(capture / 'fixture.gdb'), str(work / 'out/XWing.exe')]
         process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT,

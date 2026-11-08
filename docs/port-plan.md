@@ -209,8 +209,10 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
     diagnostic image (`XWING_REPLAY`, sync mode) delivers the reference's interrupts at
     their recorded poll points, its REP slices, VGA status reads (`trace/retrace.csv`)
     and calendar inputs; no joystick and no real-video capture; the service history is
-    checked by a cumulative hash every 256 events and the REP slices are a varint stream,
-    so the image fits the 8 MB Fast RAM model.
+    checked by a cumulative hash every 256 events and the REP slices are a varint stream.
+    The reference data (2.3 MB at m01) leaves the guest block no room in the 8 MB of Fast
+    RAM, so the replay machine adds an 8 MB Zorro III board; the production image keeps
+    the 8 MB target. A program return before the label is a fixture stop.
 - Gate: the LucasArts logo drawn by generated code on the 68030 model: the replay
   (`make test-amiga`) matches registers, RAM, DAC and the shown screen at m01. Host
   lockstep to m1: service log, registers, RAM, framebuffer and DAC.
