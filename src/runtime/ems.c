@@ -10,9 +10,12 @@
 
 /* Store pages live after the state block (RT_EMS_BYTES); a mapped page is
  * copied into the frame and back out when its frame page is remapped, as host
- * bytes of a frame page span (runtime.h). A page mapped at two frame pages is
- * two copies (writes through one are not seen through the other) until the
- * next remap of either. Handles take store pages as DOSBox-X's
+ * bytes of a frame page span (runtime.h). DOSBox-X maps a page at two frame
+ * pages as one memory; here they are copies, equal to the store when the alias
+ * begins, merged against the store at the next map call (reconcile). A byte
+ * written differently through two of them is a stop; a read through one of a
+ * byte written through another before that call is not modelled (checked in
+ * tests/host_run.py, ems_alias). Handles take store pages as DOSBox-X's
  * MEM_AllocatePages does, so after a release a handle's pages can be split
  * across free runs; a release leaves the frame mapped (tests/test_ems.py). */
 static uint16_t ems_free = RT_EMS_PAGES;
@@ -79,8 +82,55 @@ static void copy(uint8_t *d, const uint8_t *s)
     }
 }
 
+/* The bytes the frame copies of one store page hold since their alias began:
+ * where one copy differs from the store, that copy's byte. */
+static void merge(uint16_t slot, const uint8_t *at, uint8_t n)
+{
+    uint8_t *b = store(slot), *f[EMS_PHYS];
+    for (uint8_t c = 0; c < n; ++c) {
+        f[c] = frame_page(at[c]);
+    }
+    for (uint32_t j = 0; j < RT_EMS_PAGE; ++j) {
+        uint8_t v = b[j];
+        for (uint8_t c = 0; c < n; ++c) {
+            uint8_t x = f[c][j];
+            if (x != b[j]) {
+                if (v != b[j] && v != x) {
+                    /* rt_span is reversed: guest offset in the page */
+                    rt_stop("EMS page written differently through two frame pages (page, offset)",
+                            slot - 1, RT_EMS_PAGE - 1 - j);
+                }
+                v = x;
+            }
+        }
+        if (v != b[j]) {
+            b[j] = v;
+            for (uint8_t c = 0; c < n; ++c) {
+                f[c][j] = v;
+            }
+        }
+    }
+}
+
+static void reconcile(void)
+{
+    for (uint8_t p = 0; p < EMS_PHYS; ++p) {
+        uint8_t at[EMS_PHYS], n = 0, first = 1;
+        for (uint8_t k = 0; k < EMS_PHYS; ++k) {
+            if (mapped[p] && mapped[k] == mapped[p]) {
+                first &= k >= p;
+                at[n++] = k;
+            }
+        }
+        if (first && n > 1) {
+            merge(mapped[p], at, n);
+        }
+    }
+}
+
 static uint8_t map(uint8_t phys, uint16_t page, uint16_t handle)
 {
+    reconcile();
     if (phys >= EMS_PHYS) {
         return 0x8b;
     }

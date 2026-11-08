@@ -483,6 +483,33 @@ class Host:
         for lo, hi in machine_ranges():
             machine[lo:hi] = b"\1" * (hi - lo)
 
+        # ems_alias: ems.c keeps a page mapped at two frame pages as copies and
+        # merges them at the next map call; a guest read through one of them
+        # must see what every other copy holds (DOSBox-X maps one memory).
+        self.ems_map, self.ems_alias_reads, self.ems_alias_bad = None, 0, []
+
+        @U.CODE_CB
+        def ems_call(h, addr, size, user):
+            self.ems_map = None
+        e.hook_range(U.HOOK_CODE, ems_call, self.syms["rt_int67"], self.syms["rt_int67"])
+
+        def ems_alias(lin, size):
+            if self.ems_map is None:
+                self.ems_map = struct.unpack(">4H", self.mem(self.syms["mapped"], 8))
+            for b in range(lin, lin + size):
+                if not 0xE0000 <= b < 0xF0000:
+                    continue
+                p, o = (b - 0xE0000) >> 14, b & 0x3FFF
+                slot = self.ems_map[p]
+                if not slot or self.ems_map.count(slot) < 2:
+                    continue
+                self.ems_alias_reads += 1
+                v = self.gmem(b, 1)
+                for k in range(4):
+                    if k != p and self.ems_map[k] == slot and \
+                            self.gmem(0xE0000 + k * 0x4000 + o, 1) != v:
+                        self.ems_alias_bad.append((b, k, len(self.services)))
+
         @U.MEM_CB
         def read(h, kind, addr, size, value, user):
             lin = TOP - addr - size + 1
@@ -490,6 +517,9 @@ class Host:
             if (machine[lin] or machine[lin + size - 1]) and not self.in_service \
                     and self.code[0] <= self.r("pc") < self.code[1]:
                 self.machine_reads.update(b for b in range(lin, lin + size) if machine[b])
+            if lin + size > 0xE0000 and lin < 0xF0000 and not self.in_service \
+                    and self.code[0] <= self.r("pc") < self.code[1]:
+                ems_alias(lin, size)
             return True
 
         @U.CODE_CB
@@ -1414,6 +1444,12 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
         problems.append(f"VGA status: {h.retrace_left()} reference reads not made")
     if h.display_miss:
         problems.append(h.display_miss)
+    print(f"EMS: {h.ems_alias_reads} guest bytes read through a page mapped at two frame "
+          f"pages, {len(h.ems_alias_bad)} differ from another copy")
+    if h.ems_alias_bad:
+        b, k, n = h.ems_alias_bad[0]
+        problems.append(f"EMS: guest read of {b:05X} after service {n} differs from the copy "
+                        f"at frame page {k}")
     problems += h.irq.finish(REPO / "tmp/test" / f"irq-monitor-{milestone}{'-' + sabotage if sabotage else ''}.json")
     if h.stopped_at == label:
         problems += check_opl(h, trace, counts=not bypass)
