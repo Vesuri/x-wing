@@ -11,7 +11,8 @@ Checked against the newest host reference run of that milestone
 (ref/dosbox/runs/host-*-<milestone>, `tools/reference.py --polls`: hardware
 interrupts at the translator's poll points, the VGA status reads recorded):
 - service log: every software INT the guest raises, in order, with the
-  registers at entry and at return (the tracer's svc/svc_ret events);
+  registers at entry and at return (the tracer's svc/svc_ret events), compared
+  as they run (ServiceLog);
 - at the milestone label: guest registers and guest RAM (COMPARE ranges);
   dead stack is masked: bytes in the DEAD_STACK window below SS:SP at the entry, at a
   service call or hardware interrupt (at an IRQ0 delivery to the guest handler, its
@@ -306,7 +307,7 @@ class Host:
         self.log: list[str] = []
         self.console = b""             # plat_console: the game's DOS console output
         self.exit: int | None = None
-        self.services: list[tuple[str, dict]] = []
+        self.services = ServiceLog()  # check() gives it the reference's log
         self.stopped_at: str | None = None
         self.stubs = {self.syms[n]: n for n in ("plat_alloc", "plat_free", "plat_open", "plat_create", "plat_read", "plat_write",
                                                 "plat_delete", "plat_seek",
@@ -828,15 +829,12 @@ class Host:
         self.bypass_n = None
         if script and script.get("bypass"):
             first_snapshot = len(script["keys"])
-            n1, want = script["bypass"]
+            n1 = script["bypass"]
 
             @U.CODE_CB
             def bypass(h, addr, size, user):
-                n0 = self.bypass_n = len(self.services)
-                for kind, regs in want[n0:n1]:  # in the host's form (guest_regs)
-                    f = regs["flags"]
-                    self.services.append((kind, dict(regs, cf=f & 1, zf=f >> 6 & 1,
-                                                     **{"if": f >> 9 & 1}, df=f >> 10 & 1)))
+                self.bypass_n = len(self.services)
+                self.services.skip(n1)
                 i = self.irq_i
                 while i < len(self.irqs) and self.irqs[i][0] < n1:
                     i += 1
@@ -1111,36 +1109,71 @@ def machine_ranges() -> list[tuple[int, int]]:
     return [(lo, hi) for lo, hi in out + [(at, GUEST_BYTES)] if lo < hi]
 
 
-def compare_services(got, want) -> list[str]:
-    """CF/ZF: services read no flags, so the state block may hold dead ones at
-    entry; at return they are checked where the reference service changed them
-    or where they agreed at entry."""
-    bad = []
-    keys = REGS + ("es", "ss", "ds", "vector")
-    entry: list = []
-    for k, ((gk, g), (wk, w)) in enumerate(zip(got, want)):
-        diff = [f"{n}={g[n]:04x}/{w[n]:04x}" for n in keys if g[n] != w[n]]
+class ServiceLog:
+    """The host's service log, compared event by event with the reference's as it
+    grows, so neither log is held (m14's are 65 million events). CF/ZF: services
+    read no flags, so the state block may hold dead ones at entry; at return they
+    are checked where the reference service changed them or where they agreed at
+    entry. The first difference is kept; the count is checked at the label."""
+
+    KEYS = REGS + ("es", "ss", "ds", "vector")
+
+    def __init__(self, want=None):
+        self.want = want            # iterator of the reference's (kind, regs), or None
+        self.n = self.consumed = 0
+        self.bad: list[str] = []
+        self.entry: list = []
+
+    def __len__(self) -> int:
+        return self.n
+
+    def append(self, item) -> None:
+        k, self.n = self.n, self.n + 1
+        if self.want is None or self.bad or self.consumed < k:
+            return
+        ref = next(self.want, None)
+        if ref is None:
+            return
+        self.consumed += 1
+        (gk, g), (wk, w) = item, ref
+        diff = [f"{n}={g[n]:04x}/{w[n]:04x}" for n in self.KEYS if g[n] != w[n]]
         flags = w["flags"]
         if gk == "svc":
-            entry.append((g, w))
+            self.entry.append((g, w))
         else:
-            ge, we = entry.pop() if entry else (g, w)
+            ge, we = self.entry.pop() if self.entry else (g, w)
         for n, bit in (("cf", 0x1), ("zf", 0x40), ("if", 0x200), ("df", 0x400)):
-            ref = int(bool(flags & bit))
+            want = int(bool(flags & bit))
             if n in ("cf", "zf"):
                 if gk == "svc":
                     continue
-                if int(bool(we["flags"] & bit)) == ref and ge[n] != ref:
+                if int(bool(we["flags"] & bit)) == want and ge[n] != want:
                     continue
-            if g[n] != ref:
-                diff.append(f"{n}={g[n]}/{ref}")
+            if g[n] != want:
+                diff.append(f"{n}={g[n]}/{want}")
         if gk != wk or diff:
-            bad.append(f"service #{k} {wk} int {w['vector']:02x} ax={w['ax']:04x}: "
-                       f"{' '.join(diff) or gk}")
-            break
-    if not bad and len(got) != len(want):
-        bad.append(f"service count {len(got)} vs reference {len(want)}")
-    return bad
+            self.bad.append(f"service #{k} {wk} int {w['vector']:02x} ax={w['ax']:04x}: "
+                            f"{' '.join(diff) or gk}")
+
+    def skip(self, n: int) -> None:
+        """The reference's events to n are the host's too (the bypass skips the
+        protection screen's): each counts as run and equal."""
+        while self.n < n:
+            ref = next(self.want, None) if self.want is not None and self.consumed == self.n else None
+            if ref is not None:
+                self.consumed += 1
+                if ref[0] == "svc":
+                    self.entry.append((ref[1], ref[1]))
+                elif self.entry:
+                    self.entry.pop()
+            self.n += 1
+
+    def finish(self, reached: bool) -> list[str]:
+        """The first difference; at the label also the count. Sets total."""
+        self.total = self.consumed + (sum(1 for _ in self.want) if self.want else 0)
+        if reached and not self.bad and self.n != self.total:
+            return [f"service count {self.n} vs reference {self.total}"]
+        return self.bad
 
 
 def compare_ram(ram: bytes, ref: bytes, residency: Path, masked: set[int]) -> list[str]:
@@ -1503,21 +1536,6 @@ RETURN_SITE = "FE_79843"   # the protection screen's return, 3273:0B03 (annotati
 BYPASS_LATE_SABOTAGE = {"answer": "the bypass leaves AX = 0, a wrong answer"}
 
 
-def bypass_script(milestone: str, trace: Path) -> tuple[int, list]:
-    """--bypass: (service events to the protection screen's return, the
-    reference's service log). A milestone past the screen takes the return
-    from the BYPASS_MILESTONE reference; its own log must equal that
-    reference's up to there (the scripted runs repeat: tools/reference.py)."""
-    want = reference_services(trace)
-    if milestone == BYPASS_MILESTONE:
-        return bypass_return(trace), want
-    ret = host_reference(BYPASS_MILESTONE)
-    n = bypass_return(ret)
-    if any(a != b for a, b in zip(iter_services(ret), want[:n])):
-        raise SystemExit(f"bypass: {trace} differs from {ret} before the protection screen's return")
-    return n, want
-
-
 def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None,
           trace: Path | None = None, elf: Path | None = None, bypass: bool = False,
           bypass_sabotage: str | None = None, screen: bool = False) -> list[str]:
@@ -1538,7 +1556,7 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
              retrace=retrace_runs(trace))
     h.calendar_date, h.file_clock = reference_clocks(trace)
     if bypass and not late:
-        script["bypass"] = bypass_script(milestone, trace)
+        script["bypass"] = bypass_return(trace)
     if late:
         script["bypassed"] = bypass_sabotage
     label = script["snapshots"][-1][0]
@@ -1547,6 +1565,7 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     problems = rearm_problems() + resident_problems(sabotage)
     if int(summary.get("polls", "0"), 16) != fnv(POLLS.read_bytes()):
         problems.append("reference recorded with other poll points: rerun tools/reference.py --polls")
+    h.services = ServiceLog(iter_services(trace))
     t0 = time.monotonic()
     h.run(script, timeout)
     print(f"host run: {time.monotonic() - t0:.0f} s")
@@ -1563,7 +1582,7 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
             problems.append("bypass: the copy-protection hook was not reached")
         else:
             print(f"bypass: hook after {h.bypass_n} service events; the screen's "
-                  f"{script['bypass'][0] - h.bypass_n} service events and {h.bypass_irqs} "
+                  f"{script['bypass'] - h.bypass_n} service events and {h.bypass_irqs} "
                   f"interrupts are the reference's only")
     try:
         rep.complete()
@@ -1609,12 +1628,8 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     if h.stopped_at != label:
         problems.append(f"milestone label {label} not reached (exit {h.exit}, pc={h.r('pc'):x}"
                         f"{', ' + h.log[-1] if h.log else ''})")
-    want = reference_services(trace)
-    if h.stopped_at == label:
-        problems += compare_services(h.services, want)
-    else:
-        problems += compare_services(h.services, want[:len(h.services)])
-    print(f"services: {len(h.services)} run, {len(want)} in the reference")
+    problems += h.services.finish(h.stopped_at == label)
+    print(f"services: {len(h.services)} run, {h.services.total} in the reference")
     if h.stopped_at == label:
         ref_regs = dict(kv.split("=") for kv in (snap / "regs.txt").read_text().split())
         ref = (snap / "ram.bin").read_bytes()

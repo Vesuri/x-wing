@@ -5,6 +5,7 @@ manifest/references.tsv) and adapted: no compute objects or joystick wrapper. DO
 restarts a REP instruction when its cycle slice ends (dosbox-x-xwing-rep-chunks.patch,
 trace/rep.csv), so an interrupt taken inside one lands at a slice boundary; the host
 replays those boundaries at the REP's poll point (tests/host_run.py)."""
+from array import array
 import csv
 from dataclasses import dataclass
 import hashlib
@@ -32,13 +33,51 @@ class Chunk:
     restart: bool
 
 
+class Chunks:
+    """The slices in packed arrays (m13 records 12 million; as Chunk objects they
+    take 6 GB): a Chunk is built when read."""
+
+    def __init__(self):
+        self.names: list[str] = []
+        self.ids: dict[str, int] = {}
+        self.label = array('H')
+        self.service = array('Q')
+        self.hits = array('I')
+        self.regs = array('H')       # cx si di end_cx end_si end_di per slice
+        self.restart = array('B')
+
+    def append(self, label, service, hits, start, end, restart):
+        if label not in self.ids:
+            self.ids[label] = len(self.names)
+            self.names.append(label)
+        self.label.append(self.ids[label])
+        self.service.append(service)
+        self.hits.append(hits)
+        self.regs.extend(start + end)
+        self.restart.append(restart)
+
+    def __len__(self):
+        return len(self.label)
+
+    def __getitem__(self, i):
+        if not 0 <= i < len(self.label):
+            raise IndexError(i)
+        r = self.regs[6 * i:6 * i + 6]
+        return Chunk(self.names[self.label[i]], self.service[i], self.hits[i],
+                     tuple(r[:3]), tuple(r[3:]), bool(self.restart[i]))
+
+    def __iter__(self):
+        return (self[i] for i in range(len(self)))
+
+
 def read(trace, required=False):
     path = trace / 'rep.csv'
     if not path.exists():
         if required:
             raise ValueError('required REP metadata is missing')
-        return []
-    result = []
+        return Chunks()
+    result = Chunks()
+    labels = {}
     with path.open() as f:
         rows = csv.DictReader(f)
         if tuple(rows.fieldnames or ()) != FIELDS:
@@ -50,8 +89,11 @@ def read(trace, required=False):
                 raise ValueError(f'invalid REP metadata: {r}')
             if end_cx > cx or restart and not 0 < end_cx < cx:
                 raise ValueError(f'invalid REP progress: {r}')
-            result.append(Chunk(emit.label(r['module'], off), service, hits,
-                                (cx, si, di), (end_cx, end_si, end_di), bool(restart)))
+            key = (r['module'], off)
+            if key not in labels:
+                labels[key] = emit.label(r['module'], off)
+            result.append(labels[key], service, hits, (cx, si, di), (end_cx, end_si, end_di),
+                          bool(restart))
     # an empty file is a record: the tracer writes the header only with --rep-chunks,
     # and a run with no REP at a poll point (m00-entry) records no slice
     return result
@@ -78,7 +120,8 @@ def compact(chunks):
 class Replay:
     def __init__(self, chunks):
         self.chunks = chunks
-        self.labels = sorted({c.label for c in chunks})
+        self.labels = sorted(chunks.names if isinstance(chunks, Chunks) else
+                             {c.label for c in chunks})
         self.index = 0
         self.active = False
 
