@@ -350,7 +350,8 @@ handler reads: sync for the declared span).
   68020 from the MZ entry to milestones m1–m3 (`make test-host-all`: m1–m7,
   the Makefile's `HOST_COVERAGE` scenarios and `t-hle-music-skip`; files the
   guest writes are kept in memory); every software
-  INT's registers at entry and return vs the tracer's service log; registers
+  INT's registers at entry and return vs the tracer's service log (a register
+  byte loaded from masked dead stack may differ: [design](design.md)); registers
   and RAM (environment MCB to A0000h) vs the snapshot, dead stack masked
   (below SS:SP at a service or hardware interrupt; at an IRQ0 delivery to the
   guest handler, which the reference runs on the interrupted stack, its frame and

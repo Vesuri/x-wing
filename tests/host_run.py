@@ -12,7 +12,8 @@ Checked against the newest host reference run of that milestone
 interrupts at the translator's poll points, the VGA status reads recorded):
 - service log: every software INT the guest raises, in order, with the
   registers at entry and at return (the tracer's svc/svc_ret events), compared
-  as they run (ServiceLog);
+  as they run; a register byte the guest loaded from dead stack may differ
+  (ServiceLog; controls --dead-sabotage);
 - at the milestone label: guest registers and guest RAM (COMPARE ranges);
   dead stack is masked: bytes in the DEAD_STACK window below SS:SP at the entry, at a
   service call or hardware interrupt (at an IRQ0 delivery to the guest handler, its
@@ -387,11 +388,18 @@ class Host:
             e.hook_range(U.HOOK_CODE, ret_hit, self.syms[n], self.syms[n])
         self.pending: list = []
         self.pending_vec: list = []
+        self.dead_planted = False
 
         @U.CODE_CB
         def int_entry(h, addr, size, user):
             d6 = self.r("d6")
             regs = self.guest_regs(d6 & 0xFF)
+            if self.sabotage == "dead-written" and regs["vector"] == 0x21 and \
+                    regs["ax"] >> 8 == 0x47 and self.bypass_n is not None and not self.dead_planted:
+                # DL, a byte the guest wrote, logged with bit 7 flipped; the service
+                # itself gets the guest's DL, so the run goes on (control of ServiceLog)
+                self.dead_planted = True
+                regs["dx"] ^= 0x80
             self.services.append(("svc", regs))
             self.in_service = True
             top = regs["ss"] * 16 + regs["sp"]
@@ -475,6 +483,12 @@ class Host:
         self.in_service = False
         self.masked: set[int] = set()
         self.machine_reads: set[int] = set()
+        # dead-stack reads by generated code since the last service event: a word
+        # read as (value, its bytes masked: bit 0 low, bit 1 high), a byte read as
+        # (value, None); a service register loaded from them may differ (ServiceLog,
+        # owner decision 2026-11-09); control dead-off records none
+        self.dead_reads: set[tuple[int, int | None]] = set()
+        self.dead_watch = sabotage != "dead-off"
 
         @U.MEM_CB
         def write(h, kind, addr, size, value, user):
@@ -545,6 +559,16 @@ class Host:
             if lin + size > 0xE0000 and lin < 0xF0000 and not self.in_service \
                     and self.code[0] <= self.r("pc") < self.code[1]:
                 ems_alias(lin, size)
+            if self.dead_watch and not self.in_service and \
+                    any(b in self.masked for b in range(lin, lin + size)) and \
+                    self.code[0] <= self.r("pc") < self.code[1]:
+                # (value, bytes masked): each word read, or a byte read as (value, None)
+                if size == 1:
+                    self.dead_reads.add((self.gmem(lin, 1)[0], None))
+                for w in range(lin, lin + size - 1, 2):
+                    mask = (w in self.masked) | (w + 1 in self.masked) << 1
+                    if mask:
+                        self.dead_reads.add((int.from_bytes(self.gmem(w, 2), "little"), mask))
             return True
 
         @U.CODE_CB
@@ -1114,21 +1138,39 @@ class ServiceLog:
     grows, so neither log is held (m14's are 65 million events). CF/ZF: services
     read no flags, so the state block may hold dead ones at entry; at return they
     are checked where the reference service changed them or where they agreed at
-    entry. The first difference is kept; the count is checked at the label."""
+    entry. The first difference is kept; the count is checked at the label.
+
+    Dead stack (owner decision 2026-11-09): dead stack below SS:SP holds other
+    bytes than DOS's (INFERRED: IRQ0's handler runs on the private stack, I4), and
+    the game builds some service register blocks there (intdos with an uninitialized
+    REGS: m10's INT 21h AH=47h loads AL, BX, CX, DH and DI from it). At an entry a
+    byte of AX, BX, CX, DX, SI or DI may differ only when generated code read that
+    byte value at that byte of a word from masked dead stack since the last service
+    event (Host.dead_reads): a word read of its whole value with every differing
+    byte masked, or byte reads of each differing byte's value; at the return only
+    while both sides hold their entry values. SP, BP, the segments, the vector and
+    the flags stay exact."""
 
     KEYS = REGS + ("es", "ss", "ds", "vector")
+    DEAD = ("ax", "bx", "cx", "dx", "si", "di")
 
-    def __init__(self, want=None):
+    def __init__(self, want=None, dead: set | None = None):
         self.want = want            # iterator of the reference's (kind, regs), or None
+        self.dead = dead            # Host.dead_reads, cleared at each service event
         self.n = self.consumed = 0
         self.bad: list[str] = []
         self.entry: list = []
+        self.dead_bytes = 0
+        self.dead_first: str | None = None
 
     def __len__(self) -> int:
         return self.n
 
     def append(self, item) -> None:
         k, self.n = self.n, self.n + 1
+        reads = set(self.dead) if self.dead else set()
+        if self.dead is not None:
+            self.dead.clear()
         if self.want is None or self.bad or self.consumed < k:
             return
         ref = next(self.want, None)
@@ -1136,12 +1178,26 @@ class ServiceLog:
             return
         self.consumed += 1
         (gk, g), (wk, w) = item, ref
-        diff = [f"{n}={g[n]:04x}/{w[n]:04x}" for n in self.KEYS if g[n] != w[n]]
-        flags = w["flags"]
+        dead = {}
         if gk == "svc":
-            self.entry.append((g, w))
+            for n in self.DEAD:
+                differ = (1 if (g[n] ^ w[n]) & 0xFF else 0) | (2 if (g[n] ^ w[n]) >> 8 else 0)
+                if g[n] != w[n] and (
+                        any(v == g[n] and m is not None and differ & ~m == 0 for v, m in reads)
+                        or all((g[n] >> 8 * pos & 0xFF, None) in reads
+                               for pos in (0, 1) if differ >> pos & 1)):
+                    dead[n] = (g[n], w[n])
+                    self.dead_bytes += bin(differ).count("1")
+                    if self.dead_first is None:
+                        self.dead_first = (f"#{k} int {w['vector']:02x} ax={w['ax']:04x} "
+                                           f"{n}={g[n]:04x}/{w[n]:04x}")
+            self.entry.append((g, w, dead))
+            keep = dead
         else:
-            ge, we = self.entry.pop() if self.entry else (g, w)
+            ge, we, was = self.entry.pop() if self.entry else (g, w, {})
+            keep = {n: v for n, v in was.items() if (g[n], w[n]) == v}
+        diff = [f"{n}={g[n]:04x}/{w[n]:04x}" for n in self.KEYS if g[n] != w[n] and n not in keep]
+        flags = w["flags"]
         for n, bit in (("cf", 0x1), ("zf", 0x40), ("if", 0x200), ("df", 0x400)):
             want = int(bool(flags & bit))
             if n in ("cf", "zf"):
@@ -1163,7 +1219,7 @@ class ServiceLog:
             if ref is not None:
                 self.consumed += 1
                 if ref[0] == "svc":
-                    self.entry.append((ref[1], ref[1]))
+                    self.entry.append((ref[1], ref[1], {}))
                 elif self.entry:
                     self.entry.pop()
             self.n += 1
@@ -1319,6 +1375,9 @@ def main(argv=None) -> int:
     ap.add_argument("--label", action="store_true", help="print the milestone's label and exit")
     ap.add_argument("--sabotage", action="store_true",
                     help="each planted runtime fault (SABOTAGE) must fail the check")
+    ap.add_argument("--dead-sabotage", action="store_true",
+                    help="each DEAD_SABOTAGE control of the dead-stack rule must fail the check "
+                         "(a milestone whose services load registers from dead stack: m10)")
     ap.add_argument("--screen", action="store_true",
                     help="the copy-protection hook declines: the translated screen runs on the "
                          "reference's keys, byte-exact lockstep through it (diagnostic)")
@@ -1342,6 +1401,17 @@ def main(argv=None) -> int:
             if not problems:
                 missed.append(name)
         print(f"bypass sabotage: {'all caught' if not missed else 'MISSED ' + ' '.join(missed)}")
+        return 1 if missed else 0
+    if args.dead_sabotage:
+        missed = []
+        for name, what in DEAD_SABOTAGE.items():
+            problems = check(args.milestone, args.timeout, None, name, bypass=args.bypass,
+                             screen=args.screen)
+            print(f"dead sabotage {name:12} ({what}): {len(problems)} problems, first: "
+                  f"{problems[0] if problems else '-'}", flush=True)
+            if not problems:
+                missed.append(name)
+        print(f"dead sabotage: {'all caught' if not missed else 'MISSED ' + ' '.join(missed)}")
         return 1 if missed else 0
     if args.sabotage:
         missed = []
@@ -1530,6 +1600,13 @@ def bypass_return(trace: Path) -> int:
     raise ValueError(f"{trace}: no snapshot event")
 
 
+# Controls of the dead-stack rule (ServiceLog) at a milestone that uses it
+# (m10-film-room: INT 21h AH=47h): each must fail the lockstep.
+DEAD_SABOTAGE = {
+    "dead-off": "no dead-stack read recorded: register bytes loaded from dead stack compared exactly",
+    "dead-written": "DL of the first INT 21h AH=47h past the copy-protection hook logged with "
+                    "bit 7 flipped (a byte the guest wrote, beside the bytes loaded from dead stack)",
+}
 BYPASS_MILESTONE = "m03p-protection-passed"
 RETURN_SITE = "FE_79843"   # the protection screen's return, 3273:0B03 (annotations/hle.csv)
 # Control past the screen: the bypass answers wrongly, and the lockstep must fail.
@@ -1565,7 +1642,7 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     problems = rearm_problems() + resident_problems(sabotage)
     if int(summary.get("polls", "0"), 16) != fnv(POLLS.read_bytes()):
         problems.append("reference recorded with other poll points: rerun tools/reference.py --polls")
-    h.services = ServiceLog(iter_services(trace))
+    h.services = ServiceLog(iter_services(trace), h.dead_reads)
     t0 = time.monotonic()
     h.run(script, timeout)
     print(f"host run: {time.monotonic() - t0:.0f} s")
@@ -1629,6 +1706,9 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
         problems.append(f"milestone label {label} not reached (exit {h.exit}, pc={h.r('pc'):x}"
                         f"{', ' + h.log[-1] if h.log else ''})")
     problems += h.services.finish(h.stopped_at == label)
+    if h.services.dead_bytes:
+        print(f"services: {h.services.dead_bytes} register bytes loaded from dead stack differ "
+              f"(exempt), first {h.services.dead_first}")
     print(f"services: {len(h.services)} run, {h.services.total} in the reference")
     if h.stopped_at == label:
         ref_regs = dict(kv.split("=") for kv in (snap / "regs.txt").read_text().split())
