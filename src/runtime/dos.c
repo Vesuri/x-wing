@@ -526,11 +526,17 @@ static void allocate(void)
     }
 }
 
-/* AH=49h: the block at ES is free (its MCB owner 0). */
+/* AH=49h: the block at ES is free (its MCB owner 0). No MCB below ES is
+ * error 9, as DOSBox-X's DOS_FreeMemory (the exit to DOS frees ES = 3752h,
+ * inside the program's own block: m16-exit-to-dos). */
 static void release(uint16_t cs, uint16_t ip)
 {
     uint32_t m = lin(G_ES - 1, 0);
-    if ((rd8(m) != 'M' && rd8(m) != 'Z') || rd16(m + 1) != rt_psp()) {
+    if (rd8(m) != 'M' && rd8(m) != 'Z') {
+        fail(9);
+        return;
+    }
+    if (rd16(m + 1) != rt_psp()) {
         rt_unsupported("free of a block the program does not own", 0x21, cs, ip);
     }
     wr16(m + 1, 0);
