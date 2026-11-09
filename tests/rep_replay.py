@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -51,8 +52,8 @@ def read(trace, required=False):
                 raise ValueError(f'invalid REP progress: {r}')
             result.append(Chunk(emit.label(r['module'], off), service, hits,
                                 (cx, si, di), (end_cx, end_si, end_di), bool(restart)))
-    if required and not result:
-        raise ValueError('required REP metadata is empty')
+    # an empty file is a record: the tracer writes the header only with --rep-chunks,
+    # and a run with no REP at a poll point (m00-entry) records no slice
     return result
 
 
@@ -118,10 +119,12 @@ def host_image(labels):
     digest = hashlib.sha256(('\n'.join(labels)).encode())
     for p in inputs:
         digest.update(p.name.encode()); digest.update(p.read_bytes())
-    out = ROOT / 'tmp/rep-host' / digest.hexdigest()[:20]
+    final = ROOT / 'tmp/rep-host' / digest.hexdigest()[:20]
+    if (final / 'xwing.elf').exists():
+        return final / 'xwing.elf'
+    # built aside and renamed: runs sharing the labels may build the same image at once
+    out = final.with_name(f'{final.name}.{os.getpid()}')
     elf = out / 'xwing.elf'
-    if elf.exists():
-        return elf
     units = cfg.build()
     nodes = {emit.label(mod, off): (mod, off) for mod, u in units.items() for off in u.insns}
     hooks = {nodes[lab]: n for n, lab in enumerate(labels)}
@@ -143,4 +146,8 @@ def host_image(labels):
     subprocess.run([str(toolchain / 'bin/m68k-amiga-elf-ld'), '-Ttext=0x10000', '-e', '_start',
                     '-o', str(elf), *(str(p) for p in objects), str(out / 'program.o'),
                     str(out / 'rep.o')], check=True)
-    return elf
+    try:
+        out.rename(final)
+    except OSError:  # another run renamed its identical build first
+        shutil.rmtree(out)
+    return final / 'xwing.elf'

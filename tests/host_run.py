@@ -13,7 +13,7 @@ interrupts at the translator's poll points, the VGA status reads recorded):
 - service log: every software INT the guest raises, in order, with the
   registers at entry and at return (the tracer's svc/svc_ret events);
 - at the milestone label: guest registers and guest RAM (COMPARE ranges);
-  dead stack is masked: bytes in the DEAD_STACK window below SS:SP at a
+  dead stack is masked: bytes in the DEAD_STACK window below SS:SP at the entry, at a
   service call or hardware interrupt (at an IRQ0 delivery to the guest handler, its
   frame and proved stack depth) that the guest did not write afterwards (DOSBox-X's own code
   and the interrupt frame's FLAGS word leave other values there, open-work 24),
@@ -551,6 +551,11 @@ class Host:
             if self.watching:
                 return
             self.watching = True
+            # Below the entry SS:SP the loader's own frame is dead stack (DOSBox-X's
+            # EXEC leaves the entry CS:IP there): masked as at a service call
+            sp = int.from_bytes(self.mem(self.syms["rt_r"] + 8, 2), "big")  # struct rt_regs
+            top = self.state(3, 2) * 16 + sp
+            self.masked.update(range(top - DEAD_STACK, top))
             # Model the DOS shell's no-argument launch before the first guest
             # instruction; normal fixtures retain machine.c's default PSP.
             if self.launch:
@@ -1575,7 +1580,8 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     print("music driver at interrupt level: flight callback "
           f"{h.irq_counts['callback irq']} runs, request 0Fh enqueue stores {h.irq_counts['enqueue irq']} "
           f"(main code: {h.irq_counts['callback main']}, {h.irq_counts['enqueue main']})")
-    ran = (trace / "executed-ADLIB.IMS.bin").read_bytes()
+    ran = trace / "executed-ADLIB.IMS.bin"  # absent: the driver was never loaded (m00)
+    ran = ran.read_bytes() if ran.exists() else b""
     if h.stopped_at == label and len(ran) > 0x6B6 and ran[0x6B6] and not h.irq_counts["callback irq"]:
         problems.append("the reference ran the driver's flight callback (ADLIB.IMS +006B6); "
                         "the host run never did at interrupt level")
