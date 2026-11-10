@@ -1061,6 +1061,7 @@ class Host:
         self.e.reg_write(U.M68K["a7"], STACK_TOP)
         self.halted = False
         err = self.e.start(self.entry, 0xFFFFFFFF, timeout_us=timeout * 1_000_000)
+        self.timed_out = self.e.timed_out()
         if err:
             print(f"unicorn error {U.uc.uc_strerror(err).decode()} pc={self.r('pc'):x}")
             self.exit = -1
@@ -1704,7 +1705,8 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     print(f"VGA status reads: {sum(r[2] for r in h.retrace)} in the reference")
     if h.stopped_at != label:
         problems.append(f"milestone label {label} not reached (exit {h.exit}, pc={h.r('pc'):x}"
-                        f"{', ' + h.log[-1] if h.log else ''})")
+                        f"{', ' + h.log[-1] if h.log else ''}"
+                        f"{f', the {timeout} s timeout, host sleep included' if h.timed_out else ''})")
     problems += h.services.finish(h.stopped_at == label)
     if h.services.dead_bytes:
         print(f"services: {h.services.dead_bytes} register bytes loaded from dead stack differ "

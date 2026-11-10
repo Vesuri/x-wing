@@ -43,6 +43,7 @@ uc.uc_hook_del.argtypes = [C.c_void_p, C.c_size_t]
 uc.uc_strerror.argtypes = [C.c_int]
 uc.uc_strerror.restype = C.c_char_p
 uc.uc_ctl.argtypes = [C.c_void_p, C.c_int]
+uc.uc_query.argtypes = [C.c_void_p, C.c_int, C.POINTER(C.c_size_t)]
 
 INTR_CB = C.CFUNCTYPE(None, C.c_void_p, C.c_uint32, C.c_void_p)
 IN_CB = C.CFUNCTYPE(C.c_uint32, C.c_void_p, C.c_uint32, C.c_int, C.c_void_p)
@@ -132,3 +133,10 @@ class Engine:
 
     def stop(self) -> None:
         uc.uc_emu_stop(self.h)
+
+    def timed_out(self) -> bool:
+        """Whether the last start ended at its timeout (UC_QUERY_TIMEOUT). Unicorn's
+        clock is CLOCK_MONOTONIC, which on macOS counts host sleep."""
+        r = C.c_size_t()
+        check(uc.uc_query(self.h, 4, C.byref(r)), "uc_query timeout")
+        return bool(r.value)
