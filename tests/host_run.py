@@ -19,7 +19,9 @@ interrupts at the translator's poll points, the VGA status reads recorded):
   service call or hardware interrupt (at an IRQ0 delivery to the guest handler, its
   frame and proved stack depth) that the guest did not write afterwards (DOSBox-X's own code
   and the interrupt frame's FLAGS word leave other values there, open-work 24),
-  and the FLAGS images of annotations/flags.csv PUSHFs until rewritten;
+  and the FLAGS images of annotations/flags.csv PUSHFs until rewritten; a byte whose
+  last write stored a value generated code read from dead stack since the last
+  service event may differ (Host.dead_stored, owner decision 2026-11-10);
 - every machine byte outside COMPARE (and the IRQ0 handler's private stack)
   that generated code read holds the reference value.
 Every read of port 3DAh answers the reference's next recorded value
@@ -489,11 +491,21 @@ class Host:
         # owner decision 2026-11-09); control dead-off records none
         self.dead_reads: set[tuple[int, int | None]] = set()
         self.dead_watch = sabotage != "dead-off"
+        # guest bytes whose last write was generated code storing a value it read from
+        # dead stack since the last service event (by value: a byte store of a byte
+        # read, or a word's bytes masked in a read of that whole word); they may differ
+        # at the label (owner decision 2026-11-10)
+        self.dead_stored: set[int] = set()
 
         @U.MEM_CB
         def write(h, kind, addr, size, value, user):
             self.irq.write(TOP - addr - size + 1, size)    # I3 (tests/irq_monitor.py)
             span = range(TOP - addr - size + 1, TOP - addr + 1)
+            if self.dead_stored and not self.dead_stored.isdisjoint(span):
+                self.dead_stored.difference_update(span)
+            if self.dead_reads and not self.in_service \
+                    and self.code[0] <= self.r("pc") < self.code[1]:
+                dead_store(span.start, size, value & ((1 << 8 * size) - 1))
             if self.dead_flags is not None and self.dead_flags in span:
                 self.masked.update(span)
                 self.dead_flags = None
@@ -504,6 +516,18 @@ class Host:
                 # the existing dead-stack mask; all other writes still clear it.
                 self.masked.difference_update(span)
             return True
+
+        def dead_store(lin: int, size: int, value: int) -> None:
+            # memory is reversed: the guest's little-endian value is the 68k one
+            reads = self.dead_reads
+            for k in range(size):
+                b = value >> 8 * k & 0xFF
+                if (b, None) in reads:
+                    self.dead_stored.add(lin + k)
+                elif size > 1:
+                    w = value >> 16 * (k // 2) & 0xFFFF
+                    if any((w, m) in reads for m in (1, 2, 3) if m >> k % 2 & 1):
+                        self.dead_stored.add(lin + k)
 
         # The FLAGS image of an annotations/flags.csv PUSHF is dead by that
         # annotation; its word below SS:SP is masked until the guest rewrites it.
@@ -1354,8 +1378,11 @@ def check_capture(tag, regs, state, ram, dac, ref_regs, ref, snap, h, exempt=Non
             problems.append(f"{tag}: register {n} {regs[n]:04x} reference {ref_regs[n]}")
     dead = sum(ram[a] != ref[a] for a in h.masked if a < len(ref))
     print(f"{tag}: dead stack {len(h.masked)} bytes masked, {dead} of them differ")
+    stored = sorted(a for a in h.dead_stored - h.masked if a < len(ref) and ram[a] != ref[a])
+    print(f"{tag}: stores from dead stack {len(h.dead_stored)} bytes, {len(stored)} of them differ"
+          f"{' (exempt), first ' + format(stored[0], '05X') if stored else ''}")
     problems += [f"{tag}: {p}" for p in compare_ram(ram, ref, snap / "residency.csv",
-                                                     h.masked)]
+                                                     h.masked | h.dead_stored)]
     if dac is not None:
         problems += [f"{tag}: {p}" for p in compare_frame(ram, dac, snap, boxes=exempt.get("boxes", 0))]
     lo, hi = exempt.get("machine", (0, 0))
@@ -1376,9 +1403,9 @@ def main(argv=None) -> int:
     ap.add_argument("--label", action="store_true", help="print the milestone's label and exit")
     ap.add_argument("--sabotage", action="store_true",
                     help="each planted runtime fault (SABOTAGE) must fail the check")
-    ap.add_argument("--dead-sabotage", action="store_true",
-                    help="each DEAD_SABOTAGE control of the dead-stack rule must fail the check "
-                         "(a milestone whose services load registers from dead stack: m10)")
+    ap.add_argument("--dead-sabotage", nargs="*", choices=DEAD_SABOTAGE, metavar="CONTROL",
+                    help="each named DEAD_SABOTAGE control (default all) of the dead-stack rule "
+                         "must fail the check (registers: m10; stores: m14)")
     ap.add_argument("--screen", action="store_true",
                     help="the copy-protection hook declines: the translated screen runs on the "
                          "reference's keys, byte-exact lockstep through it (diagnostic)")
@@ -1403,9 +1430,11 @@ def main(argv=None) -> int:
                 missed.append(name)
         print(f"bypass sabotage: {'all caught' if not missed else 'MISSED ' + ' '.join(missed)}")
         return 1 if missed else 0
-    if args.dead_sabotage:
+    if args.dead_sabotage is not None:
         missed = []
         for name, what in DEAD_SABOTAGE.items():
+            if args.dead_sabotage and name not in args.dead_sabotage:
+                continue
             problems = check(args.milestone, args.timeout, None, name, bypass=args.bypass,
                              screen=args.screen)
             print(f"dead sabotage {name:12} ({what}): {len(problems)} problems, first: "
@@ -1601,12 +1630,16 @@ def bypass_return(trace: Path) -> int:
     raise ValueError(f"{trace}: no snapshot event")
 
 
-# Controls of the dead-stack rule (ServiceLog) at a milestone that uses it
-# (m10-film-room: INT 21h AH=47h): each must fail the lockstep.
+# Controls of the dead-stack rule at a milestone that uses it: registers (ServiceLog)
+# at m10-film-room (INT 21h AH=47h), stores (Host.dead_stored) at m14-tour-battle
+# (FLIGHT 126F:0A49); each must fail the lockstep.
 DEAD_SABOTAGE = {
-    "dead-off": "no dead-stack read recorded: register bytes loaded from dead stack compared exactly",
+    "dead-off": "no dead-stack read recorded: register bytes loaded and RAM bytes stored from "
+                "dead stack compared exactly",
     "dead-written": "DL of the first INT 21h AH=47h past the copy-protection hook logged with "
                     "bit 7 flipped (a byte the guest wrote, beside the bytes loaded from dead stack)",
+    "dead-stored-beside": "at the label, bit 7 flipped in the RAM byte after a byte stored from "
+                          "dead stack (a byte the guest wrote otherwise)",
 }
 BYPASS_MILESTONE = "m03p-protection-passed"
 RETURN_SITE = "FE_79843"   # the protection screen's return, 3273:0B03 (annotations/hle.csv)
@@ -1732,6 +1765,17 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
             if not q < 32 or h.gmem(base, 6) != h.gmem(base + 0x1222 + 6 * q, 6):
                 problems.append(f"bypass: question {q} and the glyphs "
                                 f"{h.gmem(base, 6).hex()} disagree")
+        if sabotage == "dead-stored-beside":
+            # a guest byte beside one stored from dead stack, flipped: the exemption
+            # is per byte (control)
+            a = next((a + 1 for a in sorted(h.dead_stored) if a + 1 not in h.dead_stored
+                      and a + 1 not in h.masked and any(lo <= a + 1 < hi for lo, hi in COMPARE)),
+                     None)
+            if a is None:
+                problems.append("dead-stored-beside: no byte stored from dead stack to plant beside")
+            else:
+                print(f"dead-stored-beside: {a:05X} flipped")
+                h.e.write(TOP - a, bytes([h.gmem(a, 1)[0] ^ 0x80]))
         problems += check_capture("host", g, h.mem(STATE, 16), h.gmem(0, 0x100000),
                                   h.mem(h.syms["rt_dac"], 768) if frame else None,
                                   ref_regs, ref, snap, h, exempt)

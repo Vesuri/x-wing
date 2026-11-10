@@ -352,7 +352,8 @@ handler reads: sync for the declared span).
   guest writes are kept in memory); every software
   INT's registers at entry and return vs the tracer's service log (a register
   byte loaded from masked dead stack may differ: [design](design.md)); registers
-  and RAM (environment MCB to A0000h) vs the snapshot, dead stack masked
+  and RAM (environment MCB to A0000h) vs the snapshot (a byte last stored from a
+  dead-stack read may differ: [design](design.md)), dead stack masked
   (below SS:SP at a service or hardware interrupt; at an IRQ0 delivery to the
   guest handler, which the reference runs on the interrupted stack, its frame and
   the depth `irq-footprint.csv` proves; and the FLAGS image of an `annotations/flags.csv`

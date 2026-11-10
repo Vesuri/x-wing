@@ -4,7 +4,8 @@ Steps of the [port plan](port-plan.md), in order; P6–P10 follow there. The rep
 the reference loop (P1, but for the two milestones below), the static and live map (P2),
 x86 semantics (P3: `make test-x86`), the 68020 backend (P4: `make test-m68k`) and the
 first vertical slice (P5: `make test-amiga`, the Amiga replay and the host lockstep to m01)
-are in place.
+are in place, and so is P6's host lockstep over every pinned milestone
+(`tests/host_run.py`).
 
 1. P1: the two milestones not yet reached ([DOS reference](dos-reference.md#not-yet-reached)).
    The rest of P1 is in place: `make dos-reference` passes 19 pinned milestones.

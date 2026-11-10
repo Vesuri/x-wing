@@ -222,6 +222,15 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
 - Translate root, both overlays and `ADLIB.IMS`.
 - Runtime surfaces complete, exit path included.
 - Lockstep clean over every milestone on the host and on FS-UAE (`make test-amiga`).
+- Host lockstep (`tests/host_run.py --milestone NAME`) against references recorded at the
+  current poll points: m00–m02 plain; m03, m03c and m03q with `--screen`; m03p with
+  `--bypass` (the oracle below); every milestone past the screen with `--bypass` against
+  its `hostb-` reference. The service logs are compared as they run and the REP slices are
+  held in packed arrays, so a flight's 65 million service events and 12 million slices fit
+  in memory. Service registers loaded from dead stack, and RAM bytes stored from it, may
+  differ ([design](design.md)).
+- Exit path: the exit to DOS frees ES = 3752h, inside the program's own block; DOS answers
+  error 9 (no MCB below it), and so does `dos.c`.
 - Copy-protection bypass:
   - The check is the protection screen, FRONTEND.OVL 3273:3470, called once from
     3273:0AFF. It picks a question (`[6562h]:0E06`), shows its glyphs (`[6562h]:0000`),
