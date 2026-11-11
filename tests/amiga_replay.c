@@ -62,6 +62,7 @@ volatile uint32_t replay_cs, replay_ip;
 volatile uint32_t replay_vga_reads;
 static uint32_t retrace_index, retrace_used;
 static uint32_t service_hash = 2166136261u, step_hits;
+static uint32_t exempt_index;
 /* A key's release (tests/host_run.py KeyRelease): at its service event, after
  * skip visits of the next step's point in that interval (skip < 0: at the
  * event); visits count from key-down and restart at each service event. */
@@ -85,9 +86,17 @@ static void hash_word(uint16_t word)
 
 static void service(const uint32_t *r, uint32_t vector, unsigned returning)
 {
+    uint16_t keep[8] = {0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff};
+    /* Register bytes the host's service log exempts as loaded from dead stack
+     * (tests/host_run.py --exempt-out; owner decision 2026-11-09): left out of
+     * the hash here as in the reference's (amiga_replay.py prepare). */
+    while (exempt_index < REPLAY_EXEMPTS && replay_exempts[exempt_index].service == replay_services) {
+        keep[replay_exempts[exempt_index].reg] = replay_exempts[exempt_index].mask;
+        ++exempt_index;
+    }
     for (unsigned i = 0; i < 8; ++i) {
         unsigned k = i < 6 ? i : i + 6; /* d0-d5/a4-a5 */
-        hash_word((uint16_t)r[k] ^ (i == 4 || i == 5 ? 0x7fff : 0));
+        hash_word(((uint16_t)r[k] ^ (i == 4 || i == 5 ? 0x7fff : 0)) & keep[i]);
     }
     hash_word(G_ES); hash_word(G_SS); hash_word(G_DS);
     hash_word(vector);
@@ -198,7 +207,7 @@ int32_t replay_point(uint32_t point)
                 if (replay_steps == REPLAY_STEPS) {
                     if (replay_services != REPLAY_SERVICES || replay_interrupts != REPLAY_IRQS || depth ||
                             replay_rep_index != REPLAY_REPS || replay_rep_active ||
-                            replay_vga_reads != REPLAY_VGA_READS)
+                            replay_vga_reads != REPLAY_VGA_READS || exempt_index != REPLAY_EXEMPTS)
                         fail("replay incomplete", replay_interrupts, replay_steps);
                     return -1;
                 }

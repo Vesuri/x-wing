@@ -378,7 +378,10 @@ handler reads: sync for the declared span).
   snapshot and REP points and the service hooks in `rt_entry.s`; it posts each recorded
   interrupt at its poll point and visit count, answers 3DAh with the recorded reads of
   the same service interval, takes the recorded calendar and file clock, checks the
-  service history by a cumulative FNV hash (every 256 events and the last) and holds
+  service history by a cumulative FNV hash (every 256 events and the last; `--exempt`
+  takes `tests/host_run.py --exempt-out` of the same milestone and reference and leaves
+  out of both sides' hash the register bytes the host's service log exempts as loaded
+  from dead stack, m10's INT 21h AH=47h; every entry must be met) and holds
   at `rt_replay_done` when the last snapshot is reached with every service, interrupt,
   REP slice and VGA read consumed. `make test-amiga-live`: the production image to the
   m01 label in real time, not compared.

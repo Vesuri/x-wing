@@ -13,6 +13,7 @@ after its own host run. Generated hooks, tables and captures stay in tmp/; no re
 is re-recorded.
 """
 import argparse
+import csv
 import json
 import os
 import signal
@@ -67,7 +68,22 @@ def rep_stream(records, ids):
     return bytes(out)
 
 
-def prepare(name, out, trace, late=False):
+def read_exempt(path, name, trace):
+    """tests/host_run.py --exempt-out of this milestone and reference: {event: {register:
+    and-mask}}, the bytes its service log exempts as loaded from dead stack (owner
+    decision 2026-11-09)."""
+    lines = path.read_text().splitlines()
+    want = f'# milestone={name} reference={trace.parent.name}'
+    if lines[0] != want:
+        raise SystemExit(f'{path}: {lines[0]!r}, not {want!r}')
+    exempt = {}
+    for row in csv.DictReader(lines[1:]):
+        mask = (0xff if int(row['bytes']) & 1 else 0) | (0xff00 if int(row['bytes']) & 2 else 0)
+        exempt.setdefault(int(row['event']), {})[row['register']] = 0xffff & ~mask
+    return exempt
+
+
+def prepare(name, out, trace, late=False, exempt=None):
     script = H.milestone_script(name, bypassed=late)
     irqs, releases = H.reference_inputs(trace, exact_releases=True)
     reps = rep_replay.read(trace, required=True)
@@ -87,8 +103,10 @@ def prepare(name, out, trace, late=False):
     out.mkdir(parents=True, exist_ok=True)
     gen.generate(out / 'gen', program=program)
     hashes, digest = [], 2166136261
-    for kind, r in services:
-        values = [r[n] for n in H.REGS + ('es', 'ss', 'ds', 'vector')]
+    exempt = exempt or {}
+    for k, (kind, r) in enumerate(services):
+        keep = exempt.get(k, {})
+        values = [r[n] & keep.get(n, 0xffff) for n in H.REGS] + [r[n] for n in ('es', 'ss', 'ds', 'vector')]
         values += [r['flags'] & 0x600, int(kind == 'svc_ret')]
         for byte in struct.pack('>' + 'H' * len(values), *values):
             digest = ((digest ^ byte) * 16777619) & 0xffffffff
@@ -133,6 +151,11 @@ def prepare(name, out, trace, late=False):
     text += array('struct replay_irq', 'replay_irqs', [(s, ids[lab], h, v) for s, lab, h, v in irqs])
     text += array('struct replay_step', 'replay_script', steps)
     text += array('struct replay_retrace', 'replay_retrace', retrace)
+    # (event, register index in H.REGS order, and-mask), by event
+    rows = [(k, H.REGS.index(n), m) for k in sorted(exempt) for n, m in sorted(exempt[k].items())]
+    text += ('struct replay_exempt { uint32_t service; uint16_t reg, mask; };\n'
+             f'#define REPLAY_EXEMPTS {len(rows)}u\n')
+    text += array('struct replay_exempt', 'replay_exempts', rows or [(0xffffffff, 0, 0xffff)])
     text += (f'#define REPLAY_HASH_STEP {HASH_STEP}u\n#define REPLAY_FINAL_HASH {digest}u\n'
              'static const uint32_t replay_service_hashes[] = {\n' +
              ','.join(map(str, hashes[HASH_STEP - 1::HASH_STEP])) + '};\n')
@@ -147,7 +170,8 @@ def prepare(name, out, trace, late=False):
     (out / 'expected.json').write_text(json.dumps(dict(
         services=len(services), interrupts=len(irqs), steps=len(steps), vga_reads=reads)))
     print(f'{name}: {len(points)} diagnostic points, {len(irqs)} interrupts, {len(services)} service events, '
-          f'{len(reps)} REP slices, {reads} VGA status reads', flush=True)
+          f'{len(reps)} REP slices, {reads} VGA status reads, {len(rows)} service register entries '
+          f'exempt as loaded from dead stack', flush=True)
 
 
 def build(out, screen=False):
@@ -236,6 +260,9 @@ if __name__ == '__main__':
     ap.add_argument('--bypass', action='store_true',
                     help='past the screen: the production hook bypasses it, against the bypassed '
                          'reference (tools/reference.py --polls --bypass), as tests/host_run.py --bypass')
+    ap.add_argument('--exempt', type=Path, metavar='CSV',
+                    help='tests/host_run.py --exempt-out of the same milestone and mode: the service '
+                         'hash leaves out the register bytes the host exempts as loaded from dead stack')
     ap.add_argument('--timeout', type=int, default=TIMEOUT,
                     help='seconds for the FS-UAE run and for the host run of the check')
     args = ap.parse_args()
@@ -244,6 +271,7 @@ if __name__ == '__main__':
                  'replay it with --screen')
     out = ROOT / 'tmp/amiga-replay' / args.milestone
     trace = H.host_reference(args.milestone, bypassed=args.bypass)
-    prepare(args.milestone, out, trace, late=args.bypass)
+    prepare(args.milestone, out, trace, late=args.bypass,
+            exempt=read_exempt(args.exempt, args.milestone, trace) if args.exempt else None)
     work = build(out, screen=args.screen)
     run(args.milestone, out, trace, work, late=args.bypass, screen=args.screen, timeout=args.timeout)

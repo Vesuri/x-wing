@@ -179,7 +179,8 @@ test-host: host
 # test-amiga (gate 5): the diagnostic replay image (tests/amiga_replay.py) replays
 # the host reference's interrupts, REP slices, VGA status reads and clocks on the
 # 68030 model; its capture at the milestone gets the host run's checks.
-# AMIGA_ARGS: --screen (m03, m03c, m03p, m03q) or --bypass (later milestones).
+# AMIGA_ARGS: --screen (m03, m03c, m03p, m03q) or --bypass (later milestones);
+# m10 also --exempt with tests/host_run.py --bypass --exempt-out of m10.
 # test-amiga-live: the production image runs to the milestone label in real time
 # (amiga/milestone.gdb.in); its state is timing-dependent, so it is not compared.
 AMIGA_MILESTONE ?= m01-logo

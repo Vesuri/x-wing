@@ -1187,6 +1187,7 @@ class ServiceLog:
         self.entry: list = []
         self.dead_bytes = 0
         self.dead_first: str | None = None
+        self.exempt: list[tuple[int, str, int]] = []  # (event, register, differing bytes 1|2)
 
     def __len__(self) -> int:
         return self.n
@@ -1221,6 +1222,9 @@ class ServiceLog:
         else:
             ge, we, was = self.entry.pop() if self.entry else (g, w, {})
             keep = {n: v for n, v in was.items() if (g[n], w[n]) == v}
+        for n in keep:
+            x = g[n] ^ w[n]
+            self.exempt.append((k, n, (1 if x & 0xFF else 0) | (2 if x >> 8 else 0)))
         diff = [f"{n}={g[n]:04x}/{w[n]:04x}" for n in self.KEYS if g[n] != w[n] and n not in keep]
         flags = w["flags"]
         for n, bit in (("cf", 0x1), ("zf", 0x40), ("if", 0x200), ("df", 0x400)):
@@ -1255,6 +1259,15 @@ class ServiceLog:
         if reached and not self.bad and self.n != self.total:
             return [f"service count {self.n} vs reference {self.total}"]
         return self.bad
+
+
+def write_exempt(path: Path, milestone: str, trace: Path, rows) -> None:
+    """The service register bytes exempt as loaded from dead stack (ServiceLog), for
+    tests/amiga_replay.py --exempt: its service hash leaves out the same bytes."""
+    with path.open("w") as f:
+        f.write(f"# milestone={milestone} reference={trace.parent.name}\nevent,register,bytes\n")
+        f.writelines(f"{k},{n},{m}\n" for k, n, m in rows)
+    print(f"services: {len(rows)} exempt register entries written to {path}")
 
 
 def compare_ram(ram: bytes, ref: bytes, residency: Path, masked: set[int]) -> list[str]:
@@ -1413,6 +1426,9 @@ def main(argv=None) -> int:
     ap.add_argument("--screen", action="store_true",
                     help="the copy-protection hook declines: the translated screen runs on the "
                          "reference's keys, byte-exact lockstep through it (diagnostic)")
+    ap.add_argument("--exempt-out", type=Path, metavar="CSV",
+                    help="write the service register bytes exempt as loaded from dead stack "
+                         "(for tests/amiga_replay.py --exempt)")
     ap.add_argument("--bypass", action="store_true",
                     help="the copy-protection hook replaces the screen: at "
                          f"{BYPASS_MILESTONE} lockstep to it, then the state at the return "
@@ -1460,7 +1476,7 @@ def main(argv=None) -> int:
     if args.screen and args.bypass:
         raise SystemExit("--screen and --bypass exclude each other")
     problems = check(args.milestone, args.timeout, args.amiga, None, bypass=args.bypass,
-                     screen=args.screen)
+                     screen=args.screen, exempt_out=args.exempt_out)
     for p in problems:
         print(p)
     print(f"host run to {args.milestone}: {'ok' if not problems else 'FAIL'}")
@@ -1655,7 +1671,8 @@ BYPASS_LATE_SABOTAGE = {"answer": "the bypass leaves AX = 0, a wrong answer"}
 
 def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None,
           trace: Path | None = None, elf: Path | None = None, bypass: bool = False,
-          bypass_sabotage: str | None = None, screen: bool = False) -> list[str]:
+          bypass_sabotage: str | None = None, screen: bool = False,
+          exempt_out: Path | None = None) -> list[str]:
     # past the screen (BYPASS_MILESTONE's return) the bypassed port runs in lockstep
     # with the bypassed reference (owner decision 2026-11-08): no state is exempt
     late = bypass and milestone != BYPASS_MILESTONE
@@ -1751,6 +1768,8 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
         print(f"services: {h.services.dead_bytes} register bytes loaded from dead stack differ "
               f"(exempt), first {h.services.dead_first}")
     print(f"services: {len(h.services)} run, {h.services.total} in the reference")
+    if exempt_out is not None and h.stopped_at == label and not h.services.bad:
+        write_exempt(exempt_out, milestone, trace, h.services.exempt)
     if h.stopped_at == label:
         ref_regs = dict(kv.split("=") for kv in (snap / "regs.txt").read_text().split())
         ref = (snap / "ram.bin").read_bytes()
