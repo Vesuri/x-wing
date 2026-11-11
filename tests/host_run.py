@@ -1282,13 +1282,14 @@ def compare_ram(ram: bytes, ref: bytes, residency: Path, masked: set[int]) -> li
 
 
 def compare_frame(ram: bytes, dac: bytes, snap: Path, size: int = FRAME[1] - FRAME[0],
-                  boxes: int = 0) -> list[str]:
+                  boxes: int = 0, pending: set[int] | None = None) -> list[str]:
     """boxes: up to that many 16x16 boxes of differing pixels are the mouse arrow's
-    (--bypass: drawn at the screen's mouse position in the reference)."""
+    (--bypass: drawn at the screen's mouse position in the reference). pending:
+    pixels not compared (compare_shown)."""
     planes = (snap / "vram.bin").read_bytes()
     lo = FRAME[0]
     ref = bytes(planes[((a & ~3) << 2) | (a & 3)] for a in range(size))
-    bad = [a for a in range(size) if ram[lo + a] != ref[a]]
+    bad = [a for a in range(size) if ram[lo + a] != ref[a] and not (pending and a in pending)]
     corners: list[tuple[int, int]] = []
     for a in bad:
         x, y = a % 320, a // 320
@@ -1307,9 +1308,12 @@ def compare_frame(ram: bytes, dac: bytes, snap: Path, size: int = FRAME[1] - FRA
     return out
 
 
-def compare_shown(capture: Path, bytes_per_row: int, snap: Path) -> list[str]:
+def compare_shown(capture: Path, bytes_per_row: int, snap: Path,
+                  pending: set[int] | None = None) -> list[str]:
     """The Amiga screen: 8 bitplanes, plane k = bit k of the pixel; colours =
-    LoadRGB32 (count << 16, first 0), 32-bit guns whose top 6 bits are the DAC."""
+    LoadRGB32 (count << 16, first 0), 32-bit guns whose top 6 bits are the DAC.
+    pending: pixels stored since the last present, at a label that is not the
+    game's mouse poll (D9: a frame is presented only there), not compared."""
     if not bytes_per_row:
         return ["amiga: no screen shown"]
     planes = [(capture / f"plane{k}.bin").read_bytes() for k in range(8)]
@@ -1327,7 +1331,7 @@ def compare_shown(capture: Path, bytes_per_row: int, snap: Path) -> list[str]:
         out.append(f"amiga: LoadRGB32 header {words[0]:08x}")
     dac = bytes(dac)
     ram = bytes(lo) + bytes(shown) + bytes(hi - lo - len(shown))
-    out += [f"amiga shown: {p}" for p in compare_frame(ram, dac, snap, len(shown))]
+    out += [f"amiga shown: {p}" for p in compare_frame(ram, dac, snap, len(shown), pending=pending)]
     return out
 
 
@@ -1641,6 +1645,8 @@ DEAD_SABOTAGE = {
     "dead-stored-beside": "at the label, bit 7 flipped in the RAM byte after a byte stored from "
                           "dead stack (a byte the guest wrote otherwise)",
 }
+# The game's mouse polls (tools/reference.py SITES menu and frame): a frame ends there.
+FRAME_ENDS = {"FE_1808E", "FLT_1B7D2"}
 BYPASS_MILESTONE = "m03p-protection-passed"
 RETURN_SITE = "FE_79843"   # the protection screen's return, 3273:0B03 (annotations/hle.csv)
 # Control past the screen: the bypass answers wrongly, and the lockstep must fail.
@@ -1783,7 +1789,13 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
             regs = dict(kv.split("=") for kv in (amiga / "regs.txt").read_text().split())
             ga = {n: int(regs[n], 16) for n in REGS}
             if frame:
-                problems += compare_shown(amiga, int(regs["bpr"]), snap)
+                # a label other than the mouse poll (a frame end) is mid-frame: what
+                # the guest stored since the last present is not shown yet (D9)
+                pending = None if label in FRAME_ENDS else set(h.vram_written)
+                if pending:
+                    print(f"amiga shown: {label} is not a frame end; {len(pending)} pixels "
+                          f"stored since the last present are not compared (D9)")
+                problems += compare_shown(amiga, int(regs["bpr"]), snap, pending)
             problems += check_capture("amiga", ga, (amiga / "state.bin").read_bytes(),
                                       (amiga / "ram.bin").read_bytes()[::-1],  # reversed
                                       (amiga / "dac.bin").read_bytes() if frame else None,

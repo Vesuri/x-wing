@@ -368,7 +368,10 @@ handler reads: sync for the declared span).
   (A1200 chipset, FS-UAE, `amiga/milestone.gdb.in`) from a diagnostic replay image,
   in the host run's modes (m00–m02 plain; `--screen` for m03, m03c, m03p and m03q,
   where `XWING_REPLAY_SCREEN` makes the copy-protection hook decline; `--bypass` past
-  the screen against the `hostb-` references; key releases at their recorded visits),
+  the screen against the `hostb-` references; key releases at their recorded visits;
+  at a label other than the mouse poll, m03p's and m03q's screen return, the shown
+  pixels the guest stored since the last present are not compared, as D9 shows them
+  only at the next poll),
   plus the shown screen (bitplanes, colour table) decoded against the reference
   framebuffer and DAC. The image (`XWING_REPLAY`, sync mode, built in
   `tmp/amiga-replay/`) adds `rt_replay_point` hooks at the reference's interrupt,
