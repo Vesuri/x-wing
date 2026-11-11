@@ -5,6 +5,10 @@
 #include "runtime.h"
 #include "platform.h"
 #include "replay_data.h"
+/* A milestone may record none of a kind (m00-entry: no service event,
+ * interrupt or REP slice): zero counts and empty tables are valid. */
+#pragma GCC diagnostic ignored "-Wtype-limits"
+#pragma GCC diagnostic ignored "-Warray-bounds"
 #ifndef REPLAY_REPS
 #define REPLAY_REPS 0u
 #endif
@@ -57,7 +61,12 @@ volatile uint32_t replay_services, replay_interrupts, replay_steps;
 volatile uint32_t replay_cs, replay_ip;
 volatile uint32_t replay_vga_reads;
 static uint32_t retrace_index, retrace_used;
-static uint32_t service_hash = 2166136261u, step_hits, release_at;
+static uint32_t service_hash = 2166136261u, step_hits;
+/* A key's release (tests/host_run.py KeyRelease): at its service event, after
+ * skip visits of the next step's point in that interval (skip < 0: at the
+ * event); visits count from key-down and restart at each service event. */
+static uint32_t release_pending, release_service, release_interval, release_visits;
+static int32_t release_skip;
 static uint32_t visits[REPLAY_POINTS], epochs[REPLAY_POINTS];
 static uint32_t pending[64], vectors[64], depth, makes;
 static int32_t mouse_x, mouse_y;
@@ -144,8 +153,18 @@ static void executed(uint32_t point)
 int32_t replay_point(uint32_t point)
 {
     if (point >= REPLAY_POINTS) fail("replay point", point, 0);
-    if (release_at && replay_services >= release_at) release_at = 0;
-    if (replay_steps < REPLAY_STEPS && !release_at) {
+    if (release_pending) {
+        int target = replay_steps < REPLAY_STEPS && point == replay_script[replay_steps].point;
+        if (replay_services != release_interval) {
+            release_interval = replay_services;
+            release_visits = 0;
+        }
+        if (target) ++release_visits;
+        if (replay_services != release_service ? replay_services > release_service :
+                release_skip < 0 || (target && release_visits > (uint32_t)release_skip))
+            release_pending = 0;
+    }
+    if (replay_steps < REPLAY_STEPS && !release_pending) {
         const struct replay_step *step = &replay_script[replay_steps];
         if (point == step->point && ++step_hits == step->hits) {
             ++replay_steps; step_hits = 0;
@@ -165,7 +184,11 @@ int32_t replay_point(uint32_t point)
                 for (int i = 2; i >= 0; --i)
                     if (step->value & (1u << (9 + i)))
                         rt_key_ring[rt_key_tail++ % RT_KEY_RING] = modifiers[i] | 0x80;
-                release_at = step->release;
+                release_pending = 1;
+                release_service = step->release;
+                release_skip = step->skip;
+                release_interval = 0xffffffffu;
+                release_visits = 0;
                 break;
             }
             case 2: mouse_x += step->value; break;

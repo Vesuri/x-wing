@@ -67,12 +67,9 @@ def rep_stream(records, ids):
     return bytes(out)
 
 
-def prepare(name, out, trace):
-    script = H.milestone_script(name)
-    irqs, releases = H.reference_inputs(trace)
-    _, exact = H.reference_inputs(trace, exact_releases=True)
-    if any(not isinstance(r, int) for r in exact):
-        raise ValueError('key releases with visit counts: the replay counts service events only')
+def prepare(name, out, trace, late=False):
+    script = H.milestone_script(name, bypassed=late)
+    irqs, releases = H.reference_inputs(trace, exact_releases=True)
     reps = rep_replay.read(trace, required=True)
     summary = dict(x.split('=', 1) for x in (trace / 'summary.txt').read_text().split())
     assert int(summary['polls'], 16) == H.fnv(H.POLLS.read_bytes()), 'reference poll points differ'
@@ -100,14 +97,15 @@ def prepare(name, out, trace):
     release = iter(releases)
     for (lab, _, hits), key in script['keys']:
         if isinstance(key, str):
-            kind, value, end = {'x': 2, 'y': 3, 'b': 4}[key[1]], int(key[2:]), 0
+            kind, value, end, skip = {'x': 2, 'y': 3, 'b': 4}[key[1]], int(key[2:]), 0, -1
         else:
             base = key & 0xffff
-            kind, value, end = (1, base >> 8 | (0x100 if base in H.GREY else 0) |
-                                ((key >> 7) & 0xe00), next(release))
-        steps.append((ids[lab], hits, kind, value, end))
+            r = next(release)
+            end, skip = (r, -1) if isinstance(r, int) else r
+            kind, value = 1, base >> 8 | (0x100 if base in H.GREY else 0) | ((key >> 7) & 0xe00)
+        steps.append((ids[lab], hits, kind, value, end, skip))
     assert next(release, None) is None
-    steps += [(ids[lab], hits, 0, 0, 0) for lab, _, hits in script['snapshots']]
+    steps += [(ids[lab], hits, 0, 0, 0, -1) for lab, _, hits in script['snapshots']]
     locations = []
     for lab in points:
         mod, off = nodes[lab]
@@ -121,7 +119,7 @@ def prepare(name, out, trace):
     text = ('/* Generated from the existing original reference; local only. */\n'
             'struct replay_point_info { uint32_t cs, ip; };\n'
             'struct replay_irq { uint32_t service, point, hits, vector; };\n'
-            'struct replay_step { uint32_t point, hits, kind; int32_t value; uint32_t release; };\n'
+            'struct replay_step { uint32_t point, hits, kind; int32_t value; uint32_t release; int32_t skip; };\n'
             'struct replay_retrace { uint32_t service, value, repeat; };\n'
             f'#define REPLAY_POINTS {len(points)}u\n#define REPLAY_IRQS {len(irqs)}u\n'
             f'#define REPLAY_SERVICES {len(services)}u\n#define REPLAY_STEPS {len(steps)}u\n'
@@ -135,7 +133,7 @@ def prepare(name, out, trace):
     text += array('struct replay_irq', 'replay_irqs', [(s, ids[lab], h, v) for s, lab, h, v in irqs])
     text += array('struct replay_step', 'replay_script', steps)
     text += array('struct replay_retrace', 'replay_retrace', retrace)
-    text += (f'#define REPLAY_HASH_STEP {HASH_STEP}u\n#define REPLAY_FINAL_HASH {hashes[-1]}u\n'
+    text += (f'#define REPLAY_HASH_STEP {HASH_STEP}u\n#define REPLAY_FINAL_HASH {digest}u\n'
              'static const uint32_t replay_service_hashes[] = {\n' +
              ','.join(map(str, hashes[HASH_STEP - 1::HASH_STEP])) + '};\n')
     (out / 'replay_data.h').write_text(text)
@@ -152,18 +150,18 @@ def prepare(name, out, trace):
           f'{len(reps)} REP slices, {reads} VGA status reads', flush=True)
 
 
-def build(out):
+def build(out, screen=False):
     work = out / 'amiga'
     work.mkdir(exist_ok=True)
     makefile = work / 'Makefile'
     if not makefile.exists():
         makefile.symlink_to(ROOT / 'amiga/Makefile')
     subprocess.run(['make', '-s', '-C', str(work), f'REPO={os.path.relpath(ROOT, work)}',
-                    'GEN=../gen', 'REPLAY=..'], check=True)
+                    'GEN=../gen', 'REPLAY=..'] + (['REPLAY_SCREEN=1'] if screen else []), check=True)
     return work
 
 
-def run(name, out, trace, work):
+def run(name, out, trace, work, late=False, screen=False, timeout=TIMEOUT):
     capture = out / 'capture'
     capture.mkdir(exist_ok=True)
     template = (ROOT / 'amiga/milestone.gdb.in').read_text()
@@ -195,18 +193,18 @@ def run(name, out, trace, work):
                AMIGA_CPU=os.environ.get('AMIGA_CPU', '68030'),
                XWING_ELF=str(work / 'out/XWing.elf'), FSUAE_RUN=os.path.relpath(run_dir, ROOT / 'amiga'),
                FSUAE_CLAIM_STRICT='1', XWING_ARGS='',
-               # The diagnostic image carries the reference (replay_data.h, 2.3 MB of
-               # .rodata) beside the code: with the target's 8 MB of Fast RAM the
-               # guest block no longer fits ("X-Wing not enough memory"). The extra
-               # Zorro III board is for that data; the production image keeps the
-               # 8 MB target (make test-amiga-live).
-               EXTRA_ARGS='--zorro_iii_memory=8192')
+               # The diagnostic image carries the reference (replay_data.h: 2.3 MB of
+               # .rodata at m01, 15 MB at m14) beside the code: with the target's 8 MB
+               # of Fast RAM the guest block no longer fits ("X-Wing not enough
+               # memory"). The extra Zorro III board is for that data; the production
+               # image keeps the 8 MB target (make test-amiga-live).
+               EXTRA_ARGS='--zorro_iii_memory=65536')
     with (capture / 'gdb.log').open('w') as log:
         command = [str(ROOT / 'amiga/debug.sh'), '', str(capture / 'fixture.gdb'), str(work / 'out/XWing.exe')]
         process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT,
                                    start_new_session=True)
         try:
-            result = process.wait(timeout=TIMEOUT)
+            result = process.wait(timeout=timeout)
         except BaseException:
             # Only the process group created above belongs to this capture.
             os.killpg(process.pid, signal.SIGTERM)
@@ -222,7 +220,7 @@ def run(name, out, trace, work):
     regs = [line.removeprefix('XWING_REGS ') for line in lines if line.startswith('XWING_REGS ')]
     assert len(regs) == 1, regs
     (capture / 'regs.txt').write_text(regs[0])
-    problems = H.check(name, TIMEOUT, capture, None, trace=trace)
+    problems = H.check(name, timeout, capture, None, trace=trace, bypass=late, screen=screen)
     if problems:
         raise SystemExit('\n'.join(problems))
     print(f'Amiga diagnostic replay {name}: registers, state, RAM, DAC, shown pixels and '
@@ -232,9 +230,20 @@ def run(name, out, trace, work):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--milestone', required=True)
+    ap.add_argument('--screen', action='store_true',
+                    help='the copy-protection hook declines: the translated screen runs on the '
+                         "reference's keys (m03, m03c, m03p, m03q), as tests/host_run.py --screen")
+    ap.add_argument('--bypass', action='store_true',
+                    help='past the screen: the production hook bypasses it, against the bypassed '
+                         'reference (tools/reference.py --polls --bypass), as tests/host_run.py --bypass')
+    ap.add_argument('--timeout', type=int, default=TIMEOUT,
+                    help='seconds for the FS-UAE run and for the host run of the check')
     args = ap.parse_args()
+    if args.bypass and args.milestone == H.BYPASS_MILESTONE:
+        ap.error(f'{H.BYPASS_MILESTONE} is the host oracle (tests/host_run.py --bypass); '
+                 'replay it with --screen')
     out = ROOT / 'tmp/amiga-replay' / args.milestone
-    trace = H.host_reference(args.milestone)
-    prepare(args.milestone, out, trace)
-    work = build(out)
-    run(args.milestone, out, trace, work)
+    trace = H.host_reference(args.milestone, bypassed=args.bypass)
+    prepare(args.milestone, out, trace, late=args.bypass)
+    work = build(out, screen=args.screen)
+    run(args.milestone, out, trace, work, late=args.bypass, screen=args.screen, timeout=args.timeout)

@@ -63,6 +63,10 @@ endif
 ifneq ($(REPLAY),)
 CCFLAGS += -DXWING_REPLAY -I"$(REPLAY)"
 VASMFLAGS += -DXWING_REPLAY=1
+# --screen: the copy-protection hook declines, so the translated screen runs
+ifneq ($(REPLAY_SCREEN),)
+VASMFLAGS += -DXWING_REPLAY_SCREEN=1
+endif
 OBJECTS += obj/replay_c.o obj/replay_s.o
 obj/replay_c.o: $(REPO)/tests/amiga_replay.c $(REPLAY)/replay_data.h | obj
 	$(CC) $(CCFLAGS) -ffreestanding -I"$(RUNTIME)" -c -o $@ $<

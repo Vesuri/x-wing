@@ -364,8 +364,11 @@ handler reads: sync for the declared span).
   instructions, IF clear or services; a main write of a song byte the handler reads
   before and after with no main-code driver request on either side is a race, a
   buffer reloaded around requests is reuse; record `tmp/test/irq-monitor-<run>.json`).
-  `make test-amiga` (`tests/amiga_replay.py`): the same at m01-logo on the 68030 model
+  `make test-amiga` (`tests/amiga_replay.py`): the same per milestone on the 68030 model
   (A1200 chipset, FS-UAE, `amiga/milestone.gdb.in`) from a diagnostic replay image,
+  in the host run's modes (m00–m02 plain; `--screen` for m03, m03c, m03p and m03q,
+  where `XWING_REPLAY_SCREEN` makes the copy-protection hook decline; `--bypass` past
+  the screen against the `hostb-` references; key releases at their recorded visits),
   plus the shown screen (bitplanes, colour table) decoded against the reference
   framebuffer and DAC. The image (`XWING_REPLAY`, sync mode, built in
   `tmp/amiga-replay/`) adds `rt_replay_point` hooks at the reference's interrupt,

@@ -179,6 +179,7 @@ test-host: host
 # test-amiga (gate 5): the diagnostic replay image (tests/amiga_replay.py) replays
 # the host reference's interrupts, REP slices, VGA status reads and clocks on the
 # 68030 model; its capture at the milestone gets the host run's checks.
+# AMIGA_ARGS: --screen (m03, m03c, m03p, m03q) or --bypass (later milestones).
 # test-amiga-live: the production image runs to the milestone label in real time
 # (amiga/milestone.gdb.in); its state is timing-dependent, so it is not compared.
 AMIGA_MILESTONE ?= m01-logo
@@ -190,7 +191,7 @@ amiga-sync: gen-fresh
 	mkdir -p build/amiga-sync && ln -sf ../../amiga/Makefile build/amiga-sync/Makefile
 	@$(ENV) $(MAKE) -C build/amiga-sync REPO=../.. SYNC=1
 test-amiga: host
-	$(ENV) AMIGA_CPU=$(AMIGA_CPU) python3 tests/amiga_replay.py --milestone $(AMIGA_MILESTONE)
+	$(ENV) AMIGA_CPU=$(AMIGA_CPU) python3 tests/amiga_replay.py --milestone $(AMIGA_MILESTONE) $(AMIGA_ARGS)
 test-amiga-live: amiga
 	@mkdir -p $(AMIGA_CAPTURE)
 	sed -e "s|@LABEL@|$$(python3 tests/host_run.py --label --milestone $(AMIGA_MILESTONE))|" \

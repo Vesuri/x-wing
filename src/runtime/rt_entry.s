@@ -327,6 +327,10 @@ rt_fault:
 ; screen's call is replaced by a correct first answer. NE skips the call.
 ; Clobbers d7 and a0; load_regs reloads the guest registers (AX = 1) and bases.
 rt_hle_copy_protection:
+	ifd	XWING_REPLAY_SCREEN
+	moveq	#0,d7			; diagnostic replay --screen: EQ, the call runs
+	rts
+	endif
 	bsr	save_regs
 	jsr	rt_hle_copy_protection_c
 	bsr	load_regs
