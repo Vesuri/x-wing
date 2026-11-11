@@ -104,6 +104,7 @@ Copied from Secret Weapons of the Luftwaffe, as above.
 | `docs/mac-reference.md` | booting the original under MAME |
 | `docs/overlay-manager.md` | X-Wing's overlay manager, its model and check |
 | `docs/external-surface.md` | interrupts, ports, VGA, EMS, the music driver and the translator fit |
+| `docs/indirect-coverage.md` | indirect calls and jumps the traces never ran: their pointers, targets and status |
 | `docs/x86-notes.md` | x86 real-mode facts the decoder, IR and lowering rely on; Unicorn quirks |
 | `docs/open-work.md` | before starting any work |
 

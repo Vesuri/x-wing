@@ -259,6 +259,8 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
   - `tests/host_run.py --screen` (diagnostic): the hook declines, so the translated
     screen runs on the reference's keys and the lockstep stays byte-exact through it
     and on to the later milestones.
+- Indirect coverage: the 186 sites the P2 traces never ran are reviewed in
+  [indirect coverage](indirect-coverage.md); none is excluded.
 - Gate: all milestones in lockstep; zero unclassified; `indirect-coverage` reviewed; the
   bypass oracle passes.
 
