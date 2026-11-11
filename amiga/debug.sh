@@ -31,7 +31,10 @@ mkdir -p "$DH0/c" "$DH0/s" "$DH1" "$RUN/state" "$GDBHOME"
 printf 'C:SetPatch QUIET\ncd dh1:\nXWing %s\n' "${XWING_ARGS:-}" > "$DH0/s/startup-sequence"
 cp -f "$SETPATCH" "$DH0/c/SetPatch"
 rsync -a --delete "$SOURCE/" "$DH1/"
-cp -f "${3:-out/XWing.exe}" "$DH1/XWing" || exit 1
+# The program goes on the boot volume's C:, run by name as before (run.sh): the game
+# directory stays the guest's C:\XWING entry for entry (its find-first scans
+# count the entries).
+cp -f "${3:-out/XWing.exe}" "$DH0/c/XWing" || exit 1
 rm -f "$RUN"/state/*.uss
 
 fsuae_claim_port || exit 1

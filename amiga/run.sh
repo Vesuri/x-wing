@@ -25,7 +25,10 @@ mkdir -p "$DH0/c" "$DH0/s" "$DH1" "$RUN/state"
 printf 'C:SetPatch QUIET\ncd dh1:\nXWing %s\n' "${XWING_ARGS:-}" > "$DH0/s/startup-sequence"
 cp -f "$SETPATCH" "$DH0/c/SetPatch"
 rsync -a --delete "$GAME/" "$DH1/"
-cp -f "$EXE" "$DH1/XWing"
+# The program goes on the boot volume's C:, run by name as before: the game
+# directory stays the guest's C:\XWING entry for entry (its find-first scans
+# count the entries).
+cp -f "$EXE" "$DH0/c/XWing"
 # A resumed .uss saved by a halted GDB session makes any build look frozen.
 rm -f "$RUN"/state/*.uss
 
