@@ -7,3 +7,8 @@ FLIGHT.OVL,0x1d959,XWING.EXE+0x3cddc,16,"[bx+2D6Ch] of DGROUP, bx a byte from th
 FLIGHT.OVL,0x1d969,XWING.EXE+0x3cddc,16,"as +1D959 (bound INFERRED, contents MEASURED)"
 FLIGHT.OVL,0x1da68,XWING.EXE+0x3cdfc,16,"[bx+2D8Ch] of DGROUP, bx a byte from the record (even, 0 skipped); 16 words, zero in the file after them; file equals RAM at m13 (bound INFERRED, contents MEASURED)"
 FLIGHT.OVL,0x1da78,XWING.EXE+0x3cdfc,16,"as +1DA68 (bound INFERRED, contents MEASURED)"
+ADLIB.IMS,0x00387,ADLIB.IMS+0x04d7e,1,"call cx of field +04h of a descriptor of the list at DS:0034h: DS:007Ah, whose field is the table entry, or DS:0652h, whose fields are 0 (or cx,cx; je skips the call); file equals RAM at m12-m14 (MEASURED)"
+ADLIB.IMS,0x0047b,ADLIB.IMS+0x04d84,1,"call cx of descriptor field +0Ah, as +00387 (MEASURED)"
+ADLIB.IMS,0x004de,ADLIB.IMS+0x04d86,1,"call cx of descriptor field +0Ch, as +00387 (MEASURED)"
+ADLIB.IMS,0x005d2,ADLIB.IMS+0x04d8e,1,"call ax of descriptor field +14h (si from the list search +0077E), as +00387 (MEASURED)"
+ADLIB.IMS,0x005fa,ADLIB.IMS+0x04d90,1,"call cx of descriptor field +16h, as +00387 (MEASURED)"

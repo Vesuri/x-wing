@@ -121,7 +121,7 @@ architecture.md (SWOTL `docs/architecture.md`).
 |---|---|
 | `translator/image.py` | root, overlay and driver images (`tools/xwing_model.py`), annotations, run-time bytes of self-modified regions |
 | `translator/decode.py` | own table-driven decoder: 8086 plus the 80186 forms X-Wing uses (`push imm`, three-operand `imul`, shifts by an immediate, `enter`, `leave`); the other 186+ and FPU opcodes raise |
-| `translator/cfg.py` | recursive descent from `annotations/` seeds over the root, overlay segment and driver ranges; CS along flow; thunks resolved by descriptor index, other far targets by the parent chain; self-modified regions recorded, not decoded |
+| `translator/cfg.py` | recursive descent from `annotations/` seeds over the root, overlay segment and driver ranges; CS along flow; thunks resolved by descriptor index, other far targets by the parent chain (a far immediate whose segment word is not relocated is an absolute address and lowers to its named stop); self-modified regions recorded, not decoded |
 | `translator/ir.py`, `sem.py` | IR ops; lifting of every decoded instruction |
 | `translator/interp.py` | host IR interpreter (the semantics under test) |
 | `translator/gen.py` | `make gen`: `build/gen/<module>.ir` and `.s` with hash header; audit against `tests/audit.csv`; coverage report (G6); sizes the R8 alignment pads by assembling the program (vasm) |
@@ -295,11 +295,15 @@ diffs directly); relocated words in instructions are emitted as
 `entries.csv`, `indirect.csv` (site -> targets; written by `make map`),
 `tables.csv` (cs: word tables sized by evidence other than an MS C bounds
 check, read by the sweep), `data-tables.csv` (near call sites whose target comes from a
-word table in a data segment: the table's module offset, entries and evidence; the sweep
-reads the words from the file into the site's proved targets), `code-pointers.csv`
+word table in a data segment, through a memory operand or a register loaded from it: the
+table's module offset, entries and evidence; the sweep reads the words from the file into
+the site's proved targets), `code-pointers.csv`
 (far functions found statically by `make map`: far pointer constants `mov r,offset;
-mov r,seg` with the segment relocated and a prologue at the target, and prologues right
-after a decoded RETF; cfg seeds them, so they are far dispatch rows), `runtime.csv` (MS C runtime entries: name,
+mov r,seg`, stored as two words `mov [m],offset; mov [m+2],seg` (a FRONTEND method slot) or
+pushed as `push seg; push offset`, with the segment relocated and a prologue at the target,
+and prologues right after a decoded RETF and up to three NOPs, whose CS is the highest
+known code segment at or below them (the module's own, not the previous one's); cfg seeds
+them, so they are far dispatch rows), `runtime.csv` (MS C runtime entries: name,
 class, evidence), `self-modifying.csv` (D16 regions and cell forms),
 `flags.csv` (PUSHF/POPF pairs that only save and restore FLAGS),
 `noreturn.csv` (X-Wing: calls with no fall-through, read by cfg and the sweep; the

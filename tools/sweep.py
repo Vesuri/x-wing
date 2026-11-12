@@ -146,7 +146,7 @@ class Sweep:
         self.curated = dispatch_tables()
         self.data_tables = data_tables()
         self.code_ptrs: set[tuple[str, int, str, int, int]] = set()  # load site -> target, CS
-        self.retf_funcs: set[tuple[str, int]] = set()            # far functions after a RETF
+        self.retf_funcs: set[tuple[str, int, int]] = set()       # far functions after a RETF, CS
         self.index_unit = {int(n.split('#')[1]): n for n in us if '#' in n}
         self.fixups = {f: set(mods[f].fixups) for f in self.cls}
         self.fixups = {f: set(mods[f].fixups) for f in self.cls}
@@ -215,10 +215,10 @@ class Sweep:
         the same without the doubling (a byte index: N/2+1 entries), or a cs: word table
         call/jmp of annotations/tables.csv (count from there)."""
         ops = i.operands
-        if i.mnemonic not in ('jmp', 'call') or not ops or ops[0].type != x86.X86_OP_MEM:
+        if i.mnemonic in ('jmp', 'call') and (u.file, off) in self.data_tables:
+            self.data_table(u, off, seg)    # a memory operand, or a register loaded from the table
             return
-        if (u.file, off) in self.data_tables:
-            self.data_table(u, off, seg)
+        if i.mnemonic not in ('jmp', 'call') or not ops or ops[0].type != x86.X86_OP_MEM:
             return
         mem = ops[0].mem
         if i.reg_name(mem.segment) != 'cs' or mem.index:
@@ -286,24 +286,85 @@ class Sweep:
                 n = len(self.code_ptrs)
                 self.code_pointer(u, at, ins[at - 3], ins[at])
                 new |= len(self.code_ptrs) > n
+            for at in [o for o in ins if u.has(o) and ins[o].mnemonic in ('mov', 'push')]:
+                prev = next((ins[p] for p in range(at - 1, at - 9, -1)
+                             if p in ins and p + ins[p].size == at), None)
+                n = len(self.code_ptrs)
+                self.code_pointer_stored(u, at, prev, ins[at])
+                new |= len(self.code_ptrs) > n
         return new
+
+    def code_pointer_stored(self, u: Unit, at: int, prev, i) -> None:
+        """A far code pointer stored to memory by two word moves of immediates (offset,
+        then the relocated segment at the next word: a FRONTEND object's method slot), or
+        pushed as `push seg; push offset` with the segment relocated."""
+        fix = self.fixups[u.file]
+        if prev is None or prev.mnemonic != i.mnemonic:
+            return
+        if i.mnemonic == 'mov':
+            if len(i.operands) != 2 or len(prev.operands) != 2 or i.operands[0].type != x86.X86_OP_MEM \
+                    or prev.operands[0].type != x86.X86_OP_MEM or i.operands[1].type != x86.X86_OP_IMM \
+                    or prev.operands[1].type != x86.X86_OP_IMM or i.operands[0].size != 2 \
+                    or prev.operands[0].size != 2:
+                return
+            a, b = prev.operands[0].mem, i.operands[0].mem
+            if (a.segment, a.base, a.index) != (b.segment, b.base, b.index) or b.disp != a.disp + 2 \
+                    or (at + i.size - 2) not in fix:
+                return
+            seg, ip = i.operands[1].imm & 0xFFFF, prev.operands[1].imm & 0xFFFF
+        else:   # push seg (relocated); push offset
+            if prev.size != 3 or i.size != 3 or self.mods[u.file].data[at - 3] != 0x68 \
+                    or self.mods[u.file].data[at] != 0x68 or (at - 2) not in fix or (at + 1) in fix:
+                return
+            seg, ip = prev.operands[0].imm & 0xFFFF, i.operands[0].imm & 0xFFFF
+        owners = self.resolve(u, seg * 16 + ip)
+        if len(owners) != 1:
+            return
+        t = self.us[owners[0]]
+        dst = t.from_link(seg * 16 + ip)
+        if not t.has(dst) or not any(self.mods[t.file].data.startswith(p, dst) for p in PROLOGUES):
+            return
+        key = (u.file, at - prev.size, t.file, dst, seg)
+        if key in self.code_ptrs:
+            return
+        self.code_ptrs.add(key)
+        self.add_base(t.name, seg, seg * 16 + ip)
+        self.seed(t.name, dst, f'far pointer {u.name}+{at - prev.size:X}', seg)
 
     def after_retf(self) -> bool:
         """Seed the far functions that start right after a decoded RETF (MS C lays far
-        functions out back to back): an undecoded prologue there; True if any is new."""
+        functions out back to back, padded by up to three NOPs): an undecoded prologue
+        there; True if any is new."""
         new = False
         for u in self.us.values():
             cls, data = self.cls[u.file], self.mods[u.file].data
             for at, i in list(self.insn[u.file].items()):
                 nxt = at + i.size
+                for _ in range(3):
+                    if u.has(nxt) and data[nxt] == 0x90 and not cls[nxt]:
+                        nxt += 1
                 if i.mnemonic != 'retf' or not u.has(at) or not u.has(nxt) or cls[nxt] \
                         or not any(data.startswith(p, nxt) for p in PROLOGUES):
                     continue
-                if (u.file, nxt) not in self.retf_funcs:
-                    self.retf_funcs.add((u.file, nxt))
-                    self.seed(u.name, nxt, f'after retf {u.name}+{at:X}')
+                if (u.file, nxt) not in {(f, o) for f, o, _ in self.retf_funcs}:
+                    seg = self.module_segment(u, nxt)
+                    if seg is None:
+                        continue
+                    self.retf_funcs.add((u.file, nxt, seg))
+                    self.seed(u.name, nxt, f'after retf {u.name}+{at:X}', seg)
                     new = True
         return new
+
+    def module_segment(self, u: Unit, off: int) -> int | None:
+        """CS of a far function found after a RETF: the highest known code segment that
+        starts at or below it. A module's functions share the segment its first byte
+        starts, so a module whose first functions no trace entered still has its own
+        segment below them (the lowest-entry rule of segment() would pick the previous
+        module's). None while no known segment covers it (a later pass of the fixpoint
+        may know one)."""
+        linear = u.to_link(off)
+        known = {**self.bases[u.name], **self.segs[u.name]}
+        return max((b for b in known if b * 16 <= linear and linear - b * 16 < 0x10000), default=None)
 
     def code_pointer(self, u: Unit, at: int, prev, i) -> None:
         """A far code pointer loaded by prev (offset) and i (segment, relocated)."""
@@ -524,7 +585,7 @@ def main() -> int:
             w.writerow(['module', 'offset', 'kind', 'target', 'segment'])
             rows = [(mod, at, 'pointer', f'{tm}+0x{to:05x}', f'0x{seg:04x}')
                     for mod, at, tm, to, seg in sw.code_ptrs]
-            rows += [(mod, nxt, 'after retf', f'{mod}+0x{nxt:05x}', '') for mod, nxt in sw.retf_funcs]
+            rows += [(mod, nxt, 'after retf', f'{mod}+0x{nxt:05x}', f'0x{seg:04x}') for mod, nxt, seg in sw.retf_funcs]
             for mod, at, kind, t, seg in sorted(rows):
                 w.writerow([mod, f'0x{at:05x}', kind, t, seg])
     with (OUT / 'coverage.csv').open() as f:

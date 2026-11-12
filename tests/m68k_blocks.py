@@ -770,6 +770,7 @@ def main(argv=None, on_batch=None) -> int:
         node_of.update((emit.copy_label(*n), n) for n in ns)
         copy_next.update((a, addr[emit.copy_label(*b)]) for a, b in zip(ns, ns[1:]))
     executed = M.executed(M.runs())
+    noreturn = {(r["module"], int(r["offset"], 16)) for r in image.rows("noreturn.csv")}
     allb = list(blocks(p, executed))
     rng = random.Random(args.seed)
     picks = rng.sample(allb, min(args.blocks or len(allb), len(allb)))
@@ -1009,8 +1010,9 @@ def main(argv=None, on_batch=None) -> int:
                     saved_inside, m.inside = m.inside, set()
                     m.stop, m.entry = None, None
                     m.e.start(native, 0xFFFFFFFF, 1000)
-                    want = site if good else ("rt_ret_far_mismatch" if last.op == "callf"
-                                              else "rt_ret_mismatch")
+                    # a noreturn.csv call's right return is its named stop
+                    want = ("rt_stop_unknown" if (mod, run[-1]) in noreturn else site) if good \
+                        else ("rt_ret_far_mismatch" if last.op == "callf" else "rt_ret_mismatch")
                     if m.stop != want:
                         diffs.append(f"return protocol: {'right' if good else 'wrong'} "
                                      f"{'CS' if bad_cs else 'IP'} reached {m.stop}, want {want}")
@@ -1134,7 +1136,29 @@ def main(argv=None, on_batch=None) -> int:
                 continue
             u = p.units[mod]
             operand = u.insns[site].operands[0]
-            assert operand.seg == "cs" and operand.width == 16 and operand.base and not operand.index
+            if not (isinstance(operand, Mem) and operand.seg == "cs"):
+                # annotations/data-tables.csv: the word comes from a data segment,
+                # or was loaded from it into a register or a stack slot first.
+                # Each proved target is put where the site reads it and must
+                # run to its own label.
+                for target in sorted(proved):
+                    want_ip = u.insns[target[1]].ip.to_bytes(2, "little")
+                    if isinstance(operand, Mem):
+                        assert operand.width == 16 and not operand.index, ("data table operand", mod, site)
+                        force = {operand.seg: 0x5000, "sp": 0x8000}
+                        if operand.base:
+                            force[operand.base] = 0x0100
+                        ea = ((0x0100 if operand.base else 0) + operand.disp) & 0xFFFF
+                        memory = [(0x50000 + ea, want_ip)]
+                    else:
+                        force, memory = {operand.name: int.from_bytes(want_ip, "little")}, []
+                    before = count[mod]
+                    block_cases(mod, [site], 2, force, memory=memory, expected=emit.label(*target))
+                    assert count[mod] - before == 2, ("data table entry not compared", mod, site, target)
+                    switch_rows += 1
+                assert set(proved) == set(p.succ[(mod, site)]), ("data table target set", mod, site)
+                continue
+            assert operand.width == 16 and operand.base and not operand.index
             offset = u.off_of(u.cs[site], operand.disp, site)
             want, seen, k = set(proved), set(), 0
             while seen != want:
@@ -1167,9 +1191,26 @@ def main(argv=None, on_batch=None) -> int:
         discovered = {mod: {off for m, off in reached if m == mod} for mod in p.units}
         table_blocks = list(blocks(p, discovered))
         for mod, run in table_blocks:
-            before = count[mod]
-            block_cases(mod, run, 2)
-            assert count[mod] > before, ("table block not compared", mod, run[0])
+            before, was = count[mod], Counter(skipped)
+            # a string op over the one-byte background (no terminator) may copy
+            # onto the block's own code, or a count loaded from memory the previous
+            # block wrote may read as the background byte: draw more states, the
+            # later rounds with random words at the block's direct and BP-based
+            # operands, a bounded number
+            for _round in range(8):
+                force, memory = None, ()
+                if _round:
+                    force = {"ds": 0x5000, "es": 0x5000, "ss": 0x6000, "bp": 0x8000, "sp": 0x7000}
+                    memory = [(force[o.seg] * 16 + (((force["bp"] if o.base else 0) + o.disp) & 0xFFFF),
+                               bytes(h.rng.randrange(256) for _ in range(o.width // 8)))
+                              for o in (x for off in run for x in p.units[mod].insns[off].operands)
+                              if isinstance(o, Mem) and o.base in (None, "bp") and not o.index
+                              and o.seg in force]
+                block_cases(mod, run, 2, force, memory=memory)
+                if count[mod] > before:
+                    break
+            assert count[mod] > before, ("table block not compared", mod, f"{run[0]:05X}",
+                                         dict(skipped - was))
         print(f"annotated tables: {table_rows} rows, {len(roots)} targets, "
               f"{sum(off not in executed.get(mod, ()) for mod, off in roots)} untraced targets, "
               f"{len(table_blocks)} reachable blocks checked")

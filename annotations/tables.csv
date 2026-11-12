@@ -1,1 +1,4 @@
 module,site,entries,evidence
+XWING.EXE,0x02180,8,"MS C printf state dispatch: bx = 2 * state, the state the high nibble of an xlat of the class/transition table at DGROUP 610Ah (89 bytes, classes 0-8, every transition 0-7, so the state stays 0-7 from its start at 0); 8 words to the code at +0212E (DERIVED; table equals RAM in all 25 reference snapshots, MEASURED)"
+FLIGHT.OVL,0x23981,8,"bitmap blit by orientation: si = 2 * [571Ah], [571Ah] = record word +16h | [570Eh] | [570Ch] (+26D1F..26D2D), three orientation flags (bound INFERRED); 8 words to the code at +23998 (MEASURED: executed), file equals RAM at m12-m14 (MEASURED)"
+FLIGHT.OVL,0x239b0,8,"as +23981, the second dispatch by the same index: bp = 2 * [571Ah] (bound INFERRED); 8 words to the code at +239DD, the entry of a third dispatch with no reference (DERIVED), file equals RAM at m12-m14 (MEASURED)"

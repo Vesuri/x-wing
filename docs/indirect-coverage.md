@@ -1,8 +1,8 @@
 # Indirect coverage
 
 `annotations/indirect.csv` (written by `make map`) records execution separately from
-static targets: 347 indirect sites, 161 executed in the P2 traces (`ms-p2c-*`, 17 runs)
-and 186 not. A default initializer or a snapshot value is not execution evidence or a
+static targets: 366 indirect sites, 161 executed in the P2 traces (`ms-p2c-*`, 17 runs)
+and 205 not. A default initializer or a snapshot value is not execution evidence or a
 proof against later writes. Every unexecuted site keeps its guard: a proved switch table
 falls back to a named stop outside the table, and any other site dispatches through
 `rt_lookup`, which stops on a target with no translated entry. No site is marked executed
@@ -14,17 +14,32 @@ without that prologue is counted by its enclosing one).
 
 ## Proved switch tables
 
-35 sites: every target of the table is translated and runs to its own return check
-(`docs/translator-design.md`); an index outside it stops.
+92 sites have a proved table, 40 of them unexecuted (below). Every target of the table is
+translated and runs to its own return check (`docs/translator-design.md`); an index
+outside it stops. Besides the MS C bounds checks, the proofs are `annotations/tables.csv`
+(cs: word tables) and `annotations/data-tables.csv` (word tables in a data segment, read
+directly or loaded into a register first).
 
 | Module | Sites |
 |---|---|
+| ADLIB | +00387, +0047B, +004DE, +005D2, +005FA (`call cx`, `call ax` through fields of the driver's descriptor at DS:007Ah, `annotations/data-tables.csv`) |
 | FLIGHT | +0E1DE, +0EE8C, +142FA, +16352, +16408, +351B3 |
 | FRONTEND | +2F150, +33A39, +3903C, +3A95A, +3AC7E, +3F2C6, +3F6A5, +41CCD, +42761, +43C20, +5A768, +5BEF4, +5E465, +5E793, +5ED1E, +5EFB5, +5F1A6, +649D0, +67121, +67302, +676F1, +67E97, +6804C, +6953E, +696BA, +80F41, +81A82, +81DA9, +8235A |
 
+### Executed tables with untraced entries
+
+Three executed sites whose tables hold entries the traces never reached
+(`annotations/tables.csv`); the untraced entries are translated from the table words.
+
+| Site | Table | Traced targets |
+|---|---|---|
+| XWING+02180 | the C run-time `printf` state machine, its class and transition bytes at DGROUP 610Ah (89 bytes, equal to RAM in every snapshot) | 5 of 8 |
+| FLIGHT+23981 | 8 words, index 2·[571Ah] (bound INFERRED) | 5 of 8 |
+| FLIGHT+239B0 | 8 words; entry 7, FLIGHT+245A9 (200E:8D79), is the loud stop a live flight reached before it was translated | 3 of 8 |
+
 ## Calls through pointers
 
-151 sites. Each group's executed sites reached the targets named; the unexecuted ones
+165 sites. Each group's executed sites reached the targets named; the unexecuted ones
 dispatch through the same pointer.
 
 ### FLIGHT pointers to overlay thunks
@@ -51,15 +66,14 @@ slot reached that thunk.
 
 | Module | Sites |
 |---|---|
-| FLIGHT | ran: +18A34, +18A9A; never ran: +18A0C, +18AE4, +18B48, +18C44, +18D79, +18D91, +18DA9, +18DBE |
-| FRONTEND | never ran: +0CA0C, +0CA81, +0CB5F |
+| FLIGHT | ran: +18A34, +18A9A; never ran: +189E1, +189F6, +18A0C, +18AB0, +18AE4, +18B48, +18B61, +18B79, +18B97, +18BB5, +18BD9, +18BEE, +18C0A, +18C44, +18D79, +18D91, +18DA9, +18DBE |
+| FRONTEND | never ran: +0C79E, +0C7B3, +0C892, +0C8E5, +0C97C, +0C999, +0C9B2, +0CA0C, +0CA32, +0CA49, +0CA81, +0CB5F |
 
 ### Music driver internal
 
 `call cx` and `call ax` in ADLIB.IMS through its own tables; executed sites reached
 +00C06, +00C66, +00C96, +00CA2, +00D84, +015C6 (`call cx`) and +011C2, +01204, +01408,
-+0168E (`call ax`). Unexecuted: `call cx` ran: +00387, +0047B, +004DE, never ran: +005FA;
-`call ax` never ran: +005D2.
++0168E (`call ax`). The unexecuted ones are proved tables (above).
 
 ### FRONTEND object methods
 
@@ -92,6 +106,6 @@ Values are the m01 and m14 reference snapshots' (DGROUP 4229h at run time).
 
 ## Paths still requiring execution coverage
 
-All 151 sites in "Calls through pointers". The milestones in open-work 1 (a film-room
+All 165 sites in "Calls through pointers". The milestones in open-work 1 (a film-room
 replay and a Star Destroyer battle) are the planned runs that reach more of FLIGHT and
 FRONTEND.

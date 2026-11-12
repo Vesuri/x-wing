@@ -3,5 +3,5 @@ spill,0,fixed register contract (D4); no lowering spills to the native stack
 full-flag materialization,3,"MS C run-time LAHF readers in the root: sub +02A87 and cmp +02A99 (LAHF at +02AA3), cmp +036AC (LAHF at +036BB)"
 PF store,6,"the same three setters, and cmp +05B35, cmp +05B39, xor +05AF0 (LAHF at +05B41); the manager's PUSHF pairs in annotations/flags.csv only save and restore"
 AF store,7,"the same five LAHF setters, and add +056DB, adc +056DE (DAA at +056DD, +056E0)"
-dispatcher exit,246,"the 246 indirect.csv sites without a proved switch table or an irq-hooks.csv row (347 sites, 84 tables, 21 hooks of which 4 are tables)"
-stop_unknown site,102,"84 switch tables' out-of-table fallback (data-tables.csv included), the 17 other irq-hooks.csv calls' untraced targets, and the return of the noreturn.csv call at +01517"
+dispatcher exit,257,"the 257 indirect.csv sites without a proved switch table or an irq-hooks.csv row (366 sites, 92 tables, 21 hooks of which 4 are tables)"
+stop_unknown site,111,"92 switch tables' out-of-table fallback (data-tables.csv included), the 17 other irq-hooks.csv calls' untraced targets, the return of the noreturn.csv call at +01517 and the root's unrelocated callf 0000:0000 at +0431F"

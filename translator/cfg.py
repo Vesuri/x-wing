@@ -127,8 +127,9 @@ def seeds(mods: dict[str, M.Module]) -> list[tuple[str, int, str, int | None]]:
         if r["kind"] == "pointer":                # a far pointer constant: its CS
             out.append((mod, int(off, 16), f"far pointer {r['module']}+{r['offset']}",
                         int(r["segment"], 16)))
-        else:                                     # after a RETF: the segment rule
-            out.append((mod, int(off, 16), f"after retf {r['module']}+{r['offset']}", None))
+        else:                                     # after a RETF: the sweep's module segment
+            out.append((mod, int(off, 16), f"after retf {r['module']}+{r['offset']}",
+                        int(r["segment"], 16) if r["segment"] else None))
     for r in image.rows("indirect.csv"):
         site = f"{r['module']}+{r['offset']}"
         for col in ("switch_targets", "traced_targets"):
@@ -150,6 +151,7 @@ class _Descent:
         self.smc = image.smc_regions()
         self.noreturn = {(r["module"], int(r["offset"], 16)) for r in image.rows("noreturn.csv")}
         self.ret_jumps = ret_jumps()
+        self.fixups = {n: set(mods[n].fixups) for n in image.SCOPE}
         self.far_entries: dict[str, dict[int, int]] = {n: {} for n in rs}
         self.work: list[tuple[str, int, str, int | None]] = []
         self.body: dict[str, dict[int, int]] = {n: {} for n in image.SCOPE}  # byte -> start
@@ -186,6 +188,11 @@ class _Descent:
             self.units[mod].manager_calls[at] = t.name
             owners = [t.name]
         else:
+            if at + 3 not in self.fixups[mod]:
+                # the segment word (9A/EA ptr16:16, at +3) is not relocated: an
+                # absolute address outside the program (XWING.EXE+0431F's 0000:0000
+                # placeholder, never executed); no target, lowered as its named stop
+                return
             owners = self.resolve(r, linear)
         if len(owners) > 1:
             raise CfgError(f"{mod}+{at:05X}: far target {f} ambiguous: {owners}")
