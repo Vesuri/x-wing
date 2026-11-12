@@ -96,7 +96,7 @@ Copied from Secret Weapons of the Luftwaffe, as above.
 |---|---|
 | `README.md` | setting up a checkout: inputs to supply and the commands |
 | `docs/design.md` | choosing an approach or target; owner decisions |
-| `docs/port-plan.md` | the steps, what is copied from Secret Weapons of the Luftwaffe and why |
+| `docs/port-plan.md` | the steps, what is copied from Secret Weapons of the Luftwaffe and why; what Wing Commander 2 shares |
 | `docs/phases.md` | before committing work of a new phase: the hard gates |
 | `docs/translator-design.md` | translator, runtime or test contract; each SWOTL decision kept or changed |
 | `docs/source-inventory.md` | anything about the supplied archive and its contents |

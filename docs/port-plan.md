@@ -53,6 +53,30 @@ undoing early choices. X-Wing makes these choices on day one:
 | Microsoft C 1990 run-time, as SWOTL | MEASURED | SWOTL's `annotations/runtime.csv` names transfer by signature |
 | Macintosh demo's 68k CODE | [Macintosh reference](mac-reference.md) | Optional donor of native routines in P8, as TFH's slave routines were for SWOTL (R35–F3b) |
 
+## Sibling: Wing Commander 2
+
+Wing Commander 2 copied the same SWOTL commit and took X-Wing's 80186 front end, 68020
+lowering, host lockstep and Amiga replay (its `docs/upstream.md`, "From X-Wing"). Before
+building something listed here, start from the other port's commit. Its hashes are as of
+Wing Commander 2 `e84cfe7` (its P6).
+
+| Work | Where it is | Use |
+|---|---|---|
+| Copy-free EMS: frame pages copied in on first access, guarded ES accesses run on the store page | Wing Commander 2 `bfaebe3`, `c31004f`, `tools/ems_frame_profile.py` | Open-work 2 starts from it. X-Wing's `52be993` (a page mapped at two frame pages is one memory) is kept; the other port keeps two copies |
+| IRQ footprint proof for more than one handler (`translator/irq.py`) | Wing Commander 2 `66e6de5`; X-Wing `6e1e46b` (the music driver's callback) | Extended in both ports separately; compare before either changes it again |
+| FM on Paula: SWOTL's `fm_paula.c`, `Audio.cpp`, `fm_effect_run.s` copied unchanged | Wing Commander 2's import `e6e9808`: its music plays; effect capture (`sfx.c`) and the FM gates are its open work | P7 copies the same files; the effect capture and FM gates are adapted once and shared |
+| Display and input: SWOTL's copper display, double buffer, changed-row C2P, key map, mouse, joystick | Wing Commander 2's open work (its P6b) | Whichever port lands it first; X-Wing's Amiga runs are diagnostic replays without a display |
+| Sound Blaster DSP, DMA channel 1 and IRQ 7 model | Wing Commander 2's open work (its P6) | P10 starts from it |
+| Asynchronous timer interrupt in place of loop-head polls | Wing Commander 2's C2; SWOTL's irq-plan measured the polls at 5.15% of cycles | P8 |
+
+X-Wing's P6 work Wing Commander 2 has not taken yet: service registers and RAM from dead
+stack exempted (`40030a3`, `3dca119`, owner decisions 2026-11-09 and 2026-11-10) and the
+replay's exempt table (`892b8d5`); flight logs in bounded memory (`9c59569`); parallel runs
+from the entry (`2b047e5`); the shown frame at a mid-frame label (`a3f71a9`); the Amiga
+program on the boot volume's `C:` so a find-first scan of the game directory counts the
+guest's entries (`b2c1c29`; its launchers copy the program into the game directory); and
+DOS findfirst directories, INT 16h enhanced keys, INT 21h AH=0Eh and 2Fh.
+
 ## Memory
 
 The original ran in 2 MB: 640K conventional memory plus 896K of EMS. SWOTL turned about
