@@ -211,6 +211,7 @@ void rt_keyboard_irq(void);
 void rt_keyboard_drain(void);
 int rt_key_available(void);
 uint16_t rt_key_take(void);
+void rt_key_wait(const char *what, uint8_t vector, uint16_t cs, uint16_t ip);
 void rt_int16(void);
 void rt_int33(void);
 

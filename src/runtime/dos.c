@@ -702,9 +702,7 @@ static void read_char(uint16_t cs, uint16_t ip)
         scan_next = 0;
         return;
     }
-    if (!rt_key_available()) {
-        rt_unsupported("console read with no key buffered", 0x21, cs, ip);
-    }
+    rt_key_wait("console read with no key buffered", 0x21, cs, ip);
     uint16_t key = rt_key_take();
     uint8_t c = (uint8_t)key, scan = (uint8_t)(key >> 8);
     if (scan && (c == 0xf0 || c == 0xe0)) {

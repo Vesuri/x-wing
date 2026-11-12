@@ -280,6 +280,31 @@ uint16_t rt_key_take(void)
     return key;
 }
 
+/* A read that waits for a key (INT 16h AH=00h, INT 21h AH=08h). Production:
+ * DOS and the BIOS wait with IF set until the keyboard interrupt buffers one,
+ * the timer handler running meanwhile, so the service lets the CIA tick run
+ * IRQ0 (rt_irq_mask) while it drains the platform's events (the Amiga's input
+ * handler appends them at any time). Sync builds (host, replay, bench) never
+ * wait: the reference's key is buffered by then, so an empty buffer is the
+ * named stop. With IF clear no key could arrive: the stop too. */
+void rt_key_wait(const char *what, uint8_t vector, uint16_t cs, uint16_t ip)
+{
+    if (rt_key_available()) {
+        return;
+    }
+#ifndef XWING_SYNC
+    if (G_IF) {
+        --rt_irq_mask;
+        while (!rt_key_available()) {
+            rt_keyboard_drain();
+        }
+        ++rt_irq_mask;
+        return;
+    }
+#endif
+    rt_unsupported(what, vector, cs, ip);
+}
+
 /* DOSBox-X's IsEnhancedKey (src/ints/bios_keyboard.cpp, US code page) for
  * AH=00h/01h: E0xxh (keypad Enter and /) becomes 1Cxxh or 35xxh; a scan code
  * above 84h or a low byte F0h is an enhanced key, which they drop; a low byte
@@ -305,11 +330,9 @@ void rt_int16(void)
 {
     uint16_t key;
     switch (AH(rt_r.ax)) {
-    case 0x00:  /* read a key, dropping enhanced ones; the host and the reference never wait */
+    case 0x00:  /* read a key, dropping enhanced ones; waits for one (rt_key_wait) */
         for (;;) {
-            if (!rt_key_available()) {
-                rt_unsupported("keyboard read with no key buffered", 0x16, 0, 0);
-            }
+            rt_key_wait("keyboard read with no key buffered", 0x16, 0, 0);
             key = rt_key_take();
             if (!enhanced_key(&key)) {
                 break;
