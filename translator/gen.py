@@ -13,8 +13,8 @@ is verified in the assembled object. Nonconvergence fails generation.
 Prints the audit (spills, flag materializations, dispatcher exits, stop
 sites, return checks) against tests/audit.csv, where a count above its
 expected value fails, and the coverage report (G6): executed instruction
-starts of the trace corpus as translated / self-modified (D16, not yet
-lowered) / HLE / unclassified; unclassified ones fail. Writes
+starts of the trace corpus as translated / self-modified (D16, the cell
+walk) / HLE / unclassified; unclassified ones fail. Writes
 build/gen/irq-footprint.csv (translator/irq.py, docs/irq-plan.md I2); a
 footprint violation fails generation.
 

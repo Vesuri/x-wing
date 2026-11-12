@@ -12,7 +12,7 @@ its decoder, IR and interpreter cover X-Wing's x86 code and pass gate 3, and its
 backend translates every in-scope module and passes gate 4. SWOTL's runtime and Amiga
 platform are copied; the generated code draws the LucasArts logo on the 68030 model,
 where a diagnostic replay matches the reference at m1, and runs in host lockstep to m1
-(gate 5) and over every pinned milestone (P6). Read `docs/open-work.md` first.
+(gate 5); host lockstep and the Amiga replay match it over every pinned milestone (gate 6). Read `docs/open-work.md` first.
 
 ## Rules
 

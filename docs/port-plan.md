@@ -211,7 +211,7 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
     and calendar inputs; no joystick and no real-video capture; the service history is
     checked by a cumulative hash every 256 events and the REP slices are a varint stream.
     The reference data (2.3 MB at m01) leaves the guest block no room in the 8 MB of Fast
-    RAM, so the replay machine adds an 8 MB Zorro III board; the production image keeps
+    RAM, so the replay machine adds a 64 MB Zorro III board (m14's is 15 MB); the production image keeps
     the 8 MB target. A program return before the label is a fixture stop.
 - Gate: the LucasArts logo drawn by generated code on the 68030 model: the replay
   (`make test-amiga`) matches registers, RAM, DAC and the shown screen at m01. Host
@@ -263,6 +263,12 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
   [indirect coverage](indirect-coverage.md); none is excluded.
 - Gate: all milestones in lockstep; zero unclassified; `indirect-coverage` reviewed; the
   bypass oracle passes.
+- Passed: all 19 pinned milestones in host lockstep (`tests/host_run.py`, m14 64,700,042
+  service events) and in the Amiga replay on the 68030 model (`tests/amiga_replay.py` in
+  the same modes; m10 with `--exempt`); `make gen`'s coverage report: 0 unclassified of
+  99,836 executed instruction starts, HLE 2 (`copy_protection`), self-modified 343 (FLIGHT,
+  the D16 cell walk); the bypass oracle at m03p with its three sabotages caught, and the
+  wrong-answer control past the screen caught at m04.
 
 ### P7. AdLib sound
 
