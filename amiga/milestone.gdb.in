@@ -34,6 +34,14 @@ printf "XWING_CHIP free=%u largest=%u\n", amiga_chip_free, amiga_chip_largest
 set $g = *(unsigned char **)&rt_guest
 dump binary memory @OUT@/state.bin $g+1 $g+17
 dump binary memory @OUT@/ram.bin $g-0xfffff $g+1
+# EMS model (ems.c): a frame page not copied in shows its mapped store page
+set $k = 0
+while $k < 4
+  if rt_ems_live[$k] == 0 && rt_ems_mapped[$k] != 0
+    eval "dump binary memory @OUT@/ems-page%d.bin %lu %lu", $k, (unsigned long)($g+17+(rt_ems_mapped[$k]-1)*0x4000), (unsigned long)($g+17+rt_ems_mapped[$k]*0x4000)
+  end
+  set $k = $k + 1
+end
 set $d = (char *)rt_dac
 dump binary memory @OUT@/dac.bin $d $d+768
 set $display = XWing::application->display

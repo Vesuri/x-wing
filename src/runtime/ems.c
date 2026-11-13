@@ -1,28 +1,41 @@
 /* INT 67h EMS 4.0 as the reference machine answers it
  * (docs/external-surface.md). Copied from Secret Weapons of the Luftwaffe's
  * (manifest/references.tsv) and adapted: X-Wing's machine reports 932 pages,
- * of which the store backs RT_EMS_STORE (runtime.h). */
+ * of which the store backs RT_EMS_STORE (runtime.h). The lazy frame pages are
+ * Wing Commander 2's (docs/port-plan.md, its bfaebe3 and c31004f). */
 #include "runtime.h"
 
 #define EMS_FRAME 0xe000
 #define EMS_HANDLES 16
 #define EMS_PHYS 4
 
-/* Store pages live after the state block (RT_EMS_BYTES); a mapped page is
- * copied into the frame and back out when its frame page is remapped, as host
- * bytes of a frame page span (runtime.h). DOSBox-X maps a page at two frame
- * pages as one memory; here they are copies, equal to the store when the alias
- * begins, merged against the store at the next map call (reconcile). A byte
- * written differently through two of them is a stop; a read through one of a
- * byte written through another before that call is not modelled (checked in
- * tests/host_run.py, ems_alias). Handles take store pages as DOSBox-X's
- * MEM_AllocatePages does, so after a release a handle's pages can be split
- * across free runs; a release leaves the frame mapped (tests/test_ems.py). */
+/* Store pages live after the state block (RT_EMS_BYTES): they are the truth
+ * while no frame page holds a copy. A frame page holds its mapped page's bytes
+ * only while it is live (EMS model, docs/translator-design.md): a map leaves
+ * the new page in the store and copies nothing in; it writes a live page back.
+ * An ES access within one frame page whose page has no live copy runs on the
+ * store page itself (rt_ems_es_c: the translator's guard before every ES
+ * access, rt_ems_es); any other access copies the page in first: the runtime's
+ * own accessors (rt_ems_touch, runtime.h), an ES string or wrapping access, and
+ * DS or SS while they address the frame (their accesses are not guarded:
+ * rt_ems_segments). DOSBox-X maps a page at two frame pages as one memory. Here
+ * the store is that memory until a copy is made; copies of one page are equal
+ * to the store when the second is made, merged against it at the next map call
+ * (reconcile). A byte written differently through two of them is a stop; a read
+ * through one of a byte written through another before that call is not
+ * modelled (checked in tests/host_run.py, ems_alias). Handles take store pages
+ * as DOSBox-X's MEM_AllocatePages does, so after a release a handle's pages can
+ * be split across free runs; a release leaves the frame mapped
+ * (tests/test_ems.py). */
 static uint16_t ems_free = RT_EMS_PAGES;
 static uint16_t pages[EMS_HANDLES];   /* 0: free; handle 0 is the operating system's */
 static uint16_t page_of[EMS_HANDLES][RT_EMS_STORE];
 static uint8_t used[RT_EMS_PAGES];
-static uint16_t mapped[EMS_PHYS];     /* store page + 1, 0: none */
+uint16_t rt_ems_mapped[EMS_PHYS];     /* store page + 1, 0: none */
+uint8_t rt_ems_live[EMS_PHYS];        /* the frame page holds the mapped page's bytes */
+int32_t rt_ems_fast[EMS_PHYS];        /* rt_entry.s rt_ems_es: displacement, or 1 (refresh) */
+#define mapped rt_ems_mapped
+#define live rt_ems_live
 
 static uint8_t *store(uint16_t slot)
 {
@@ -53,9 +66,10 @@ static uint16_t free_run(uint16_t *largest)
     return at;
 }
 
+/* (rt_span itself: the frame is reached here without rt_ems_touch) */
 static uint8_t *frame_page(uint8_t phys)
 {
-    return rt_span(lin(EMS_FRAME, 0) + phys * RT_EMS_PAGE, RT_EMS_PAGE);
+    return rt_guest - (lin(EMS_FRAME, 0) + (uint32_t)(phys + 1) * RT_EMS_PAGE) + 1;
 }
 
 /* One page. Frame pages and the store share their address mod 4 (both are
@@ -82,10 +96,30 @@ static void copy(uint8_t *d, const uint8_t *s)
     }
 }
 
-/* The bytes the frame copies of one store page hold since their alias began:
- * where one copy differs from the store, that copy's byte. */
-static void merge(uint16_t slot, const uint8_t *at, uint8_t n)
+/* The frame pages holding live copies of slot; their number. */
+static uint8_t copies(uint16_t slot, uint8_t *at)
 {
+    uint8_t n = 0;
+    for (uint8_t k = 0; k < EMS_PHYS; ++k) {
+        if (slot && mapped[k] == slot && live[k]) {
+            at[n++] = k;
+        }
+    }
+    return n;
+}
+
+/* The store page takes what its live copies hold: one copy's bytes; for
+ * several, where one differs from the store, that copy's byte (they equalled
+ * the store when the second was made). The copies stay live and equal. */
+static void merge(uint16_t slot)
+{
+    uint8_t at[EMS_PHYS], n = copies(slot, at);
+    if (n == 1) {
+        copy(store(slot), frame_page(at[0]));
+    }
+    if (n < 2) {
+        return;
+    }
     uint8_t *b = store(slot), *f[EMS_PHYS];
     for (uint8_t c = 0; c < n; ++c) {
         f[c] = frame_page(at[c]);
@@ -112,64 +146,150 @@ static void merge(uint16_t slot, const uint8_t *at, uint8_t n)
     }
 }
 
+/* Every page with two or more live copies is merged (at each map call). */
 static void reconcile(void)
 {
     for (uint8_t p = 0; p < EMS_PHYS; ++p) {
-        uint8_t at[EMS_PHYS], n = 0, first = 1;
-        for (uint8_t k = 0; k < EMS_PHYS; ++k) {
-            if (mapped[p] && mapped[k] == mapped[p]) {
-                first &= k >= p;
-                at[n++] = k;
-            }
-        }
-        if (first && n > 1) {
-            merge(mapped[p], at, n);
+        uint8_t at[EMS_PHYS];
+        if (live[p] && copies(mapped[p], at) > 1 && at[0] == p) {
+            merge(mapped[p]);
         }
     }
 }
 
-static uint8_t map(uint8_t phys, uint16_t page, uint16_t handle)
+/* rt_ems_fast after a change of mapped or live: an ES access within frame page
+ * k adds 0 to its base (live or unmapped: the frame), the store displacement (a
+ * page with no live copy), or takes the C path (1: a live alias copies it in). */
+static void refresh(void)
+{
+    for (uint8_t k = 0; k < EMS_PHYS; ++k) {
+        uint8_t at[EMS_PHYS];
+        rt_ems_fast[k] = live[k] || !mapped[k] ? 0
+                         : copies(mapped[k], at) ? 1
+                         : (int32_t)(store(mapped[k]) - frame_page(k));
+    }
+}
+
+/* The frame page shows its mapped page's bytes from now on: the store,
+ * brought up to date from the page's live copies first. */
+static void expose(uint8_t phys)
+{
+    if (live[phys] || !mapped[phys]) {
+        return;
+    }
+    merge(mapped[phys]);
+    rt_wrote(lin(EMS_FRAME, 0) + phys * RT_EMS_PAGE, RT_EMS_PAGE);
+    copy(frame_page(phys), store(mapped[phys]));
+    live[phys] = 1;
+    refresh();
+}
+
+static int addresses(uint16_t seg, uint8_t phys)
+{
+    uint32_t first = lin(EMS_FRAME, 0) + phys * RT_EMS_PAGE;
+    return lin(seg, 0) <= first + RT_EMS_PAGE - 1 && first <= lin(seg, 0xffff);
+}
+
+/* Frame page phys shows store slot (0: unmapped). */
+static uint8_t map_slot(uint8_t phys, uint16_t slot)
 {
     reconcile();
+    if (slot && mapped[phys] == slot) {
+        return 0;   /* the copies are merged: the frame page shows the page already */
+    }
+    uint16_t old = mapped[phys];
+    if (old) {
+        if (!slot) {
+            expose(phys);   /* an unmapped frame page keeps the bytes it showed */
+        }
+        if (live[phys]) {
+            uint8_t at[EMS_PHYS];
+            if (copies(old, at) == 1) {
+                copy(store(old), frame_page(phys));
+            }       /* else merged by reconcile: the store holds them */
+        }
+    }
+    live[phys] = 0;
+    mapped[phys] = slot;
+    refresh();
+    if (slot && (addresses(G_DS, phys) || addresses(G_SS, phys))) {
+        expose(phys);
+    }
+    return 0;
+}
+
+static uint8_t map(uint8_t phys, uint16_t page, uint16_t handle)
+{
     if (phys >= EMS_PHYS) {
+        reconcile();
         return 0x8b;
     }
     if (page != 0xffff && (handle == 0 || handle >= EMS_HANDLES || !pages[handle])) {
+        reconcile();
         return 0x83;
     }
     if (page != 0xffff && page >= pages[handle]) {
+        reconcile();
         return 0x8a;
     }
-    uint16_t slot = page == 0xffff ? 0 : page_of[handle][page] + 1;
-    uint8_t *frame = frame_page(phys);
-    if (slot && mapped[phys] == slot) {
-        /* Write-back then reload of the same page leaves the frame unchanged
-         * (every remap writes back before the store is read), unless another
-         * frame page holds an alias whose bytes the reload would bring in. */
-        int alias = 0;
-        for (int k = 0; k < EMS_PHYS; ++k) {
-            alias |= k != phys && mapped[k] == slot;
+    return map_slot(phys, page == 0xffff ? 0 : page_of[handle][page] + 1);
+}
+
+/* The runtime is about to touch guest a..a+n-1: the frame pages it meets are
+ * copied in (none when it misses the frame: a guarded ES access below or above
+ * it, n 0). */
+void rt_ems_touch(uint32_t a, uint32_t n)
+{
+    uint32_t first = lin(EMS_FRAME, 0), last = first + EMS_PHYS * RT_EMS_PAGE - 1;
+    if (!n || a > last || a + n - 1 < first) {
+        return;
+    }
+    uint32_t lo = a < first ? first : a, hi = a + n - 1 > last ? last : a + n - 1;
+    for (uint32_t p = (lo - first) / RT_EMS_PAGE; p <= (hi - first) / RT_EMS_PAGE; ++p) {
+        expose((uint8_t)p);
+    }
+}
+
+/* Translator guard (lower.py ems_guard): ES >= D001h before an access of `bytes`
+ * at ES:offset; bytes 0: a string instruction, the whole ES window. Returns the
+ * displacement the access adds to the ES base (rt_entry.s rt_ems_es): an access
+ * that lies within one frame page whose mapped page has no live copy goes to
+ * the store page itself, without a copy; anything else has its frame pages
+ * copied in and runs on the frame (0). */
+int32_t rt_ems_es_c(uint32_t offset, uint32_t bytes)
+{
+    uint32_t base = lin(G_ES, 0), first = lin(EMS_FRAME, 0);
+    offset &= 0xffff;
+    if (bytes && offset + bytes <= 0x10000) {
+        uint32_t a = base + offset, z = a + bytes - 1;
+        if (a >= first && z < first + EMS_PHYS * RT_EMS_PAGE &&
+            (a - first) / RT_EMS_PAGE == (z - first) / RT_EMS_PAGE) {
+            uint8_t k = (uint8_t)((a - first) / RT_EMS_PAGE), at[EMS_PHYS];
+            if (mapped[k] && !copies(mapped[k], at)) {
+                return (int32_t)(store(mapped[k]) - frame_page(k));
+            }
         }
-        if (!alias) {
-            return 0;
-        }
     }
-    if (mapped[phys]) {
-        copy(store(mapped[phys]), frame);
-        mapped[phys] = 0;
+    if (!bytes) {
+        rt_ems_touch(base, 0x10000);
+    } else if (offset + bytes > 0x10000) {        /* the word at FFFFh wraps to 0 */
+        rt_ems_touch(base + offset, 0x10000 - offset);
+        rt_ems_touch(base, offset + bytes - 0x10000);
+    } else {
+        rt_ems_touch(base + offset, bytes);
     }
-    if (!slot) {
-        return 0;
-    }
-    for (int k = 0; k < EMS_PHYS; ++k) {
-        if (mapped[k] == slot) {
-            copy(store(slot), frame_page(k));
-        }
-    }
-    rt_wrote(lin(EMS_FRAME, 0) + phys * RT_EMS_PAGE, RT_EMS_PAGE);
-    copy(frame, store(slot));
-    mapped[phys] = slot;
     return 0;
+}
+
+/* DS or SS may address the frame (a load of D001h or above, a service, an
+ * interrupt's return): their pages are live while they do. */
+void rt_ems_segments(void)
+{
+    for (uint8_t k = 0; k < EMS_PHYS; ++k) {
+        if (addresses(G_DS, k) || addresses(G_SS, k)) {
+            expose(k);
+        }
+    }
 }
 
 void rt_int67(void)

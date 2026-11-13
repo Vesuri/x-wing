@@ -32,7 +32,8 @@ byte:
   segment window: at or above its low segment, below its limit) drops every
   cache (`smc_expose`) at each segment load
   (lower.putseg, the reload cells, the runtime's register reload); a reload
-  that does so continues exactly. Runtime stores into a region do the same
+  that does so continues exactly. A reload of D001h or above also copies in the
+  EMS frame pages DS meets (ems_check, rt_ems_seg). Runtime stores into a region do the same
   (runtime.h rt_wrote).
 - A dropped cache is cleared at the next walk entry with no segment
   reaching a region; until then walks are exact. So a valid cache means no
@@ -87,6 +88,7 @@ def _reload_cell(base: str, window: tuple[int, int]) -> list[str]:
                 f"\tmove.w (-{base}-1,a6,d7.l),{dst}"]
     return (word(3, "d3") + word(8, "d7")
             + ["\tand.l #$ffff,d7", "\tmove.w d7,G_DS(a6)"] + expose_check("d7", window, ".rk")
+            + ems_check("d7", ".re")
             + ["\tlsl.l #4,d7", "\tlea -$7fff(a6),a3", "\tsuba.l d7,a3", "\tlea -10(a0),a0"])
 
 
@@ -97,6 +99,12 @@ def expose_check(reg: str, window: tuple[int, int], skip: str) -> list[str]:
         return []
     low = [f"\tcmp.w #{hx(lo)},{reg}", f"\tbcs.s {skip}"] if lo else []
     return [f"\tcmp.w #{hx(limit)},{reg}", f"\tbcc.s {skip}", *low, "\tjsr smc_expose", f"{skip}:"]
+
+
+def ems_check(reg: str, skip: str) -> list[str]:
+    """A DS load of D001h or above: the frame pages its window meets are copied
+    in (lower.putseg's EMS check, ems.c rt_ems_segments)."""
+    return [f"\tcmp.w #$d001,{reg}", f"\tbcs.s {skip}", "\tjsr rt_ems_seg", f"{skip}:"]
 
 
 def window_reset(label: str, window: tuple[int, int]) -> list[str]:
@@ -260,7 +268,7 @@ def cached(label: str, cs: str, first_ip: int, last_ip: int, window: tuple[int, 
               ".reload:\tmoveq #0,d5", "\tmove.w d6,d5", "\tneg.l d5",
              f"\tmove.w (-{base}-1,a6,d5.l),d3", "\tmoveq #0,d5", "\tmove.w (6,a0,d7.w*4),d5",
              "\tneg.l d5", "\tmoveq #0,d6", f"\tmove.w (-{base}-1,a6,d5.l),d6",
-             "\tmove.w d6,G_DS(a6)", "\tmove.w d6,d5", "\tlsl.l #4,d6", "\tlea -$7fff(a6),a3",
+             "\tmove.w d6,G_DS(a6)", "\tmove.w d6,d5", *ems_check("d5", ".e2"), "\tlsl.l #4,d6", "\tlea -$7fff(a6),a3",
              "\tsuba.l d6,a3", "\tmove.w #$7fff,d1", "\tsub.w d3,d1", f"\tadd.w #{len(rel)},d7",
              f"\tcmp.w #{hx(window[1])},d5", "\tbcc .next",
              *([f"\tcmp.w #{hx(window[0])},d5", "\tbcs .next"] if window[0] else []),

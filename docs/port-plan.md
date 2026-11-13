@@ -211,11 +211,12 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
   - the command tail and environment; paths under `C:\XWING` and relative paths
     resolve against the game directory; the `EMMXXXX0` device's open, IOCTL and close;
     the BIOS data area from the m00 snapshot (CRTC base 03D4h included);
-  - EMS: SWOTL's map-by-copy is kept; a copy-free mapping is open work. X-Wing maps a
-    page at two frame pages at once (DOSBox-X: one memory); `ems.c` merges the copies
-    against the store at the next map call and stops on a byte written differently
-    through two of them, and `host_run.py` checks every guest read through such a page
-    against the other copies (`EMS: ... differ`);
+  - EMS: Wing Commander 2's lazy frame pages replace SWOTL's map-by-copy
+    ([translator design](translator-design.md), EMS model). X-Wing maps a page at two
+    frame pages at once (DOSBox-X: one memory); with no live copy both read its store
+    page, and live copies are merged against the store at the next map call, stopping
+    on a byte written differently through two of them; `host_run.py` checks every
+    guest read through a live copy against the other live copies (`EMS: ... differ`);
   - the frame boundary for D9 (X-Wing's per-frame call);
   - INT 09h: the BIOS's handler (the census shows no guest one);
   - `translator/irq.py` to the music driver's INT 08h handlers, the driver's flight

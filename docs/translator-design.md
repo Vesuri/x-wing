@@ -271,6 +271,22 @@ diffs directly); relocated words in instructions are emitted as
   handler on that frame), `rt_fault` (same d6/d7; returns to re-execute),
   `rt_in8/16`, `rt_out8/16` (d7 port, d6 value), `rt_halt`,
   `rt_stop_unknown` (prints and halts; never resumes).
+- EMS model (Wing Commander 2's lazy frame pages, `ems.c`): a map copies no page
+  in; a frame page holds its mapped page's bytes only while it is live. Before
+  every instruction that accesses memory through ES, `cmp.w #$d001,G_ES(a6)` and,
+  at or above, `rt_ems_es` out of line (d7 offset, d6 bytes, 0 for a string
+  instruction): an access within one frame page whose page has no live copy runs
+  on the store page (a1 displaced onto it), anything else copies its pages in and
+  runs on the frame with the plain base. So a1 is the plain ES base only below
+  D001h, and every access at or above runs right after its guard. A DS or SS load
+  of D001h or above calls `rt_ems_seg` (their accesses are not guarded: the pages
+  their window meets are copied in), as do service returns and the end of IRQ0's
+  handler; the runtime's accessors report frame bytes (`rt_frame`). A live page is
+  written back when its frame page is remapped. Live copies of a page mapped at
+  two frame pages equal the store when the second is made and are merged at the
+  next map call; a byte written differently through two is a stop. Checked by the
+  68020 differential's `ems` cases at the D001h edges and their sabotage plants;
+  host captures and Amiga dumps show non-live pages from the store.
 - Returns: a `ret` continues at the return sites of the calls whose targets
   reach it without entering a call (the divide-error edge is not flow);
   calls through the dispatcher return from any `ret` a table row reaches

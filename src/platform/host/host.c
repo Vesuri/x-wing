@@ -9,7 +9,7 @@ void rt_run_guest(void);
 
 /* Guest RAM, state block and EMS store of the harness memory map
  * (tests/host_run.py BLOCK). */
-#define HOST_BLOCK ((uint8_t *)0x00400000)
+#define HOST_BLOCK ((uint8_t *)0x00800000)
 
 void host_main(void)
 {

@@ -276,6 +276,7 @@ uint32_t rt_int_c(uint32_t d6, uint32_t ip)
     case 0x67: rt_int67(); break;
     default: rt_unsupported("interrupt", vector, cs, (uint16_t)ip);
     }
+    rt_ems_segments();      /* a service may have left DS or SS at the frame */
     return 0;
 }
 
@@ -467,6 +468,7 @@ int rt_irq0_take(void)
 /* After the restore: re-arm from what is posted (runtime.h). */
 void rt_irq0_leave(void)
 {
+    rt_ems_segments();      /* the interrupted DS and SS are back; maps may have run */
     rt_irq0_running = 0;
     *(volatile uint8_t *)&G_IRQ = G_IF && rt_irq_pending;
 }

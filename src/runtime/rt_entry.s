@@ -43,6 +43,8 @@ G_DS	equ	1
 	xdef	rt_run_guest
 	xdef	rt_vram_mark
 	xdef	rt_vdrv_return
+	xdef	rt_ems_es
+	xdef	rt_ems_seg
 
 	xref	rt_r
 	xref	smc_expose
@@ -80,6 +82,9 @@ G_DS	equ	1
 	xref	rt_irq_mask
 	xref	rt_opl_pair
 	xref	rt_irq_interrupting
+	xref	rt_ems_es_c
+	xref	rt_ems_fast
+	xref	rt_ems_segments
 
 	section	.text,code
 
@@ -436,6 +441,81 @@ port_out:
 	lea	12(a7),a7
 	subq.b	#1,rt_irq_mask
 	movem.l	(a7)+,d0-d1/a1
+	rts
+
+; EMS model (ems.c, lower.py ems_guard; copied from Wing Commander 2): before an
+; ES access (d7.w offset, d6.l bytes, 0: the whole ES window), a1 = the ES base
+; plus rt_ems_es_c's displacement (the access runs on the store page, or on the
+; frame with its pages copied in); after a DS or SS load, the frame pages its
+; window meets are copied in. Every other register kept; the callers keep d6, d7
+; and the CCR.
+; An access within one frame page decides here, from rt_ems_fast (ems.c): the
+; page's store displacement, 0 (live or unmapped: the frame), or 1 (the C path,
+; which copies it in). Strings, wraps and accesses that meet the frame from below
+; or across a page take the C path; an access above the frame runs plain.
+rt_ems_es:
+	tst.l	d6			; a string instruction
+	beq.s	.slow
+	movem.l	d0-d1/a0,-(a7)
+	moveq	#0,d1
+	move.w	d7,d1
+	move.l	d1,d0
+	add.l	d6,d0
+	cmp.l	#$10000,d0		; the access wraps at FFFFh
+	bhi.s	.slow2
+	moveq	#0,d0
+	move.w	G_ES(a6),d0
+	lsl.l	#4,d0
+	add.l	d1,d0
+	sub.l	#$e0000,d0		; its first byte, frame-relative
+	bcs.s	.slow2
+	cmp.l	#$10000,d0
+	bcc.s	.plain			; above the frame
+	move.l	d0,d1
+	add.l	d6,d1
+	subq.l	#1,d1			; its last byte
+	moveq	#14,d6
+	lsr.l	d6,d0
+	lsr.l	d6,d1
+	cmp.l	d0,d1
+	bne.s	.slow2			; across a page, or past the frame's end
+	lsl.w	#2,d0
+	lea	rt_ems_fast,a0
+	move.l	(a0,d0.w),d6
+	btst	#0,d6
+	bne.s	.slow2
+	movem.l	(a7)+,d0-d1/a0
+	bra.s	.base
+.plain:
+	movem.l	(a7)+,d0-d1/a0
+	moveq	#0,d6
+	bra.s	.base
+.slow2:
+	movem.l	(a7)+,d0-d1/a0
+.slow:
+	movem.l	d0-d1/a0-a1,-(a7)
+	addq.b	#1,rt_irq_mask		; the CIA tick waits (machine.c)
+	move.l	d6,-(a7)
+	move.l	d7,-(a7)
+	jsr	rt_ems_es_c
+	addq.l	#8,a7
+	subq.b	#1,rt_irq_mask
+	move.l	d0,d6
+	movem.l	(a7)+,d0-d1/a0-a1
+.base:
+	moveq	#0,d7
+	move.w	G_ES(a6),d7
+	lsl.l	#4,d7
+	lea	-$7fff(a6),a1
+	suba.l	d7,a1
+	adda.l	d6,a1
+	rts
+rt_ems_seg:
+	movem.l	d0-d1/a0-a1,-(a7)
+	addq.b	#1,rt_irq_mask
+	jsr	rt_ems_segments
+	subq.b	#1,rt_irq_mask
+	movem.l	(a7)+,d0-d1/a0-a1
 	rts
 
 ; Indirect transfer outside the compiled compare chain: d6 CS, d7 IP. Jumps to

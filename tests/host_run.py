@@ -62,7 +62,8 @@ REPO = image.REPO
 ELF = REPO / "build/host/xwing.elf"
 MEM = 0x01000000          # flat map: code, data, stack, guest RAM
 STACK_TOP = 0x00FF0000
-BLOCK = 0x00400000        # src/platform/host/host.c HOST_BLOCK
+HEAP_BYTES = 0x00500000   # plat_alloc (Host: the free spans)
+BLOCK = 0x00800000        # src/platform/host/host.c HOST_BLOCK
 GUEST_BYTES = 0x110000
 TOP = BLOCK + GUEST_BYTES - 1   # rt_guest: guest linear L at TOP - L (reversed)
 STATE = TOP + 1           # state block (translator/lower.py STATE_EQU)
@@ -298,11 +299,17 @@ class Host:
         e = self.e = U.Engine(U.ARCH_M68K, U.MODE_BIG_ENDIAN, U.CPU_M68K_M68020)
         e.map(0, MEM)
         for vaddr, data, memsz in segs:
+            if vaddr < BLOCK + GUEST_BYTES + 16 + EMS_STORE_PAGES * EMS_PAGE and BLOCK < vaddr + memsz:
+                raise SystemExit(f"host image {vaddr:x}+{memsz:x} meets the guest block at {BLOCK:x}")
             e.write(vaddr, data + bytes(memsz - len(data)))
         self.entry = entry
         self.files: dict[int, object] = {}
         self.allocations = {}
-        self.free_spans = [(0x900000, 0x500000)]
+        # plat_alloc's heap: above the guest block and its EMS store, below the stack
+        heap = (BLOCK + GUEST_BYTES + 16 + EMS_STORE_PAGES * EMS_PAGE + 0xffff) & ~0xffff
+        if heap + HEAP_BYTES > STACK_TOP - 0x10000:
+            raise SystemExit(f"host heap {heap:x}+{HEAP_BYTES:x} meets the stack at {STACK_TOP:x}")
+        self.free_spans = [(heap, HEAP_BYTES)]
         self.next_file = 1
         self.written: dict[str, bytearray] = {}  # files the guest wrote (game path -> bytes)
         self.file_stamps: dict[str, tuple[int, int]] = {}
@@ -546,32 +553,56 @@ class Host:
         for lo, hi in machine_ranges():
             machine[lo:hi] = b"\1" * (hi - lo)
 
-        # ems_alias: ems.c keeps a page mapped at two frame pages as copies and
-        # merges them at the next map call; a guest read through one of them
-        # must see what every other copy holds (DOSBox-X maps one memory).
-        self.ems_map, self.ems_alias_reads, self.ems_alias_bad = None, 0, []
-
-        @U.CODE_CB
-        def ems_call(h, addr, size, user):
-            self.ems_map = None
-        e.hook_range(U.HOOK_CODE, ems_call, self.syms["rt_int67"], self.syms["rt_int67"])
+        # ems_alias: ems.c keeps live copies of a page mapped at two frame pages
+        # and merges them at the next map call; a guest read through one of them
+        # must see what every other live copy holds (DOSBox-X maps one memory; a
+        # page with no live copy is read on its store page, one memory).
+        self.ems_alias_reads, self.ems_alias_bad = 0, []
 
         def ems_alias(lin, size):
-            if self.ems_map is None:
-                self.ems_map = struct.unpack(">4H", self.mem(self.syms["mapped"], 8))
+            mapped, live = host_ems_state(self)
             for b in range(lin, lin + size):
                 if not 0xE0000 <= b < 0xF0000:
                     continue
                 p, o = (b - 0xE0000) >> 14, b & 0x3FFF
-                slot = self.ems_map[p]
-                if not slot or self.ems_map.count(slot) < 2:
+                slot = mapped[p]
+                if not slot or not live[p] or sum(mapped[k] == slot and live[k] for k in range(4)) < 2:
                     continue
                 self.ems_alias_reads += 1
                 v = self.gmem(b, 1)
                 for k in range(4):
-                    if k != p and self.ems_map[k] == slot and \
+                    if k != p and mapped[k] == slot and live[k] and \
                             self.gmem(0xE0000 + k * 0x4000 + o, 1) != v:
                         self.ems_alias_bad.append((b, k, len(self.services)))
+
+        # Generated code runs an ES access to a page with no live copy on its
+        # store page (ems.c rt_ems_es_c): the I3 monitor and the machine-byte
+        # check see it at the frame address of the first frame page that maps it.
+        def store_lin(addr, size):
+            j = addr - EMS_STORE
+            slot, off = j // EMS_PAGE + 1, j % EMS_PAGE
+            mapped, _ = host_ems_state(self)
+            k = next((k for k in range(4) if mapped[k] == slot), None)
+            if k is None:
+                return None
+            return EMS_FRAME + k * EMS_PAGE + EMS_PAGE - 1 - (off + size - 1)
+
+        def store_hook(seen):
+            @U.MEM_CB
+            def hook(h, kind, addr, size, value, user):
+                if self.watching and self.code[0] <= self.r("pc") < self.code[1]:
+                    lin = store_lin(addr, size)
+                    if lin is not None:
+                        seen(lin, size)
+                return True
+            return hook
+        def store_read(lin, size):
+            self.irq.read(lin, size)
+            if (machine[lin] or machine[lin + size - 1]) and not self.in_service:
+                self.machine_reads.update(b for b in range(lin, lin + size) if machine[b])
+        self.store_hooks = (store_hook(store_read), store_hook(lambda a, n: self.irq.write(a, n)))
+        for kind, hook in zip((U.HOOK_MEM_READ, U.HOOK_MEM_WRITE), self.store_hooks):
+            e.hook_range(kind, hook, EMS_STORE, EMS_STORE + EMS_STORE_PAGES * EMS_PAGE - 1)
 
         @U.MEM_CB
         def read(h, kind, addr, size, value, user):
@@ -1576,6 +1607,31 @@ def check_opl(h, trace: Path, counts: bool = True) -> list[str]:
     return problems
 
 
+EMS_FRAME, EMS_PAGE = 0xE0000, 0x4000
+EMS_STORE, EMS_STORE_PAGES = STATE + 16, 0x40     # runtime.h RT_STATE_BYTES, RT_EMS_STORE
+
+
+def host_ems_state(h) -> tuple:
+    """ems.c's rt_ems_mapped (store page + 1 per frame page) and rt_ems_live."""
+    return struct.unpack(">4H", h.mem(h.syms["rt_ems_mapped"], 8)), h.mem(h.syms["rt_ems_live"], 4)
+
+
+def host_ems_pages(h) -> dict:
+    """The EMS model's frame pages not copied in (ems.c: rt_ems_live 0), as their
+    mapped store pages show them, guest order."""
+    mapped, live = host_ems_state(h)
+    return {k: h.mem(EMS_STORE + (mapped[k] - 1) * EMS_PAGE, EMS_PAGE)[::-1]
+            for k in range(4) if mapped[k] and not live[k]}
+
+
+def frame_view(ram: bytes, pages: dict) -> bytes:
+    """Guest RAM as the guest sees it: frame pages not copied in show their store page."""
+    ram = bytearray(ram)
+    for k, page in pages.items():
+        ram[EMS_FRAME + k * EMS_PAGE:EMS_FRAME + (k + 1) * EMS_PAGE] = page
+    return bytes(ram)
+
+
 def reference_clocks(trace):
     """Use recorded external inputs; old captures retain their unpinned clocks."""
     with events(trace) as f:
@@ -1801,7 +1857,8 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
             else:
                 print(f"dead-stored-beside: {a:05X} flipped")
                 h.e.write(TOP - a, bytes([h.gmem(a, 1)[0] ^ 0x80]))
-        problems += check_capture("host", g, h.mem(STATE, 16), h.gmem(0, 0x100000),
+        problems += check_capture("host", g, h.mem(STATE, 16),
+                                  frame_view(h.gmem(0, 0x100000), host_ems_pages(h)),
                                   h.mem(h.syms["rt_dac"], 768) if frame else None,
                                   ref_regs, ref, snap, h, exempt)
         if amiga:
@@ -1816,7 +1873,10 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
                           f"stored since the last present are not compared (D9)")
                 problems += compare_shown(amiga, int(regs["bpr"]), snap, pending)
             problems += check_capture("amiga", ga, (amiga / "state.bin").read_bytes(),
-                                      (amiga / "ram.bin").read_bytes()[::-1],  # reversed
+                                      frame_view((amiga / "ram.bin").read_bytes()[::-1],  # reversed
+                                                 {k: (amiga / f"ems-page{k}.bin").read_bytes()[::-1]
+                                                  for k in range(4)
+                                                  if (amiga / f"ems-page{k}.bin").exists()}),
                                       (amiga / "dac.bin").read_bytes() if frame else None,
                                       ref_regs, ref, snap, h)
     return problems

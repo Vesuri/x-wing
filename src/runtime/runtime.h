@@ -61,8 +61,20 @@ static inline void rt_wrote(uint32_t a, uint32_t n)
         smc_expose();
     }
 }
-static inline uint8_t rd8(uint32_t a) { return *(rt_guest - a); }
-static inline void wr8(uint32_t a, uint8_t v) { rt_wrote(a, 1); *(rt_guest - a) = v; }
+/* EMS frame pages are copied in on first access (ems.c): every runtime access
+ * that meets the frame reports itself first. */
+void rt_ems_touch(uint32_t a, uint32_t n);
+void rt_ems_segments(void);
+extern uint16_t rt_ems_mapped[4];
+extern uint8_t rt_ems_live[4];
+static inline void rt_frame(uint32_t a, uint32_t n)
+{
+    if (n && a <= 0xeffffu && a + n > 0xe0000u) {
+        rt_ems_touch(a, n);
+    }
+}
+static inline uint8_t rd8(uint32_t a) { rt_frame(a, 1); return *(rt_guest - a); }
+static inline void wr8(uint32_t a, uint8_t v) { rt_frame(a, 1); rt_wrote(a, 1); *(rt_guest - a) = v; }
 /* A guest word or dword is a native one ending at the guest address, at any
  * alignment (the 68020's; gcc would split it into bytes). */
 typedef uint16_t __attribute__((may_alias)) rt_u16;
@@ -70,26 +82,30 @@ typedef uint32_t __attribute__((may_alias)) rt_u32;
 static inline uint16_t rd16(uint32_t a)
 {
     uint16_t v;
+    rt_frame(a, 2);
     __asm__("move.w %1,%0" : "=d"(v) : "m"(*(const rt_u16 *)(rt_guest - a - 1)));
     return v;
 }
 static inline void wr16(uint32_t a, uint16_t v)
 {
+    rt_frame(a, 2);
     rt_wrote(a, 2);
     __asm__("move.w %1,%0" : "=m"(*(rt_u16 *)(rt_guest - a - 1)) : "d"(v));
 }
 static inline uint32_t rd32(uint32_t a)
 {
     uint32_t v;
+    rt_frame(a, 4);
     __asm__("move.l %1,%0" : "=d"(v) : "m"(*(const rt_u32 *)(rt_guest - a - 3)));
     return v;
 }
 static inline void wr32(uint32_t a, uint32_t v)
 {
+    rt_frame(a, 4);
     rt_wrote(a, 4);
     __asm__("move.l %1,%0" : "=m"(*(rt_u32 *)(rt_guest - a - 3)) : "d"(v));
 }
-static inline uint8_t *rt_span(uint32_t a, uint32_t n) { return rt_guest - a - n + 1; }
+static inline uint8_t *rt_span(uint32_t a, uint32_t n) { rt_frame(a, n); return rt_guest - a - n + 1; }
 /* A span the runtime stores into. */
 static inline uint8_t *rt_span_w(uint32_t a, uint32_t n) { rt_wrote(a, n); return rt_span(a, n); }
 static inline void rt_span_order(uint8_t *span, uint32_t n)

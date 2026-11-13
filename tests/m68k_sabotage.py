@@ -631,6 +631,8 @@ SABOTAGE = [
     ("sti does not re-arm G_IRQ", sub(r"^\tmove\.b rt_irq_pending,G_IRQ\(a6\)$", "\tnop"), "boundary"),
     ("popf/iret do not re-arm G_IRQ", ("helpers", "\tmove.b\trt_irq_pending,G_IRQ(a6)", "\tnop"),
      "boundary"),
+    ("EMS guard misses ES D001h", sub(r"^\tcmp\.w #\$d001,G_ES\(a6\)$", "\tcmp.w #$d002,G_ES(a6)"), "boundary"),
+    ("EMS DS/SS load check misses D001h", sub(r"^\tcmp\.w #\$d001,(d[0-7])$", r"\tcmp.w #$d002,\1"), "boundary"),
     ("REP fast path without wrap guard", no_wrap_guard, "boundary"),
     ("REPE/REPNE run-out leaves CX FFFFh", no_runout_fix, "boundary"),
     ("carry X trusted across EA clobber", trust_x_across_ea, "boundary"),

@@ -47,7 +47,8 @@ RET, UNKNOWN, SMC = "ret", "unknown", "smc"
 TERMINAL = {"jmp", "jmpf", "ret", "retf", "iret", "hlt"}
 RUNTIME = ("rt_int", "rt_irq", "rt_fault", "rt_halt", "rt_trap", "rt_in8", "rt_in16", "rt_out8", "rt_out16",
            "rt_ret_mismatch", "rt_ret_far_mismatch", "rt_dispatch_near", "rt_dispatch_far", "rt_stop_unknown",
-           "rt_vram_mark", "rt_vdrv_depth", "rt_vdrv_return", "rt_irq_pending")
+           "rt_vram_mark", "rt_vdrv_depth", "rt_vdrv_return", "rt_irq_pending", "rt_ems_es",
+           "rt_ems_seg")
 # G3 native replacements (annotations/hle.csv): runtime service rt_hle_<service>
 # at a range's first instruction; NE skips the range to the instruction after
 # `last`, EQ runs the guest code. `args`: up to two guest word registers, in
@@ -962,7 +963,7 @@ class Program:
                                             for lo, hi in smc_t)),
                    code_regions=self.code_regions(cs, mod), seg_limit=self.smc_limit, seg_lo=self.smc_seg_lo,
                    seg_repeat=label(mod, off) in self.seg_repeat,
-                   program=True, vram=mod in VRAM_MODULES,
+                   program=True, vram=mod in VRAM_MODULES, ems=True,
                    driver_call=mod == M.ROOT and off in self.driver_jumps, ret_mismatch=RM,
                    far_ret_mismatch=RMF,
                    ret_jump=(u.ip_of(self.ret_jumps[(mod, off)]) if (mod, off) in self.ret_jumps else None),

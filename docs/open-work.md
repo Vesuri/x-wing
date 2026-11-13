@@ -14,9 +14,13 @@ gate 6) are in place.
    - A Star Destroyer battle, or the heaviest combat scene a reachable pilot state allows,
      chosen by a measured cost. Instructions per frame rank scenes only if the flight does
      not pace its frames, which is not yet known.
-2. Copy-free EMS mapping in place of SWOTL's map-by-copy (`src/runtime/ems.c`), starting
-   from Wing Commander 2's lazy frame pages ([port plan](port-plan.md#sibling-wing-commander-2)).
-   Acceptance: no EMS map copies a page; the host lockstep to m01 still passes.
+2. Copy-free EMS mapping (`src/runtime/ems.c`). Wing Commander 2's lazy frame pages are in
+   place (translator design, EMS model): a map copies no page in, and an ES access to a
+   page with no live copy runs on its store page. Pages are still copied when a live page
+   is remapped (written back) and when DS or SS loads a frame segment (copied in); measure
+   both with `tools/ems_frame_profile.py --milestone m07-proving-ground --bypass` before
+   choosing what removes them. Acceptance: no EMS map copies a page; the host lockstep to
+   m01 still passes.
 3. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
    `--seed 7` a walk case's x86 store faults at an unmapped address and the oracle then
    reads its recorded writes back, raising UC_ERR_READ_UNMAPPED (the same at P4's commit).
