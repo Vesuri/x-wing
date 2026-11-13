@@ -300,8 +300,9 @@ table's module offset, entries and evidence; the sweep reads the words from the 
 the site's proved targets), `code-pointers.csv`
 (far functions found statically by `make map`: far pointer constants `mov r,offset;
 mov r,seg`, stored as two words `mov [m],offset; mov [m+2],seg` (a FRONTEND method slot) or
-pushed as `push seg; push offset`, with the segment relocated and a prologue at the target,
-and prologues right after a decoded RETF and up to three NOPs, whose CS is the highest
+pushed as `push seg; push offset`, with the segment relocated and the target a function
+start: a prologue, or the byte after a decoded RETF and up to three NOPs (a FRONTEND
+object's empty method is a lone RETF, `FRONTEND.OVL+68236`); and prologues right after a decoded RETF and up to three NOPs, whose CS is the highest
 known code segment at or below them (the module's own, not the previous one's); cfg seeds
 them, so they are far dispatch rows), `runtime.csv` (MS C runtime entries: name,
 class, evidence), `self-modifying.csv` (D16 regions and cell forms),

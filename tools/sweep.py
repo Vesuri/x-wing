@@ -322,7 +322,7 @@ class Sweep:
             return
         t = self.us[owners[0]]
         dst = t.from_link(seg * 16 + ip)
-        if not t.has(dst) or not any(self.mods[t.file].data.startswith(p, dst) for p in PROLOGUES):
+        if not self.far_entry(t, dst):
             return
         key = (u.file, at - prev.size, t.file, dst, seg)
         if key in self.code_ptrs:
@@ -330,6 +330,26 @@ class Sweep:
         self.code_ptrs.add(key)
         self.add_base(t.name, seg, seg * 16 + ip)
         self.seed(t.name, dst, f'far pointer {u.name}+{at - prev.size:X}', seg)
+
+    def far_entry(self, t: Unit, dst: int) -> bool:
+        """A far pointer's target starts a function: a prologue, or the first byte after a
+        decoded RETF and up to three NOPs (MS C's back-to-back layout; a FRONTEND object's
+        empty method is a lone RETF, FRONTEND.OVL+68236)."""
+        data, ins = self.mods[t.file].data, self.insn[t.file]
+        if not t.has(dst):
+            return False
+        if any(data.startswith(p, dst) for p in PROLOGUES):
+            return True
+        end = dst
+        for _ in range(4):
+            prev = next((ins[k] for k in range(end - 1, end - 6, -1)
+                         if k in ins and k + ins[k].size == end), None)
+            if prev is not None and prev.mnemonic == 'retf':
+                return True
+            if end - 1 < 0 or data[end - 1] != 0x90:
+                return False
+            end -= 1
+        return False
 
     def after_retf(self) -> bool:
         """Seed the far functions that start right after a decoded RETF (MS C lays far
@@ -380,7 +400,7 @@ class Sweep:
             return
         t = self.us[owners[0]]
         dst = t.from_link(seg * 16 + ip)
-        if not t.has(dst) or not any(self.mods[t.file].data.startswith(p, dst) for p in PROLOGUES):
+        if not self.far_entry(t, dst):
             return
         if (u.file, at - prev.size, t.file, dst, seg) in self.code_ptrs:
             return
