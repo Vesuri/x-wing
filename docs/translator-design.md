@@ -319,7 +319,9 @@ diffs directly); relocated words in instructions are emitted as
   input image (`make gen-fresh`; `make gen-check` also regenerates and requires
   byte-identical output). One assembly unit (`vasm -Felf`), linked with the
   runtime: `make host` (`build/host/xwing.elf`), `make amiga`; both check only
-  `gen-fresh`.
+  `gen-fresh`. After `elf2hunk`, `tools/hunk_relocs.py` splits any RELOC32 block
+  of more than 65535 offsets: Kickstart 3.1's LoadSeg counts them in 16 bits and
+  refuses the file as not executable (the code hunk relocates itself at 65839).
 - Overlays (D2 = a): every translated module resident in native code; the
   guest's own PLINK manager runs translated and loads the overlay bytes into
   guest RAM (data, CS-relative reads, RAM equal to the reference).

@@ -14,18 +14,12 @@ gate 6) are in place.
    - A Star Destroyer battle, or the heaviest combat scene a reachable pilot state allows,
      chosen by a measured cost. Instructions per frame rank scenes only if the flight does
      not pace its frames, which is not yet known.
-2. The Amiga replay of m01 on the copy-free EMS build (`make test-amiga`): FS-UAE boots,
-   starts the DH0 and DH1 handlers and never runs the startup-sequence, so the stub's
-   `XWing` trigger never fires and gdb times out (the production image the same; its hunk
-   file is valid; harness, emulator and helpers unchanged since the replay last passed).
-   Acceptance: the replay passes at m01, or the stall is shown independent of this build
-   by the previous commit's image stalling the same way.
-3. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
+2. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
    `--seed 7` a walk case's x86 store faults at an unmapped address and the oracle then
    reads its recorded writes back, raising UC_ERR_READ_UNMAPPED (the same at P4's commit).
    Acceptance: `tests/m68k_blocks.py` completes for seeds 1–8; a faulting store is
    compared as an exception, not a crash.
-4. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh reference reach named milestones and
+3. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh reference reach named milestones and
    map its 68k CODE.
    Acceptance: a bounded run reaches a positively identified game state by guest state,
    writes a framebuffer read from video memory and a trap log, and reproduces their pinned

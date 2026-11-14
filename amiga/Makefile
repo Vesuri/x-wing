@@ -158,8 +158,10 @@ $(OUT).elf: $(OBJECTS) | out verify-runtime
 		{ echo "_start is not at the hunk start" >&2; rm -f $@; exit 1; }
 	$(OBJDUMP) --disassemble --no-show-raw-ins -S $@ > $(OUT).s 2>/dev/null || true
 
+# Kickstart 3.1's LoadSeg reads at most 65535 offsets per RELOC32 block (tools/hunk_relocs.py).
 $(OUT).exe: $(OUT).elf
 	elf2hunk $< $@
+	$(PYTHON) $(REPO)/tools/hunk_relocs.py $@
 
 clean:
 	$(RM) -r obj out
