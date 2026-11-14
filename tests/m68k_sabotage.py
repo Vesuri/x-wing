@@ -143,6 +143,20 @@ def no_wrap_guard(self, out):
             if not (x.startswith("\tbcc ") and k and out[k - 1].startswith("\tcmp.l #$10000,"))]
 
 
+def ems_ds_edge(kind):
+    """The listed-code DS compare before a guard (`_dx`) or an exit check (`_dy`)
+    misses D001h."""
+    def f(self, out):
+        return ["\tcmp.w #$d002,G_DS(a6)" if x == "\tcmp.w #$d001,G_DS(a6)" and k + 1 < len(out)
+                and re.match(rf"\tbcc \S+_{kind}\d+$", out[k + 1]) else x for k, x in enumerate(out)]
+    return f
+
+
+def ems_string_one(self, out):
+    """An EMS guard leaves a REP string's count out of its bytes (CX ignored)."""
+    return [x for x in out if x != "\tadd.l d1,d6"]
+
+
 def no_runout_fix(self, out):
     """REPE/REPNE fast path: CX left at FFFFh when the count runs out."""
     return [x for k, x in enumerate(out)
@@ -633,6 +647,9 @@ SABOTAGE = [
      "boundary"),
     ("EMS guard misses ES D001h", sub(r"^\tcmp\.w #\$d001,G_ES\(a6\)$", "\tcmp.w #$d002,G_ES(a6)"), "boundary"),
     ("EMS DS/SS load check misses D001h", sub(r"^\tcmp\.w #\$d001,(d[0-7])$", r"\tcmp.w #$d002,\1"), "boundary"),
+    ("EMS DS guard misses D001h in listed code", ems_ds_edge("dx"), "boundary"),
+    ("EMS DS exit check misses D001h", ems_ds_edge("dy"), "boundary"),
+    ("EMS string guard ignores CX", ems_string_one, "boundary"),
     ("REP fast path without wrap guard", no_wrap_guard, "boundary"),
     ("REPE/REPNE run-out leaves CX FFFFh", no_runout_fix, "boundary"),
     ("carry X trusted across EA clobber", trust_x_across_ea, "boundary"),

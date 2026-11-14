@@ -468,7 +468,8 @@ int rt_irq0_take(void)
 /* After the restore: re-arm from what is posted (runtime.h). */
 void rt_irq0_leave(void)
 {
-    rt_ems_segments();      /* the interrupted DS and SS are back; maps may have run */
+    /* the interrupted DS and SS are back with their pages live or guarded: the
+     * handler maps no EMS page (rt_int67 stops), so nothing is copied in */
     rt_irq0_running = 0;
     *(volatile uint8_t *)&G_IRQ = G_IF && rt_irq_pending;
 }

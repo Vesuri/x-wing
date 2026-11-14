@@ -62,7 +62,7 @@ Wing Commander 2 `e84cfe7` (its P6).
 
 | Work | Where it is | Use |
 |---|---|---|
-| Copy-free EMS: frame pages copied in on first access, guarded ES accesses run on the store page | Wing Commander 2 `bfaebe3`, `c31004f`, `tools/ems_frame_profile.py` | Open-work 2 starts from it. X-Wing's `52be993` (a page mapped at two frame pages is one memory) is kept; the other port keeps two copies |
+| Copy-free EMS: frame pages copied in on first access, guarded ES accesses run on the store page | Wing Commander 2 `bfaebe3`, `c31004f`, `tools/ems_frame_profile.py` | Kept, with X-Wing's DS guard in listed routines (translator design, EMS model). X-Wing's `52be993` (a page mapped at two frame pages is one memory) is kept; the other port keeps two copies |
 | IRQ footprint proof for more than one handler (`translator/irq.py`) | Wing Commander 2 `66e6de5`; X-Wing `6e1e46b` (the music driver's callback) | Extended in both ports separately; compare before either changes it again |
 | FM on Paula: SWOTL's `fm_paula.c`, `Audio.cpp`, `fm_effect_run.s` copied unchanged | Wing Commander 2's import `e6e9808`: its music plays; effect capture (`sfx.c`) and the FM gates are its open work | P7 copies the same files; the effect capture and FM gates are adapted once and shared |
 | Display and input: SWOTL's copper display, double buffer, changed-row C2P, key map, mouse, joystick | Wing Commander 2's open work (its P6b) | Whichever port lands it first; X-Wing's Amiga runs are diagnostic replays without a display |
@@ -212,7 +212,10 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
     resolve against the game directory; the `EMMXXXX0` device's open, IOCTL and close;
     the BIOS data area from the m00 snapshot (CRTC base 03D4h included);
   - EMS: Wing Commander 2's lazy frame pages replace SWOTL's map-by-copy
-    ([translator design](translator-design.md), EMS model). X-Wing maps a page at two
+    ([translator design](translator-design.md), EMS model); X-Wing's string ranges,
+    reversed store slots and the DS guard in the routines that run with DS in the
+    frame (`annotations/ems-ds.csv`) keep the guest's frame accesses on the store
+    pages: the flight milestones copy no page. X-Wing maps a page at two
     frame pages at once (DOSBox-X: one memory); with no live copy both read its store
     page, and live copies are merged against the store at the next map call, stopping
     on a byte written differently through two of them; `host_run.py` checks every

@@ -274,19 +274,41 @@ diffs directly); relocated words in instructions are emitted as
 - EMS model (Wing Commander 2's lazy frame pages, `ems.c`): a map copies no page
   in; a frame page holds its mapped page's bytes only while it is live. Before
   every instruction that accesses memory through ES, `cmp.w #$d001,G_ES(a6)` and,
-  at or above, `rt_ems_es` out of line (d7 offset, d6 bytes, 0 for a string
-  instruction): an access within one frame page whose page has no live copy runs
-  on the store page (a1 displaced onto it), anything else copies its pages in and
-  runs on the frame with the plain base. So a1 is the plain ES base only below
-  D001h, and every access at or above runs right after its guard. A DS or SS load
-  of D001h or above calls `rt_ems_seg` (their accesses are not guarded: the pages
-  their window meets are copied in), as do service returns and the end of IRQ0's
-  handler; the runtime's accessors report frame bytes (`rt_frame`). A live page is
-  written back when its frame page is remapped. Live copies of a page mapped at
-  two frame pages equal the store when the second is made and are merged at the
-  next map call; a byte written differently through two is a stop. Checked by the
-  68020 differential's `ems` cases at the D001h edges and their sabotage plants;
-  host captures and Amiga dumps show non-live pages from the store.
+  at or above, `rt_ems_es` out of line (d7 the lowest offset, d6 the bytes from
+  it; a string passes the range of its operands in ES, ES:DI and an ES-overridden
+  [SI], its size times CX plus their distance, or 0 with DF set: the whole
+  window). A range within one frame page, or across frame pages that map
+  consecutive store pages, whose pages have no live copy runs on the store (a1
+  displaced onto it; store slots are reversed as guest memory is, so consecutive
+  pages share one displacement); anything else copies its pages in and runs on
+  the frame with the plain base. So a1 is the plain ES base only below D001h, and
+  every access at or above runs right after its guard. DS and SS accesses are
+  not guarded, so a DS or SS load of D001h or above calls `rt_ems_seg` and the
+  pages their window meets are copied in, as at service returns. Listed code
+  (`annotations/ems-ds.csv` guard, owner decision in [design](design.md)) guards
+  its DS accesses the same way (`rt_ems_ds`, a3), its DS loads copy nothing, and
+  a far exit with DS still at D001h or above copies the pages in
+  (`rt_ems_ds_leave`, counted): before a RETF, IRET, INT, INTO, far call or far
+  jump not aimed at listed code, and after a range's last instruction when it
+  falls through; a RETF listed as keep has none, as its far function writes no
+  DS and only listed code calls it (`emit.py check_ems_keep` refuses the row
+  otherwise, or when the function is a dispatch row; controls in
+  `tests/ems_keep_check.py`). `translator/emit.py` refuses a near call into a range from
+  outside, a direct transfer leaving one and an indirect transfer inside one, so
+  a near RET stays inside; jumps into a range are allowed, as unlisted code
+  has DS below the frame or its pages copied in, which the guards also handle. A POP DS listed as a
+  restore (the music driver's INT 08h handler) reloads the interrupted DS without
+  a check: its pages are live or guarded, as the handler maps no EMS page
+  (`rt_int67` stops at interrupt level). The runtime's accessors report frame
+  bytes (`rt_frame`). A live page is written back when its frame page is
+  remapped. Live copies of a page mapped at two frame pages equal the store when
+  the second is made and are merged at the next map call; a byte written
+  differently through two is a stop. Checked by the 68020 differential's `ems`
+  and `emsds` cases at the D001h edges and their sabotage plants (the guards, the
+  exit check, a string's count), by `tests/host_run.py`'s routing check on the
+  run's own image (`ems_guard_problems`: a range within a page, across
+  consecutive and across other store pages), and by the host lockstep; host
+  captures and Amiga dumps show non-live pages from the store.
 - Returns: a `ret` continues at the return sites of the calls whose targets
   reach it without entering a call (the divide-error edge is not flow);
   calls through the dispatcher return from any `ret` a table row reaches

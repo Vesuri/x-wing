@@ -46,6 +46,12 @@ MIRROR = frozenset({"sp", "bp"})   # held as offset ^ 7FFFh (D1)
 SEGBASE = {"es": "a1", "ss": "a2", "ds": "a3"}
 SEGSLOT = {"es": "G_ES", "ss": "G_SS", "ds": "G_DS"}
 SZ = {8: "b", 16: "w"}
+# Transfers that may leave listed EMS code (ems-ds.csv): DS is checked first
+# (ems_exit), but for a direct far one into listed code. A near RET returns
+# inside it: no code outside near-calls into it, and its direct near transfers
+# stay inside (emit.py); a range's fall-through out is checked after its last
+# instruction (Ctx.ems_exit_after).
+EMS_EXITS = ("retf", "iret", "int", "into", "callf", "jmpf")
 CCR_BIT = {"CF": 1, "OF": 2, "ZF": 4, "SF": 8}
 CC68 = {"o": "vs", "no": "vc", "b": "cs", "ae": "cc", "e": "eq", "ne": "ne", "be": "ls",
         "a": "hi", "s": "mi", "ns": "pl", "l": "lt", "ge": "ge", "le": "le", "g": "gt"}
@@ -130,6 +136,10 @@ class Ctx:
     program: bool = False                     # program mode (return checks, runtime calls)
     vram: bool = False                        # graphics driver: stores to A000h mark rows (D9)
     ems: bool = False                         # EMS model: ES accesses guarded, DS/SS loads checked
+    ems_ds: bool = False                      # listed code (ems-ds.csv guard): DS accesses guarded too
+    ems_restore: bool = False                 # ems-ds.csv restore: a DS load of the interrupted DS
+    ems_far_inside: bool = False              # listed code's far transfer into listed code (a keep RETF too)
+    ems_exit_after: bool = False              # a listed range's last instruction: its fall-through leaves
     driver_call: bool = False                 # jump into the per-frame graphics call (D9; none yet)
     ret_mismatch: str = "rt_ret_mismatch"     # a return check's mismatch branch (emit.py: local)
     ret_jump: int | None = None               # near RET to a pushed continuation: its IP (ret-jumps.csv)
@@ -336,9 +346,12 @@ class Lowering:
             low = [f"\tcmp.w #{hx(self.c.seg_lo)},{src}", f"\tbcs {back}"] if self.c.seg_lo else []
             self.cold += [f"{cold}:", *low, "\tjsr smc_expose", f"\tbra {back}"]
             self.stats["segment check (cell cache)"] += 1
-        if self.c.ems and s in ("ds", "ss"):
+        if self.c.ems and s in ("ds", "ss") and not (
+                s == "ds" and (self.c.ems_ds or self.c.ems_restore)):
             # EMS model: DS and SS accesses are not guarded, so a load whose
-            # window may meet the frame has its pages copied in (rt_ems_seg)
+            # window may meet the frame has its pages copied in (rt_ems_seg);
+            # listed code guards its DS accesses instead, and a restore of the
+            # interrupted DS finds its pages live or guarded (ems-ds.csv)
             k = sum(1 for x in self.cold if x.startswith(f"{self.c.label}_es"))
             cold, back = f"{self.c.label}_es{k}", f"{self.c.label}_et{k}"
             self.e(f"cmp.w #$d001,{src}")
@@ -516,7 +529,11 @@ class Lowering:
         if op not in ("mov", "push", "callf", "jmpf"):
             self.check_reloc(set())
         if self.c.ems:
-            self.ems_guard()
+            self.ems_guard("es")
+            if self.c.ems_ds:
+                self.ems_guard("ds")
+                if op in EMS_EXITS and not self.c.ems_far_inside:
+                    self.ems_exit()
         if self.c.vram and op not in STRING_OPS:
             for m in mem_dests(i):
                 self.vram_mark(m)
@@ -527,36 +544,49 @@ class Lowering:
             for m in mem_dests(i):
                 if m.seg == "cs":
                     self.code_store(m)
+        if self.c.ems_exit_after and op not in ("jmp", "jmpf", "ret", "retf", "iret", "hlt"):
+            self.ems_exit(keep=True)
         self.out, compact_stats = compact(self.out)
         self.stats.update(compact_stats)
         return self.out
 
     # -- EMS model: the frame's pages are copied in on first access (ems.c) --
-    def ems_guard(self) -> None:
-        """Before an instruction that accesses memory through ES: when ES is
-        D001h or above (its window may meet the frame E0000h-EFFFFh), the
-        runtime sets a1 for the access (rt_ems_es: d7 = offset, d6 = bytes; 0
-        for a string instruction, the whole window), out of line: the ES base
-        displaced onto the mapped page's store, or the plain base with the
-        frame pages copied in. So a1 is the plain ES base only while ES is below
-        D001h; every access at or above runs right after its guard (a label: no
-        formation carries over it, reuse.py). Keeps every other register, X,
-        and the CCR where flags enter in it. DS and SS are checked at their
-        loads instead (putseg). Copied from Wing Commander 2 (c31004f)."""
+    def ems_guard(self, seg: str) -> None:
+        """Before an instruction that accesses memory through `seg` (ES; DS in
+        listed code, Ctx.ems_ds): when it is D001h or above (its window may meet
+        the frame E0000h-EFFFFh), the runtime sets the segment's base register
+        for the access (rt_ems_es: a1, rt_ems_ds: a3; d7 = offset, d6 = bytes),
+        out of line: the base displaced onto the mapped page's store, or the
+        plain base with the frame pages copied in. A string instruction passes
+        the lowest of its operands through the segment (ES:DI, [SI] in its
+        segment) and the bytes from there to the last one's end (its size times
+        CX, REP, CX 0: one element, plus the distance between the two), or 0
+        with DF set: the whole window. So the base is plain only while the
+        segment is below D001h; every access at or above runs right after its
+        guard (a label: no formation carries over it, reuse.py). Keeps every
+        other register, X, and the CCR where flags enter in it. Elsewhere DS
+        and SS are checked at their loads instead (putseg). Copied from Wing
+        Commander 2 (c31004f); the string range and the DS guard are X-Wing's."""
         i = self.i
         if i.op in ("lea", "nop"):
             return
-        mems = [o for o in i.operands if isinstance(o, Mem) and o.seg == "es"]
-        string = i.op in ("movs", "cmps", "stos", "scas")
-        if not mems and not string:
+        mems = [o for o in i.operands if isinstance(o, Mem) and o.seg == seg]
+        # the string operands through seg: ES:DI, and [SI] in seg (its override)
+        index = [r for r, on in (("a4", i.op in ("movs", "cmps", "lods") and (i.seg or "ds") == seg),
+                                 ("a5", seg == "es" and i.op in ("movs", "cmps", "stos", "scas")))
+                 if on]
+        string = bool(index)
+        xlat = i.op == "xlat" and (i.seg or "ds") == seg
+        if not mems and not string and not xlat:
             return
-        k = sum(1 for x in self.cold if x.startswith(f"{self.c.label}_ex"))
-        cold, back = f"{self.c.label}_ex{k}", f"{self.c.label}_er{k}"
+        tag = "ex" if seg == "es" else "dx"
+        k = sum(1 for x in self.cold if x.startswith(f"{self.c.label}_{tag}"))
+        cold, back = f"{self.c.label}_{tag}{k}", f"{self.c.label}_{tag[0]}r{k}"
         keep = bool(self.c.ccr_in)
         # cmp and bcc keep X; emitted directly (the X whitelist has no branches)
         if keep:
             self.out.append("\tmove.w ccr,-(sp)")
-        self.out.append("\tcmp.w #$d001,G_ES(a6)")
+        self.out.append(f"\tcmp.w #$d001,{SEGSLOT[seg]}(a6)")
         self.out.append(f"\tbcc {cold}")
         self.out.append(f"{back}:")
         if keep:
@@ -565,18 +595,71 @@ class Lowering:
         self.e("move.w ccr,-(sp)")
         self.e("movem.l d6-d7,-(sp)")
         if string:
+            # d7 the lowest offset, d6 the bytes from it: one operand's size
+            # times the count, plus the distance between SI and DI for two
+            w = i.width // 8
             self.e("moveq #0,d6")
+            self.e("tst.b G_DF(a6)")
+            self.e(f"bne.s {cold}w")         # DF set: the whole window
+            self.e("moveq #0,d7")
+            self.e(f"move.w {index[0]},d7")
+            if len(index) == 2:
+                self.e(f"move.w {index[1]},d6")
+                self.e("cmp.l d7,d6")
+                self.e(f"bcc.s {cold}o")
+                self.e("exg d6,d7")
+                self.out.append(f"{cold}o:")
+                self.e("sub.l d7,d6")        # the higher minus the lower
+            if i.rep:
+                self.e("move.l d1,-(sp)")
+                self.e("and.l #$ffff,d1")
+                self.e(f"bne.s {cold}n")
+                self.e("moveq #1,d1")        # CX 0: one element, as without REP
+                self.out.append(f"{cold}n:")
+                if w == 2:
+                    self.e("add.l d1,d1")
+                self.e("add.l d1,d6")
+                self.e("move.l (sp)+,d1")
+            else:
+                self.e(f"addq.l #{w},d6")
+            self.out.append(f"{cold}w:")
+        elif xlat:
+            self.e("moveq #0,d7")
+            self.e("move.b d0,d7")
+            self.e("add.w d3,d7")
+            self.e("moveq #1,d6")
         else:
             m = mems[0]
             self.offset_d7(m)
             self.e(f"moveq #{max(1, m.width // 8)},d6")   # a far pointer: 4
-        self.e("jsr rt_ems_es")
+        self.e(f"jsr {'rt_ems_es' if seg == 'es' else 'rt_ems_ds'}")
         self.e("movem.l (sp)+,d6-d7")
         self.e("move.w (sp)+,ccr")
         self.e(f"bra {back}")
         self.cold += self.out
         self.out, self.x_cf = hot, x_cf
-        self.stats["EMS guard"] += 1
+        self.stats["EMS guard" if seg == "es" else "EMS DS guard"] += 1
+
+    def ems_exit(self, keep: bool = False) -> None:
+        """Before a transfer out of listed code (EMS_EXITS), and after a listed
+        range's last instruction where it falls through out of it: DS still at
+        D001h or above has its frame pages copied in and a3 set plain
+        (rt_ems_ds_leave, a counted fallback), so code that does not guard DS
+        finds them live. Keeps every register but a3, X, and the CCR where flags
+        enter in it (`keep`: always, after an instruction)."""
+        k = sum(1 for x in self.cold if x.startswith(f"{self.c.label}_dy"))
+        cold, back = f"{self.c.label}_dy{k}", f"{self.c.label}_dz{k}"
+        keep = keep or bool(self.c.ccr_in)
+        if keep:
+            self.out.append("\tmove.w ccr,-(sp)")
+        self.out.append("\tcmp.w #$d001,G_DS(a6)")
+        self.out.append(f"\tbcc {cold}")
+        self.out.append(f"{back}:")
+        if keep:
+            self.out.append("\tmove.w (sp)+,ccr")
+        self.cold += [f"{cold}:", "\tmove.w ccr,-(sp)", "\tjsr rt_ems_ds_leave",
+                      "\tmove.w (sp)+,ccr", f"\tbra {back}"]
+        self.stats["EMS DS exit check"] += 1
 
     # -- D3 cell caches: CS stores that may reach a self-modified region -----
     def code_store(self, m: Mem) -> None:

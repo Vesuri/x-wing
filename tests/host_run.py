@@ -294,7 +294,8 @@ class Host:
         self.calendar_date = None
         self.sabotage = sabotage
         functions = {}
-        entry, segs, self.syms = elf_load(elf or ELF, functions)
+        self.elf = elf or ELF
+        entry, segs, self.syms = elf_load(self.elf, functions)
         self.frame_writer = functions["push_frame"]
         e = self.e = U.Engine(U.ARCH_M68K, U.MODE_BIG_ENDIAN, U.CPU_M68K_M68020)
         e.map(0, MEM)
@@ -579,8 +580,8 @@ class Host:
         # store page (ems.c rt_ems_es_c): the I3 monitor and the machine-byte
         # check see it at the frame address of the first frame page that maps it.
         def store_lin(addr, size):
-            j = addr - EMS_STORE
-            slot, off = j // EMS_PAGE + 1, j % EMS_PAGE
+            j = addr - EMS_STORE                # ems.c store(): reversed slots
+            slot, off = EMS_STORE_PAGES - j // EMS_PAGE, j % EMS_PAGE
             mapped, _ = host_ems_state(self)
             k = next((k for k in range(4) if mapped[k] == slot), None)
             if k is None:
@@ -1552,6 +1553,55 @@ def resident_problems(sabotage: str | None = None) -> list[str]:
     return problems
 
 
+def ems_guard_problems(elf: Path) -> list[str]:
+    """The EMS guard's routing on the run's own image (rt_entry.s EMS_GUARD,
+    ems.c guard), where the m68k differential stubs it: frame pages mapped by
+    the real INT 67h, then rt_ems_es and rt_ems_ds with ES or DS E030h. A range
+    across two frame pages (DI 3C00h, 140h bytes: a REP row) runs on the store
+    when they map consecutive store pages (one displacement, ems.c store), and
+    otherwise takes the C path with its byte count, so both pages are copied in
+    and the base is plain; a range within one page runs on its store page."""
+    problems = []
+    plain = TOP - 0x7FFF - 0xE0300
+    for name, slot in (("rt_ems_es", 4), ("rt_ems_ds", 0)):   # G_ES, G_DS in the state block
+        for d7, d6, order, want_live in ((0x3C00, 0x140, (0, 1), (0, 0)), (0x3C00, 0x140, (1, 0), (1, 1)),
+                                         (0x0100, 0x140, (1, 0), (0, 0))):
+            h = Host(image.M.REF, elf=elf)
+            ret = h.syms["plat_exit"]  # stop address, never executed
+            h.e.write(h.syms["rt_guest"], TOP.to_bytes(4, "big"))
+            rr = h.syms["rt_r"]        # runtime.h struct rt_regs: ax, cx, dx, bx
+
+            def call(fn, d6=0, d7=0):
+                h.e.reg_write(U.M68K["sr"], 0x2700)  # first: it selects which a7
+                h.e.reg_write(U.M68K["a7"], STACK_TOP - 8)
+                h.e.write(STACK_TOP - 8, ret.to_bytes(4, "big"))
+                h.e.reg_write(U.M68K["a6"], TOP)
+                h.e.reg_write(U.M68K["d6"], d6)
+                h.e.reg_write(U.M68K["d7"], d7)
+                h.e.start(h.syms[fn], ret, timeout_us=1_000_000)
+                return h.r("pc") == ret
+
+            def int67(ax, bx=0, dx=0):
+                h.e.write(rr, ax.to_bytes(2, "big") + bytes(2) + dx.to_bytes(2, "big") + bx.to_bytes(2, "big"))
+                ok = call("rt_int67")
+                return ok, int.from_bytes(h.mem(rr, 2), "big"), int.from_bytes(h.mem(rr + 4, 2), "big")
+
+            ok, ax, handle = int67(0x4300, bx=4)
+            for phys in (0, 1):
+                ok = ok and int67(0x4400 | phys, bx=order[phys], dx=handle)[0]
+            h.e.write(STATE + slot, (0xE030).to_bytes(2, "big"))
+            ok = ok and call(name, d6, d7)
+            a = h.r({"rt_ems_es": "a1", "rt_ems_ds": "a3"}[name])
+            live = tuple(h.mem(h.syms["rt_ems_live"], 2))
+            store = EMS_STORE + (EMS_STORE_PAGES - int.from_bytes(h.mem(h.syms["rt_ems_mapped"], 2), "big")) * EMS_PAGE
+            frame0 = TOP - (EMS_FRAME + EMS_PAGE) + 1
+            want_a = plain if want_live[0] else plain + store - frame0
+            if not ok or live != want_live or a != want_a:
+                problems.append(f"EMS guard {name} d7={d7:04x} d6={d6:x} pages {order}: frame pages live {live}, "
+                                f"want {want_live}; base {a:x}, want {want_a:x} (pc={h.r('pc'):x})")
+    return problems
+
+
 def rearm_problems() -> list[str]:
     """runtime.h poll-point contract on the C path the replay never reaches (it
     posts only where the reference took the interrupt, so with IF set):
@@ -1620,7 +1670,7 @@ def host_ems_pages(h) -> dict:
     """The EMS model's frame pages not copied in (ems.c: rt_ems_live 0), as their
     mapped store pages show them, guest order."""
     mapped, live = host_ems_state(h)
-    return {k: h.mem(EMS_STORE + (mapped[k] - 1) * EMS_PAGE, EMS_PAGE)[::-1]
+    return {k: h.mem(EMS_STORE + (EMS_STORE_PAGES - mapped[k]) * EMS_PAGE, EMS_PAGE)[::-1]
             for k in range(4) if mapped[k] and not live[k]}
 
 
@@ -1752,7 +1802,7 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     label = script["snapshots"][-1][0]
     script["irqs"], script["releases"] = reference_inputs(trace, exact_releases=True)
     summary = dict(kv.split("=", 1) for kv in (trace / "summary.txt").read_text().split())
-    problems = rearm_problems() + resident_problems(sabotage)
+    problems = rearm_problems() + resident_problems(sabotage) + ems_guard_problems(h.elf)
     if int(summary.get("polls", "0"), 16) != fnv(POLLS.read_bytes()):
         problems.append("reference recorded with other poll points: rerun tools/reference.py --polls")
     h.services = ServiceLog(iter_services(trace), h.dead_reads)

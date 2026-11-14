@@ -7,7 +7,8 @@ reversed guest RAM) and reports, for generated code and the runtime separately:
 accesses and bytes, the segment register behind each generated access (DS, ES or SS,
 whichever addresses the frame), accesses straddling a 16 KB page, the hottest code
 labels, generated accesses that run on a store page (rt_ems_es's displacement), and
-the EMS model's own page copies by the entry that caused them.
+the EMS model's own page copies by the entry that caused them, the generated
+accesses through DS or SS alone by label, and the rt_ems_seg calls by caller.
 
 usage: tools/ems_frame_profile.py [--milestone m01-logo] [--bypass] [--timeout s] [--top 25]
 """
@@ -35,7 +36,8 @@ def main() -> None:
     args = ap.parse_args()
 
     stats = dict(gen=Counter(), rt=Counter(), seg=Counter(), label=Counter(), rt_label=Counter(),
-                 straddle=Counter(), model=Counter(), entries=Counter())
+                 straddle=Counter(), model=Counter(), entries=Counter(), seg_label=Counter(),
+                 seg_load=Counter())
     original_run = H.Host.run
 
     def run(self, script, timeout):
@@ -66,6 +68,8 @@ def main() -> None:
                 hits = sorted(f"{s}={v:04x}" for s, v in segs.items()
                               if v * 16 <= lin < v * 16 + 0x10000)
                 stats["seg"][" ".join(hits) or "none"] += 1
+                if not any(x.startswith("es=") for x in hits):   # DS or SS only: not guarded
+                    stats["seg_label"][(" ".join(hits) or "none", name)] += 1
                 stats["label"][name] += 1
             else:
                 stats["rt_label"][name] += 1
@@ -74,7 +78,7 @@ def main() -> None:
         self.e.hook_range(H.U.HOOK_MEM_READ | H.U.HOOK_MEM_WRITE, hook, lo, hi)
 
         cause = ["?"]
-        entries = {self.syms[n]: n for n in ("rt_ems_es", "rt_ems_seg", "rt_int67", "rt_int_c",
+        entries = {self.syms[n]: n for n in ("rt_ems_es", "rt_ems_ds", "rt_ems_ds_leave", "rt_ems_seg", "rt_int67", "rt_int_c",
                                              "rt_ems_touch", "rt_ems_sync", "rt_irq0_take")
                    if n in self.syms}
 
@@ -82,6 +86,11 @@ def main() -> None:
         def entry(h, addr, size, user):
             n = entries[addr]
             stats["entries"][n] += 1
+            if n in ("rt_ems_seg", "rt_ems_ds_leave"):   # a copy-in fallback: who, and the values
+                st = self.mem(H.STATE, 4)
+                ret = self.u32(self.r("a7"))
+                stats["seg_load"][(f"{n[7:]} " + where(ret), f"ds={int.from_bytes(st[0:2], 'big'):04x} "
+                                               f"ss={int.from_bytes(st[2:4], 'big'):04x}")] += 1
             if n == "rt_ems_touch" and cause[0] != "?":
                 return None         # inside one of the others
             cause[0] = n
@@ -125,6 +134,12 @@ def main() -> None:
     print("generated accesses by the segment that addresses the frame:")
     for k, n in stats["seg"].most_common(args.top):
         print(f"  {n:10} {k}")
+    print("generated accesses through DS or SS alone (not guarded), by label:")
+    for (k, lab), n in stats["seg_label"].most_common(args.top * 2):
+        print(f"  {n:10} {k:24} {lab}")
+    print("copy-in fallbacks (seg: a DS or SS load of D001h or above; ds_leave: listed code left) by caller:")
+    for (lab, v), n in stats["seg_load"].most_common(args.top * 2):
+        print(f"  {n:10} {lab:24} {v}")
     print("hottest generated labels:")
     for k, n in stats["label"].most_common(args.top):
         print(f"  {n:10} {k}")

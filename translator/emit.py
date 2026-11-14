@@ -48,7 +48,7 @@ TERMINAL = {"jmp", "jmpf", "ret", "retf", "iret", "hlt"}
 RUNTIME = ("rt_int", "rt_irq", "rt_fault", "rt_halt", "rt_trap", "rt_in8", "rt_in16", "rt_out8", "rt_out16",
            "rt_ret_mismatch", "rt_ret_far_mismatch", "rt_dispatch_near", "rt_dispatch_far", "rt_stop_unknown",
            "rt_vram_mark", "rt_vdrv_depth", "rt_vdrv_return", "rt_irq_pending", "rt_ems_es",
-           "rt_ems_seg")
+           "rt_ems_seg", "rt_ems_ds", "rt_ems_ds_leave")
 # G3 native replacements (annotations/hle.csv): runtime service rt_hle_<service>
 # at a range's first instruction; NE skips the range to the instruction after
 # `last`, EQ runs the guest code. `args`: up to two guest word registers, in
@@ -350,6 +350,18 @@ class Program:
         self.align = {r["label"]: int(r["residue"]) for r in image.rows("align.csv")}
         self.outline = {r["label"] for r in image.rows("outline.csv")}
         self.seg_repeat = {r["label"] for r in image.rows("seg-repeat.csv")}
+        # EMS model: code whose DS accesses are guarded, and restores of the
+        # interrupted DS (annotations/ems-ds.csv; lower.py ems_guard, putseg)
+        self.ems_ds: dict[str, list[tuple[int, int, str]]] = {}   # module: (first, last, kind)
+        self.ems_keep: dict[tuple[str, int], int] = {}   # (module, RETF): entry (check_ems_keep)
+        for r in image.rows("ems-ds.csv"):
+            first, last = int(r["first"], 16), int(r["last"], 16)
+            if r["kind"] == "keep":
+                self.ems_keep[(r["module"], last)] = first
+            elif r["kind"] in ("guard", "restore"):
+                self.ems_ds.setdefault(r["module"], []).append((first, last, r["kind"]))
+            else:
+                raise LowerError(f"ems-ds.csv: kind {r['kind']!r}")
         self.outline_sites: dict[str, tuple] = {}  # R27, outline_cold
         self.offsets: dict[str, list[int]] = {}   # sorted instruction offsets (outline_cold)
         self.run_last: dict[str, dict[int, int]] = {}  # each run's last offset by its first
@@ -383,6 +395,7 @@ class Program:
         # R14e: rows a far transfer may enter: every seed but those that are only
         # targets of indirect near jmp/call sites (rt_dispatch_far stops at the rest)
         self.far_rows = {(m, o) for m, o, why in seeds if not self.near_only(why)}
+        self.check_ems_keep()
         # PUSHF ... POPF pairs that only save and restore FLAGS (annotations/flags.csv):
         # the save reads what is live after the restore.
         self.saves = {(r["module"], int(r["save"], 16)): (r["module"], int(r["restore"], 16))
@@ -904,10 +917,60 @@ class Program:
         return {(lo, hi) for m, lo, hi in self.smc_forms
                 if m == mod and u.segment(lo) == u.segment(hi) == u.cs[off]}
 
+    def check_ems_keep(self) -> None:
+        """An ems-ds.csv keep row (entry, RETF) is a far function in guarded code
+        whose RETF needs no exit check: it writes no DS, so DS at the RETF is its
+        caller's, and only guarded code calls it, which the RETF returns into."""
+        writes_ds = ("lds", "pop", "mov")
+        for (mod, ret), entry in self.ems_keep.items():
+            u = self.units[mod]
+            why = f"ems-ds.csv: {mod} keep {entry:05X}-{ret:05X}"
+            if ret not in u.insns or u.insns[ret].op != "retf":
+                raise LowerError(f"{why}: last is no RETF")
+            if entry not in u.insns or self.ems_kind(mod, entry) != "guard" or self.ems_kind(mod, ret) != "guard" \
+                    or any(lo <= entry <= hi and not lo <= ret <= hi for lo, hi, k in self.ems_ds[mod]):
+                raise LowerError(f"{why}: not inside one guard range")
+            for o in (o for o in u.insns if entry <= o <= ret):
+                i = u.insns[o]
+                if i.op in writes_ds and getattr(i.operands[0], "name", None) == "ds":
+                    raise LowerError(f"{why}: {mod}+{o:05X} {i} writes DS")
+            if (mod, entry) in self.dispatch:
+                raise LowerError(f"{why}: the entry is a dispatch row")
+            seg, ip = u.cs[entry] if entry in u.cs else u.segment(entry), u.ip_of(entry)
+            for m, w in self.units.items():
+                for o, i in w.insns.items():
+                    if i.op in ("callf", "jmpf") and i.operands and isinstance(i.operands[0], Far) \
+                            and (i.operands[0].seg, i.operands[0].off) == (seg, ip) \
+                            and not (m == mod and self.ems_kind(m, o) == "guard"):
+                        raise LowerError(f"{why}: called from {m}+{o:05X} outside guarded code")
+
+    def ems_kind(self, mod: str, off: int) -> str | None:
+        return next((k for lo, hi, k in self.ems_ds.get(mod, ()) if lo <= off <= hi), None)
+
     def ctx(self, mod: str, off: int, stats: Counter) -> Ctx:
         u = self.units[mod]
         i = u.insns[off]
         cs = u.cs[off]
+        ems_kind = self.ems_kind(mod, off)
+        if ems_kind == "restore" and not (i.op == "pop" and getattr(i.operands[0], "name", None) == "ds"):
+            raise LowerError(f"ems-ds.csv: {mod}+{off:05X} restore is no POP DS: {i}")
+        if i.operands and isinstance(i.operands[0], Rel):
+            # a near RET in listed code returns inside it: no near call enters
+            # it, no direct near transfer leaves it (jumps in are safe: the
+            # pages of a DS at the frame are live outside, or guarded)
+            t = u.off_of(cs, i.operands[0].target, off)
+            inside = self.ems_kind(mod, t) == "guard"
+            if ems_kind == "guard" and not inside or i.op == "call" and inside and ems_kind != "guard":
+                raise LowerError(f"ems-ds.csv: {mod}+{off:05X} {i} "
+                                 f"{'leaves' if ems_kind == 'guard' else 'enters'} the guarded code")
+        far_inside = False
+        if ems_kind == "guard" and i.op in ("callf", "jmpf") and isinstance(i.operands[0], Far):
+            t = u.off_of(i.operands[0].seg, i.operands[0].off, off) if i.operands[0].seg == cs else None
+            far_inside = t is not None and self.ems_kind(mod, t) == "guard"
+        far_inside = far_inside or (mod, off) in self.ems_keep   # returns into guarded code
+        exit_after = ems_kind == "guard" and any(hi == off for lo, hi, k in self.ems_ds[mod] if k == "guard")
+        if ems_kind == "guard" and i.op in ("jmp", "call") and not isinstance(i.operands[0], Rel):
+            raise LowerError(f"ems-ds.csv: {mod}+{off:05X} indirect {i} in guarded code")
 
         def near(ip):
             t = u.off_of(cs, ip, off)
@@ -964,6 +1027,8 @@ class Program:
                    code_regions=self.code_regions(cs, mod), seg_limit=self.smc_limit, seg_lo=self.smc_seg_lo,
                    seg_repeat=label(mod, off) in self.seg_repeat,
                    program=True, vram=mod in VRAM_MODULES, ems=True,
+                   ems_ds=ems_kind == "guard", ems_restore=ems_kind == "restore",
+                   ems_far_inside=far_inside, ems_exit_after=exit_after,
                    driver_call=mod == M.ROOT and off in self.driver_jumps, ret_mismatch=RM,
                    far_ret_mismatch=RMF,
                    ret_jump=(u.ip_of(self.ret_jumps[(mod, off)]) if (mod, off) in self.ret_jumps else None),

@@ -9,24 +9,27 @@
 #define EMS_HANDLES 16
 #define EMS_PHYS 4
 
-/* Store pages live after the state block (RT_EMS_BYTES): they are the truth
- * while no frame page holds a copy. A frame page holds its mapped page's bytes
- * only while it is live (EMS model, docs/translator-design.md): a map leaves
- * the new page in the store and copies nothing in; it writes a live page back.
- * An ES access within one frame page whose page has no live copy runs on the
- * store page itself (rt_ems_es_c: the translator's guard before every ES
- * access, rt_ems_es); any other access copies the page in first: the runtime's
- * own accessors (rt_ems_touch, runtime.h), an ES string or wrapping access, and
- * DS or SS while they address the frame (their accesses are not guarded:
- * rt_ems_segments). DOSBox-X maps a page at two frame pages as one memory. Here
- * the store is that memory until a copy is made; copies of one page are equal
- * to the store when the second is made, merged against it at the next map call
- * (reconcile). A byte written differently through two of them is a stop; a read
- * through one of a byte written through another before that call is not
- * modelled (checked in tests/host_run.py, ems_alias). Handles take store pages
- * as DOSBox-X's MEM_AllocatePages does, so after a release a handle's pages can
- * be split across free runs; a release leaves the frame mapped
- * (tests/test_ems.py). */
+/* Store pages live after the state block (RT_EMS_BYTES), reversed (store()):
+ * they are the truth while no frame page holds a copy. A frame page holds its
+ * mapped page's bytes only while it is live (EMS model,
+ * docs/translator-design.md): a map leaves the new page in the store and copies
+ * nothing in; it writes a live page back. An ES access, and a DS access in
+ * listed code (annotations/ems-ds.csv), within frame pages whose pages have no
+ * live copy and share one store displacement runs on the store itself (guard:
+ * the translator's guards rt_ems_es and rt_ems_ds); any other access copies the
+ * pages in first: the runtime's own accessors (rt_ems_touch, runtime.h), a
+ * guarded access across other pages or with DF set, and DS or SS while they
+ * address the frame outside listed code (their accesses are not guarded:
+ * rt_ems_segments, rt_ems_ds_left). DOSBox-X maps a page at two frame pages as
+ * one memory. Here the store is that memory until a copy is made; copies of one
+ * page are equal to the store when the second is made, merged against it at the
+ * next map call (reconcile). A byte written differently through two of them is
+ * a stop; a read through one of a byte written through another before that call
+ * is not modelled (checked in tests/host_run.py, ems_alias; the guard's routing
+ * in ems_guard_problems). Handles take store pages as DOSBox-X's
+ * MEM_AllocatePages does, so after a release a handle's pages can be split
+ * across free runs; a release leaves the frame mapped (as Wing Commander 2's
+ * tests/test_ems.py checks for its copy). */
 static uint16_t ems_free = RT_EMS_PAGES;
 static uint16_t pages[EMS_HANDLES];   /* 0: free; handle 0 is the operating system's */
 static uint16_t page_of[EMS_HANDLES][RT_EMS_STORE];
@@ -37,9 +40,12 @@ int32_t rt_ems_fast[EMS_PHYS];        /* rt_entry.s rt_ems_es: displacement, or 
 #define mapped rt_ems_mapped
 #define live rt_ems_live
 
+/* Store slot s at RT_EMS_STORE - s pages after the state block: reversed, as
+ * guest memory is, so consecutive store pages mapped at consecutive frame
+ * pages lie as those frame pages do and share one displacement (refresh). */
 static uint8_t *store(uint16_t slot)
 {
-    return rt_guest + 1 + RT_STATE_BYTES + (uint32_t)(slot - 1) * RT_EMS_PAGE;
+    return rt_guest + 1 + RT_STATE_BYTES + (uint32_t)(RT_EMS_STORE - slot) * RT_EMS_PAGE;
 }
 
 /* DOSBox-X BestMatch(1): the first free run of one page, else the first of
@@ -250,23 +256,29 @@ void rt_ems_touch(uint32_t a, uint32_t n)
     }
 }
 
-/* Translator guard (lower.py ems_guard): ES >= D001h before an access of `bytes`
- * at ES:offset; bytes 0: a string instruction, the whole ES window. Returns the
- * displacement the access adds to the ES base (rt_entry.s rt_ems_es): an access
- * that lies within one frame page whose mapped page has no live copy goes to
- * the store page itself, without a copy; anything else has its frame pages
- * copied in and runs on the frame (0). */
-int32_t rt_ems_es_c(uint32_t offset, uint32_t bytes)
+/* Translator guard (lower.py ems_guard): the segment >= D001h before an access
+ * of `bytes` at segment:offset; bytes 0: the whole window (a string with DF
+ * set). Returns the displacement the access adds to the segment's base
+ * (rt_entry.s rt_ems_es, rt_ems_ds): an access that lies within one frame page
+ * whose mapped page has no live copy goes to the store page itself, without a
+ * copy; anything else has its frame pages copied in and runs on the frame (0). */
+static int32_t guard(uint16_t seg, uint32_t offset, uint32_t bytes)
 {
-    uint32_t base = lin(G_ES, 0), first = lin(EMS_FRAME, 0);
+    uint32_t base = lin(seg, 0), first = lin(EMS_FRAME, 0);
     offset &= 0xffff;
     if (bytes && offset + bytes <= 0x10000) {
         uint32_t a = base + offset, z = a + bytes - 1;
-        if (a >= first && z < first + EMS_PHYS * RT_EMS_PAGE &&
-            (a - first) / RT_EMS_PAGE == (z - first) / RT_EMS_PAGE) {
-            uint8_t k = (uint8_t)((a - first) / RT_EMS_PAGE), at[EMS_PHYS];
-            if (mapped[k] && !copies(mapped[k], at)) {
-                return (int32_t)(store(mapped[k]) - frame_page(k));
+        if (a >= first && z < first + EMS_PHYS * RT_EMS_PAGE) {
+            /* frame pages whose pages have no live copy and lie as their store
+             * pages do (one displacement: consecutive slots, store()) */
+            uint8_t k = (uint8_t)((a - first) / RT_EMS_PAGE), last = (uint8_t)((z - first) / RT_EMS_PAGE);
+            int32_t d = rt_ems_fast[k];
+            int same = mapped[k] && !(d & 1);
+            for (uint8_t p = k + 1; same && p <= last; ++p) {
+                same = mapped[p] && rt_ems_fast[p] == d;
+            }
+            if (same) {
+                return d;
             }
         }
     }
@@ -279,6 +291,27 @@ int32_t rt_ems_es_c(uint32_t offset, uint32_t bytes)
         rt_ems_touch(base + offset, bytes);
     }
     return 0;
+}
+
+int32_t rt_ems_es_c(uint32_t offset, uint32_t bytes)
+{
+    return guard(G_ES, offset, bytes);
+}
+
+/* DS in listed code (annotations/ems-ds.csv), whose DS loads copy nothing in */
+int32_t rt_ems_ds_c(uint32_t offset, uint32_t bytes)
+{
+    return guard(G_DS, offset, bytes);
+}
+
+/* Listed code left with DS at D001h or above (lower.py ems_exit): the pages
+ * its window meets are copied in, as at an unlisted load (a counted fallback). */
+uint32_t rt_ems_ds_exits;
+
+void rt_ems_ds_left(void)
+{
+    ++rt_ems_ds_exits;
+    rt_ems_segments();
 }
 
 /* DS or SS may address the frame (a load of D001h or above, a service, an
@@ -294,6 +327,11 @@ void rt_ems_segments(void)
 
 void rt_int67(void)
 {
+    if (rt_irq0_running) {
+        /* A map there would change the pages of a DS restored without a check
+         * (annotations/ems-ds.csv restore), so rt_irq0_leave copies nothing. */
+        rt_stop("EMS call at interrupt level (function)", AH(rt_r.ax), 0);
+    }
     switch (AH(rt_r.ax)) {
     case 0x40:  /* status */
         break;

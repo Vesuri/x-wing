@@ -14,13 +14,12 @@ gate 6) are in place.
    - A Star Destroyer battle, or the heaviest combat scene a reachable pilot state allows,
      chosen by a measured cost. Instructions per frame rank scenes only if the flight does
      not pace its frames, which is not yet known.
-2. Copy-free EMS mapping (`src/runtime/ems.c`). Wing Commander 2's lazy frame pages are in
-   place (translator design, EMS model): a map copies no page in, and an ES access to a
-   page with no live copy runs on its store page. Pages are still copied when a live page
-   is remapped (written back) and when DS or SS loads a frame segment (copied in); measure
-   both with `tools/ems_frame_profile.py --milestone m07-proving-ground --bypass` before
-   choosing what removes them. Acceptance: no EMS map copies a page; the host lockstep to
-   m01 still passes.
+2. The Amiga replay of m01 on the copy-free EMS build (`make test-amiga`): FS-UAE boots,
+   starts the DH0 and DH1 handlers and never runs the startup-sequence, so the stub's
+   `XWing` trigger never fires and gdb times out (the production image the same; its hunk
+   file is valid; harness, emulator and helpers unchanged since the replay last passed).
+   Acceptance: the replay passes at m01, or the stall is shown independent of this build
+   by the previous commit's image stalling the same way.
 3. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
    `--seed 7` a walk case's x86 store faults at an unmapped address and the oracle then
    reads its recorded writes back, raising UC_ERR_READ_UNMAPPED (the same at P4's commit).

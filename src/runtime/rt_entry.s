@@ -45,6 +45,8 @@ G_DS	equ	1
 	xdef	rt_vdrv_return
 	xdef	rt_ems_es
 	xdef	rt_ems_seg
+	xdef	rt_ems_ds
+	xdef	rt_ems_ds_leave
 
 	xref	rt_r
 	xref	smc_expose
@@ -83,6 +85,8 @@ G_DS	equ	1
 	xref	rt_opl_pair
 	xref	rt_irq_interrupting
 	xref	rt_ems_es_c
+	xref	rt_ems_ds_c
+	xref	rt_ems_ds_left
 	xref	rt_ems_fast
 	xref	rt_ems_segments
 
@@ -444,71 +448,107 @@ port_out:
 	rts
 
 ; EMS model (ems.c, lower.py ems_guard; copied from Wing Commander 2): before an
-; ES access (d7.w offset, d6.l bytes, 0: the whole ES window), a1 = the ES base
-; plus rt_ems_es_c's displacement (the access runs on the store page, or on the
-; frame with its pages copied in); after a DS or SS load, the frame pages its
-; window meets are copied in. Every other register kept; the callers keep d6, d7
-; and the CCR.
-; An access within one frame page decides here, from rt_ems_fast (ems.c): the
-; page's store displacement, 0 (live or unmapped: the frame), or 1 (the C path,
-; which copies it in). Strings, wraps and accesses that meet the frame from below
-; or across a page take the C path; an access above the frame runs plain.
-rt_ems_es:
-	tst.l	d6			; a string instruction
-	beq.s	.slow
+; ES access, and a DS access in listed code (annotations/ems-ds.csv), with d7.w
+; the offset and d6.l the bytes (0: the whole window), the segment's base
+; register (a1, a3) = its plain base plus the C function's displacement (the
+; access runs on the store page, or on the frame with its pages copied in);
+; after a DS or SS load, the frame pages its window meets are copied in. Every
+; other register kept; the callers keep d6, d7 and the CCR.
+; An access within one frame page, or two whose displacements are equal,
+; decides here from rt_ems_fast (ems.c): the store displacement, 0 (live or
+; unmapped: the frame), or 1 (the C path, which copies it in). Whole windows,
+; wraps, accesses that meet the frame from below or span pages that differ take
+; the C path; an access above the frame runs plain.
+EMS_GUARD	macro			; \1 segment slot, \2 base register, \3 C path
+	tst.l	d6			; the whole window
+	beq	.slow\@
 	movem.l	d0-d1/a0,-(a7)
 	moveq	#0,d1
 	move.w	d7,d1
 	move.l	d1,d0
 	add.l	d6,d0
 	cmp.l	#$10000,d0		; the access wraps at FFFFh
-	bhi.s	.slow2
+	bhi	.slow2\@
 	moveq	#0,d0
-	move.w	G_ES(a6),d0
+	move.w	\1(a6),d0
 	lsl.l	#4,d0
 	add.l	d1,d0
 	sub.l	#$e0000,d0		; its first byte, frame-relative
-	bcs.s	.slow2
+	bcs	.slow2\@
 	cmp.l	#$10000,d0
-	bcc.s	.plain			; above the frame
+	bcc	.plain\@		; above the frame
 	move.l	d0,d1
 	add.l	d6,d1
 	subq.l	#1,d1			; its last byte
-	moveq	#14,d6
-	lsr.l	d6,d0
-	lsr.l	d6,d1
+	lsr.l	#8,d0			; page numbers (14 bits); d6 stays the
+	lsr.l	#6,d0			; byte count for the C path
+	lsr.l	#8,d1
+	lsr.l	#6,d1
+	cmp.l	#4,d1
+	bcc	.slow2\@		; past the frame's end
+	sub.l	d0,d1
+	beq	.one\@
+	subq.l	#1,d1
+	bne	.slow2\@		; three pages or more: the C path
+	lsl.w	#2,d0			; two pages: one displacement (ems.c store)
+	lea	rt_ems_fast,a0
+	move.l	4(a0,d0.w),d1
+	move.l	(a0,d0.w),d0
 	cmp.l	d0,d1
-	bne.s	.slow2			; across a page, or past the frame's end
+	bne	.slow2\@
+	bra	.test\@
+.one\@:
 	lsl.w	#2,d0
 	lea	rt_ems_fast,a0
-	move.l	(a0,d0.w),d6
-	btst	#0,d6
-	bne.s	.slow2
+	move.l	(a0,d0.w),d0
+.test\@:
+	btst	#0,d0
+	bne	.slow2\@
+	move.l	d0,d6			; the displacement
 	movem.l	(a7)+,d0-d1/a0
-	bra.s	.base
-.plain:
+	bra	.base\@
+.plain\@:
 	movem.l	(a7)+,d0-d1/a0
 	moveq	#0,d6
-	bra.s	.base
-.slow2:
+	bra	.base\@
+.slow2\@:
 	movem.l	(a7)+,d0-d1/a0
-.slow:
+.slow\@:
 	movem.l	d0-d1/a0-a1,-(a7)
 	addq.b	#1,rt_irq_mask		; the CIA tick waits (machine.c)
 	move.l	d6,-(a7)
 	move.l	d7,-(a7)
-	jsr	rt_ems_es_c
+	jsr	\3
 	addq.l	#8,a7
 	subq.b	#1,rt_irq_mask
 	move.l	d0,d6
 	movem.l	(a7)+,d0-d1/a0-a1
-.base:
+.base\@:
 	moveq	#0,d7
-	move.w	G_ES(a6),d7
+	move.w	\1(a6),d7
 	lsl.l	#4,d7
-	lea	-$7fff(a6),a1
-	suba.l	d7,a1
-	adda.l	d6,a1
+	lea	-$7fff(a6),\2
+	suba.l	d7,\2
+	adda.l	d6,\2
+	rts
+	endm
+rt_ems_es:
+	EMS_GUARD	G_ES,a1,rt_ems_es_c
+rt_ems_ds:
+	EMS_GUARD	G_DS,a3,rt_ems_ds_c
+; Listed code left with DS at D001h or above (lower.py ems_exit): its frame
+; pages copied in, a3 the plain DS base. Every other register kept.
+rt_ems_ds_leave:
+	movem.l	d0-d1/d7/a0-a1,-(a7)
+	addq.b	#1,rt_irq_mask
+	jsr	rt_ems_ds_left
+	subq.b	#1,rt_irq_mask
+	moveq	#0,d7
+	move.w	G_DS(a6),d7
+	lsl.l	#4,d7
+	lea	-$7fff(a6),a3
+	suba.l	d7,a3
+	movem.l	(a7)+,d0-d1/d7/a0-a1
 	rts
 rt_ems_seg:
 	movem.l	d0-d1/a0-a1,-(a7)
