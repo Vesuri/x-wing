@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live
+.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio sound-reference sound-fm gates-audio
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -28,6 +28,10 @@ help:
 	@echo 'make amiga                  the A1200 image -> amiga/out/XWing.exe (SYNC=1: amiga-sync)'
 	@echo 'make test-amiga             gate 5: m01 replayed on the 68030 model (A1200 chipset, FS-UAE + GDB capture; AMIGA_CPU)'
 	@echo 'make test-amiga-live        the production image runs to the m01 label in real time (no compare)'
+	@echo 'make test-amiga-audio       the production image plays music past the m01 label (key-ons, renders, restarts)'
+	@echo 'make sound-reference        milestone runs with the OPL log; Nuked OPL WAVs in tmp/sound'
+	@echo 'make sound-fm               the FM re-hoster's Paula WAVs beside them'
+	@echo 'make gates-audio            every sound check and its sabotage'
 
 verify-input:
 	@shasum -a 256 -c manifest/originals.sha256
@@ -200,3 +204,51 @@ test-amiga-live: amiga
 	$(ENV) cd amiga && AMIGA_CPU=$(AMIGA_CPU) ./debug.sh "" "../$(AMIGA_CAPTURE)/fixture.gdb" 2>&1 | \
 		tee ../$(AMIGA_CAPTURE)/gdb.log
 	grep -q '^XWING_MILESTONE_OK$$' $(AMIGA_CAPTURE)/gdb.log
+# Music on Paula: the production image past the label (amiga/audio.gdb.in); key-on
+# edges, re-hoster renders and Paula restarts must all be above 0.
+AUDIO_FIELDS ?= 500
+test-amiga-audio: amiga
+	@mkdir -p $(AMIGA_CAPTURE)
+	sed -e "s|@LABEL@|$$(python3 tests/host_run.py --label --milestone $(AMIGA_MILESTONE))|" \
+		-e "s|@FIELDS@|$(AUDIO_FIELDS)|" amiga/audio.gdb.in > $(AMIGA_CAPTURE)/audio.gdb
+	$(ENV) cd amiga && AMIGA_CPU=$(AMIGA_CPU) ./debug.sh "" "../$(AMIGA_CAPTURE)/audio.gdb" 2>&1 | \
+		tee ../$(AMIGA_CAPTURE)/audio.log
+	grep -Eq '^XWING_AUDIO fields=[0-9]+ irq0=[0-9]+ keyons=[1-9][0-9]* renders=[1-9][0-9]* restarts=[1-9][0-9]*$$' \
+		$(AMIGA_CAPTURE)/audio.log
+
+# AdLib FM on Paula (P7), copied from Secret Weapons of the Luftwaffe's Makefile: the
+# re-hoster (src/platform/amiga/fm_paula.c) on the OPL logs of milestone runs
+# (tools/reference.py --opl, named sound-<milestone>), checked against Nuked OPL from the
+# DOSBox-X tree (tools/build_dosbox_x.sh).
+DOSBOX_X_SRC ?= $(or $(XWING_DOSBOX_X_SRC),$(HOME)/.local/src/xwing-dosbox-x)
+NUKED = $(DOSBOX_X_SRC)/src/hardware
+FM_RUNS = m01-logo m02-title m06-concourse-pilot-saved m13-mission-flight
+FM_OPL = ref/dosbox/runs/sound-$(1)/trace/opl.csv
+build/tools/opl_render: tools/opl_render.cpp
+	mkdir -p build/tools
+	c++ -O2 -std=c++17 -I$(NUKED) -o $@ $< $(NUKED)/nukedopl.cpp
+build/tools/fm_check: tools/fm_check.cpp src/platform/amiga/fm_paula.c src/platform/amiga/fm_paula.h
+	mkdir -p build/tools
+	cc -O2 -std=c99 -Wall -Wextra -Werror -c -o build/tools/fm_paula.o src/platform/amiga/fm_paula.c
+	c++ -O2 -std=c++17 -Isrc/platform/amiga -I$(NUKED) -o $@ $< build/tools/fm_paula.o $(NUKED)/nukedopl.cpp
+sound-reference: build/tools/opl_render
+	python3 tools/reference.py --opl --jobs 2 --name sound $(FM_RUNS)
+	mkdir -p tmp/sound
+	for r in $(FM_RUNS); do build/tools/opl_render $(call FM_OPL,$$r) tmp/sound/$$r-fm.wav || exit 1; done
+sound-fm: build/tools/fm_check
+	mkdir -p tmp/sound
+	-for r in $(FM_RUNS); do build/tools/fm_check $(call FM_OPL,$$r) tmp/sound/$$r-paula.wav; done
+t-fm: build/tools/fm_check
+	$(call RUN,fm-paula,mkdir -p tmp/sound && for r in $(FM_RUNS); do \
+		build/tools/fm_check $(call FM_OPL,$$r) tmp/sound/$$r-paula.wav || exit 1; done)
+t-sab-fm: build/tools/fm_check
+	$(call RUN,sabotage-fm-paula,for s in pitch level; do \
+		! build/tools/fm_check $(call FM_OPL,m13-mission-flight) tmp/test/fm-sabotage.wav --sabotage $$s || exit 1; done)
+FM_UNITS = quality render phase envelope allocation cache
+t-fm-%:
+	$(call RUN,fm-$*,python3 tests/test_fm_$*.py)
+t-sab-fm-%:
+	$(call RUN,sabotage-fm-$*,python3 tests/test_fm_$*.py --sabotage)
+# Isolated audio changes: the sound checks and their plants.
+gates-audio:
+	@$(MAKE) -s -k -j$(JOBS) t-fm t-sab-fm $(FM_UNITS:%=t-fm-%) $(FM_UNITS:%=t-sab-fm-%)

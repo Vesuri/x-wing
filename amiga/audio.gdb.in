@@ -1,0 +1,40 @@
+# Music on Paula (make test-amiga-audio): the production image runs to the
+# milestone label (its first visit), then FIELDS more vertical blanks, and
+# reports what the music produced: the OPL key-on edges of every channel
+# (rt_opl_keyon), the loops the FM re-hoster rendered (fm_renders) and the
+# voices Paula restarted (Audio.cpp). The Makefile requires all three above 0.
+set pagination off
+set confirm off
+break plat_exit
+commands
+  silent
+  printf "XWING_AUDIO_EXIT\n"
+  quit 1
+end
+break *rt_stop
+commands
+  silent
+  x/s *(char **)($sp+4)
+  quit 1
+end
+break amiga_start_return
+commands
+  silent
+  printf "XWING_PROGRAM_RETURNED %d\n", *(int *)($sp+4)
+  quit 1
+end
+break @LABEL@
+continue
+delete $bpnum
+break Audio::verticalBlank()
+ignore $bpnum @FIELDS@
+continue
+delete $bpnum
+set $k = 0
+set $keyons = 0
+while $k < 9
+  set $keyons = $keyons + rt_opl_keyon[$k]
+  set $k = $k + 1
+end
+printf "XWING_AUDIO fields=%u irq0=%u keyons=%u renders=%u restarts=%u\n", rt_fields, rt_irq0_runs, $keyons, fm_renders, amiga_audio_restarts
+quit 0

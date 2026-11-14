@@ -64,7 +64,7 @@ Wing Commander 2 `e84cfe7` (its P6).
 |---|---|---|
 | Copy-free EMS: frame pages copied in on first access, guarded ES accesses run on the store page | Wing Commander 2 `bfaebe3`, `c31004f`, `tools/ems_frame_profile.py` | Kept, with X-Wing's DS guard in listed routines (translator design, EMS model). X-Wing's `52be993` (a page mapped at two frame pages is one memory) is kept; the other port keeps two copies |
 | IRQ footprint proof for more than one handler (`translator/irq.py`) | Wing Commander 2 `66e6de5`; X-Wing `6e1e46b` (the music driver's callback) | Extended in both ports separately; compare before either changes it again |
-| FM on Paula: SWOTL's `fm_paula.c`, `Audio.cpp`, `fm_effect_run.s` copied unchanged | Wing Commander 2's import `e6e9808`: its music plays; effect capture (`sfx.c`) and the FM gates are its open work | P7 copies the same files; the effect capture and FM gates are adapted once and shared |
+| FM on Paula: SWOTL's `fm_paula.c`, `Audio.cpp`, `fm_effect_run.s` copied unchanged | Wing Commander 2's import `e6e9808`: its music plays; effect capture (`sfx.c`) and the FM gates are its open work. X-Wing's P7: the FM gates on its music, additive channels at their operators' levels, `fm_check` on vibrato patches | Wing Commander 2 starts its FM gates from X-Wing's; the effect capture is adapted once and shared |
 | Display and input: SWOTL's copper display, double buffer, changed-row C2P, key map, mouse, joystick | X-Wing, copied from SWOTL at P5 (`49b792b`); Wing Commander 2's open work (its P6b) | Wing Commander 2 starts from X-Wing's |
 | Sound Blaster DSP, DMA channel 1 and IRQ 7 model | Wing Commander 2's open work (its P6) | P10 starts from it |
 | Asynchronous timer interrupt in place of loop-head polls | Wing Commander 2's C2; SWOTL's irq-plan measured the polls at 5.15% of cycles | P8 |
@@ -309,6 +309,13 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
 - Price the worst-case effect before choosing live or prerendered playback, Chip RAM
   included.
 - Gate: OPL register streams match the reference per milestone; the FM quality gates pass.
+- Music, in place: `fm_paula.c`, `Audio.cpp` (without the TFH samples and prerendered
+  effects), `opl_render.cpp`, `fm_check.cpp` and the render, phase, envelope,
+  allocation, cache and quality gates are copied; the re-hoster renders additive
+  channels at their operators' levels and `fm_check` measures vibrato patches
+  ([translator design](translator-design.md#sound-d10)). `check_opl` holds the OPL
+  writes to the reference in every host run; `make gates-audio` passes on m01, m02, m06
+  and m13; `make test-amiga-audio` plays the music on the 68030 model.
 
 ### P8. Speed (gate 7)
 

@@ -41,6 +41,10 @@ so the screen is never shown. Only the milestones past the screen run (column `b
 `drop` marks a milestone whose own keys are typed into the screen and are left out of every
 bypassed key script, `keep` one whose keys are kept. The runs are named
 hostb-<time>-<id>-<milestone>.
+
+`--opl` adds the AdLib register log with emulated ms (`--opl` of tools/pc_run.py,
+trace/opl.csv), the sound references of P7 (tools/fm_check.cpp). The log changes no guest
+state, so the pins are still compared.
 """
 
 from __future__ import annotations
@@ -128,7 +132,7 @@ def bypass_events(trace: Path) -> int:
 
 
 def run(base: str, rows: dict[str, dict], name: str, polls: bool = False,
-        bypass: bool = False) -> tuple[list[str], dict[str, str], Path]:
+        bypass: bool = False, opl: bool = False) -> tuple[list[str], dict[str, str], Path]:
     m = rows[name]
     triggers = [site(t) for t in m['snapshots'].split()]
     names = [f'{name}-{i}' for i in range(len(triggers))]
@@ -141,6 +145,8 @@ def run(base: str, rows: dict[str, dict], name: str, polls: bool = False,
         cmd += ['--polls', str(POLLS), '--retrace', '--rep-chunks']
     if bypass:
         cmd += ['--bypass', bypass_spec()]
+    if opl:
+        cmd += ['--opl']
     trace = REPO / 'ref/dosbox/runs' / run_name / 'trace'
     status = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT).returncode
     if status != 0:
@@ -191,6 +197,7 @@ def main() -> int:
     ap.add_argument('--polls', action='store_true', help='host references: poll points, no pins')
     ap.add_argument('--bypass', action='store_true',
                     help="with --polls: bypassed host references, the milestones past the screen")
+    ap.add_argument('--opl', action='store_true', help='also log the AdLib writes (trace/opl.csv)')
     args = ap.parse_args()
     if args.bypass and not args.polls:
         ap.error('--bypass records host references only: add --polls')
@@ -204,7 +211,7 @@ def main() -> int:
     prefix = ('hostb-' if args.bypass else 'host-') if args.polls else 'ms-'
     base = args.name or prefix + time.strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
     with ThreadPoolExecutor(args.jobs) as ex:
-        results = dict(zip(names, ex.map(lambda n: run(base, rows, n, args.polls, args.bypass), names)))
+        results = dict(zip(names, ex.map(lambda n: run(base, rows, n, args.polls, args.bypass, args.opl), names)))
     pins = {}
     if PINS.exists():
         for line in PINS.read_text().splitlines():

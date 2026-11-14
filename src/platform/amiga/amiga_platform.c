@@ -531,6 +531,7 @@ static void key_script_step(void)
 void plat_service(void)
 {
     key_script_step();
+    amiga_audio_service();
 }
 
 /* VGA input status (port 3DAh) from the beam: bit 3 vertical retrace while

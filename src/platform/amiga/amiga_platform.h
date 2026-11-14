@@ -32,10 +32,13 @@ void amiga_key(int raw, int up);
 void amiga_mouse_move(int16_t dx, int16_t dy);
 void amiga_mouse_script_buttons(uint32_t buttons);
 
+/* The FM re-hoster's next commands (Audio.cpp), from plat_service. */
+void amiga_audio_service(void);
+
 /* 1 for an NTSC display (60 Hz fields, NTSC clocks), from graphics'
  * DisplayFlags at XWing's open: the mode LoadView(NULL) gives at the
- * takeover, whatever the Workbench screen's. Display, CIA timer, VGA status
- * and key repeat follow it. */
+ * takeover, whatever the Workbench screen's. Display, CIA timer, VGA status,
+ * FM and key repeat follow it. */
 extern uint8_t amiga_ntsc;
 /* Beam line of the display's first row (XWing.cpp window, Pointer.cpp
  * sprites): PAL $38; NTSC $2C, the standard 200-line window $2C-$F4. */

@@ -12,8 +12,10 @@ extern "C" {
 #include "runtime.h"
 #include "platform.h"
 #include "amiga_platform.h"
+#include "fm_paula.h"
 }
 #include "XWing.h"
+#include "Audio.h"
 #include "DisplayQueue.h"
 #include "Input.h"
 #include "AmigaHardware.h"
@@ -182,6 +184,7 @@ XWing::XWing() :
     }
     AmigaHardware::hasAGAChipSet = true;
     amiga_ntsc = (GfxBase->DisplayFlags & NTSC) != 0;
+    fm_ntsc = amiga_ntsc;
 
     display = new DisplayState{};
     if (!display) return;
@@ -214,6 +217,9 @@ XWing::XWing() :
         if (at >= COPPER_LONGS) return;
         display->copper[b][at] = 0xfffffffe;
     }
+    if (!Audio::begin()) {
+        plat_log("X-Wing no Chip RAM for sound");
+    }
     amiga_bitmap = display->bm[0];
     for (unsigned k = 0; k < 1 + 256 * 3 + 1; ++k) {
         amiga_colours[k] = display->colours[0][k];
@@ -242,6 +248,7 @@ XWing::~XWing()
         }
         delete display;
     }
+    Audio::end();
     AmigaHardware::releaseBlitterQueue();
     if (GfxBase) {
         CloseLibrary((struct Library*)GfxBase);
@@ -273,8 +280,8 @@ void XWing::takeOver()
     AmigaHardware::clearInterruptRequests(INTF_ALL);
     AmigaHardware::setDMAChannels(DMA_ALL, false);
 
-    // The LED filter (CIA-A PRA bit 1, set = off), saved for the hand-back
-    // (no sound yet; L69). No interrupt runs here to race the read-modify-write.
+    // The LED filter (CIA-A PRA bit 1, set = off) as found: AdLib output has no
+    // ~5 kHz low-pass (L69). No interrupt runs here to race the read-modify-write.
     oldLedFilter = *ciaapraPointer & CIAF_LED;
     *ciaapraPointer |= CIAF_LED;
 
@@ -306,6 +313,7 @@ void XWing::takeOver()
 
     AmigaHardware::setCopperList(*display->list[display->queue.shown], true);
     AmigaHardware::setDMAChannels(DMAF_MASTER | DMAF_COPPER | DMAF_RASTER, true);
+    Audio::takeOver();
     AmigaHardware::setInterrupts(TAKEOVER_INTERRUPTS, true);
     if (!Input::begin()) {
         plat_log("X-Wing no ciaa.resource");
@@ -317,6 +325,7 @@ void XWing::takeOver()
 void XWing::handBack()
 {
     Input::end();
+    Audio::handBack();
     AmigaHardware::setInterrupts(INTF_ALL, false);
     AmigaHardware::clearInterruptRequests(INTF_ALL);
     filterWasOff = (*ciaapraPointer & CIAF_LED) != 0;
@@ -409,6 +418,7 @@ void XWing::verticalBlank()
     if (shown) {
         amiga_display_shown(display->queuedSerial);
     }
+    Audio::verticalBlank();
     *intreqPointer = INTF_SETCLR | INTF_SOFTINT;
 }
 
@@ -422,6 +432,7 @@ void XWing::beginIO()
     if (!vectorTaken || ioDepth++) {
         return;
     }
+    Audio::mute(true);
     Disable();
     AmigaHardware::setInterrupts(INTF_ALL, false);
     restoreVectors();
@@ -456,6 +467,7 @@ void XWing::endIO()
     AmigaHardware::setDMAChannels(DMAF_DISK | DMAF_BLITTER, false);
     AmigaHardware::setInterrupts(TAKEOVER_INTERRUPTS, true);
     Enable();
+    Audio::mute(false);
 }
 
 // A complete palette is built only in the withdrawn back list. Palette-only

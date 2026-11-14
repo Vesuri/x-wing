@@ -95,7 +95,7 @@ settled form at the pinned commit.
 | D7 | Indirect transfers | Compare chains over known targets; dispatch table; unknown stops | Kept; table seeds come from X-Wing's overlay manager entries instead of PLINK thunks |
 | D8 | Interrupts | Guest handlers run translated. Production takes IRQ0 at the CIA-B tick when IF is set, proved disjoint by `translator/irq.py`; sync points only in sync builds | Changed: asynchronous delivery from the start, with no production polls. Handlers for every vector the P2 census finds hooked (INT 09h if present; the Sound Blaster IRQ in P10) |
 | D9 | Display | The graphics driver (RTSVGA) translated; its A000h stores mark dirty rows; frame presented at the game's mouse poll (INT 33h AX=3); Kalms c2p into two Chip bitmaps | Changed: the code that writes A000h and X-Wing's per-frame call are found in P2; the frame boundary moves there. The SWOTL-specific mouse scaling and frame cap are re-decided against X-Wing's input |
-| D10 | Sound | SPAZ translated; OPL writes reach `rt_out8`; FM re-hosted to Paula; effects prerendered | Changed: `ADLIB.IMS` translated for music and FM effects (P7); worst-case effect priced first. Sound Blaster PCM through a DSP/DMA/IRQ model in P10 |
+| D10 | Sound | SPAZ translated; OPL writes reach `rt_out8`; FM re-hosted to Paula; effects prerendered | Changed: `ADLIB.IMS` translated for music and FM effects (P7); additive channels re-hosted at their operators' levels (Sound); worst-case effect priced first. Sound Blaster PCM through a DSP/DMA/IRQ model in P10 |
 | D11 | Strings | IR loops; REP fast paths when DF and range are provable | Kept |
 | D12 | Translator language | Python | Kept |
 | D13 | Decoder | Own, cross-checked with Capstone; 186+ opcodes raise | Changed: the 80186 forms the census found are decoded, lifted and checked against Unicorn (P3); the other 186+ opcodes still raise |
@@ -629,7 +629,37 @@ handler reads: sync for the declared span).
 
 ### Sound (D10)
 
-SPAZ runs translated; its OPL2 writes reach `rt_out8` (register file in
-`src/runtime/ports.c`). The FM re-hoster produces Paula voices for music,
-which stays enabled in both FM and TFH modes; see
-sound-plan.md (SWOTL `docs/sound-plan.md`).
+`ADLIB.IMS` runs translated; its OPL2 writes reach `rt_out8` (the register file `rt_opl`
+and the key-on edges `rt_opl_keyon` in `src/runtime/ports.c`), and `check_opl` holds them
+to the reference's writes in every host run. The FM re-hoster
+(`src/platform/amiga/fm_paula.c`, Secret Weapons of the Luftwaffe's, its
+`docs/sound-plan.md`) turns them into four Paula voices once a field: the field task runs
+it from `plat_service`, and the vertical blank stages its commands
+(`src/platform/amiga/Audio.cpp`, Secret Weapons of the Luftwaffe's without its TFH samples
+and prerendered effects). Voices 0 and 3 play left, 1 and 2 right.
+
+Changed for `ADLIB.IMS`:
+- Additive channels (C0 bit 0): the music uses them (271 of its 1,905 C0 writes over the
+  sound references, mostly feedback 3) and Secret Weapons of the Luftwaffe's effects
+  never did. Its loop held the carrier at 0 dB and the modulator at its own level, halved,
+  at the louder operator's volume: 7–9 dB too quiet on 2,787 of 2,884 additive fields (MEASURED: `fm_check`). A loop
+  key's high word now holds each operator's level relative to the louder (`ADD_MOD`,
+  `ADD_CAR`), the modulator's feedback still runs at its own level, and the volume takes
+  back the halved sum's 6 dB. FM patches keep a zero high word and their loops.
+- `tools/fm_check.cpp` measures pitch on patches with shallow vibrato or tremolo (on most
+  of the music's; at most 6.8 cents), not on a note released or one whose registers
+  changed within the measured field (its header states the evidence).
+
+Checks (`make gates-audio`): `t-fm` runs the re-hoster on the OPL logs of four milestone
+runs (`make sound-reference`: `tools/reference.py --opl`, `ref/dosbox/runs/sound-*`)
+against Nuked OPL per channel, level within 3 dB on 95% of fields and pitch within 10
+cents on 99% of the measured ones. MEASURED (level; pitch): m01 99.4%, 100% of 94; m02
+99.7%, 100% of 167; m06 98.1%, 100% of 342; m13 97.7%, 99.8% of 2,807. Secret Weapons of
+the Luftwaffe's unchanged re-hoster fails the same check at 78.0% (m01) and 92.0% (m13)
+level. `t-sab-fm` plants a pitch and a level fault. The render, phase, envelope,
+allocation, cache and quality gates and their plants are Secret Weapons of the
+Luftwaffe's; the render gate's reference model also renders the additive levels, and
+its additive cases at 0 dB carrier keep their samples. On the Amiga, `make test-amiga-audio` runs the production
+image on the 68030 model to m01's label and 500 fields past it, and requires OPL key-ons,
+re-hoster renders and Paula restarts (MEASURED: 16, 91, 8; at the label itself, 107
+fields after the start, all 0).

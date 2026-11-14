@@ -41,11 +41,11 @@ LDFLAGS  = -Wl,--emit-relocs,--gc-sections,-Ttext=0,-Map=$(OUT).map
 
 # start.o first: DOS enters the first hunk at offset 0, and the link check below
 # holds _start there.
-OBJECTS = obj/start.o obj/main.o obj/XWing.o obj/Input.o obj/GCCRuntime.o \
+OBJECTS = obj/start.o obj/main.o obj/XWing.o obj/Input.o obj/Audio.o obj/GCCRuntime.o \
 	obj/framework_amiga_hardware.o obj/framework_bitmap.o \
 	obj/framework_copper_list.o obj/framework_palette24.o \
 	obj/gcc8_c_support.o obj/gcc8_a_support.o obj/memory.o obj/version.o \
-	obj/amiga_platform.o obj/amiga_run.o obj/c2p1x1_8_c5_bm.o obj/rt_entry.o \
+	obj/amiga_platform.o obj/fm_paula.o obj/amiga_run.o obj/c2p1x1_8_c5_bm.o obj/rt_entry.o \
 	$(patsubst $(RUNTIME)/%.c,obj/rt_%.o,$(wildcard $(RUNTIME)/*.c)) obj/program.o
 
 # Sync image (Secret Weapons of the Luftwaffe's docs/irq-plan.md I8): the
@@ -101,6 +101,9 @@ obj/main.o: $(REPO)/src/main.cpp | obj
 obj/XWing.o: $(AMIGA_SRC)/XWing.cpp | obj
 	$(CC) $(CPPFLAGS) -c -o $@ $<
 
+obj/Audio.o: $(AMIGA_SRC)/Audio.cpp | obj
+	$(CC) $(CPPFLAGS) -c -o $@ $<
+
 obj/Input.o: $(AMIGA_SRC)/Input.cpp | obj
 	$(CC) $(CPPFLAGS) -c -o $@ $<
 
@@ -134,6 +137,9 @@ obj/memory.o: $(AMIGA_SRC)/memory.s | obj
 obj/amiga_platform.o: $(AMIGA_SRC)/amiga_platform.c | obj
 	$(CC) $(CCFLAGS) -ffreestanding -I"$(RUNTIME)" -I"$(AMIGA_SRC)" -c -o $@ $<
 
+obj/fm_paula.o: $(AMIGA_SRC)/fm_paula.c | obj
+	$(CC) $(CCFLAGS) -ffreestanding -c -o $@ $<
+
 obj/amiga_run.o: $(AMIGA_SRC)/amiga_run.s | obj
 	$(VASM) $(VASMFLAGS) -o $@ $<
 
@@ -156,6 +162,12 @@ $(OUT).elf: $(OBJECTS) | out verify-runtime
 	$(CC) $(CCFLAGS) $(LDFLAGS) $(OBJECTS) -o $@
 	@test "$$($(OBJDUMP) -t $@ | awk '$$NF == "_start" && $$4 == ".text" { print $$1 }')" = 00000000 || \
 		{ echo "_start is not at the hunk start" >&2; rm -f $@; exit 1; }
+	@# A restart's DMA-off window polls VHPOSR between the two DMACON writes
+	@# (a non-volatile poll compiled to nothing: 0.91 on a 68040).
+	@$(OBJDUMP) -d -C --no-show-raw-insn $@ | awk '/<Audio::verticalBlank\(\)>:/ { f = 1; next } \
+		f && /^$$/ { exit } f && /dff096/ { d++ } f && d == 1 && /dff006/ { w = 1 } \
+		END { exit !(d >= 2 && w) }' || \
+		{ echo "Audio::verticalBlank: no VHPOSR wait between the DMACON writes" >&2; rm -f $@; exit 1; }
 	$(OBJDUMP) --disassemble --no-show-raw-ins -S $@ > $(OUT).s 2>/dev/null || true
 
 # Kickstart 3.1's LoadSeg reads at most 65535 offsets per RELOC32 block (tools/hunk_relocs.py).
