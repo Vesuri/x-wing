@@ -693,10 +693,13 @@ Effects are prerendered (owner decision 2026-11-15), as Secret Weapons of the Lu
   connection, shift): every byte equal; its plants alter the phase mask, the feedback,
   its history, the shift and the chip-rate steps. `make t-sfx-capture` runs the host
   lockstep to m12 with the capture on and compares every capture with
-  `tools/sfx_capture.py` run from the guest RAM at the hook, the harness's own replays
-  (interrupts, polls, REP slices, ports, EMS stores) suspended while the capture runs;
-  its plants alter a tick, a value and an end, and leave a driver byte unrestored.
-  MEASURED: 34 ids, 6,394 writes, ids 31 and 32 without an end, all equal; m12 still
-  matches (40,066,706 services, 31,703 interrupts and 20,651 OPL writes equal).
+  `tools/sfx_capture.py` run from the guest RAM at the hook, and the guest's RAM (the
+  private stack aside), state block, registers and OPL index at the capture's return
+  equal to the hook's; the run ends there. The harness's own replays (interrupts,
+  polls, REP slices, ports, EMS stores) are suspended while the capture runs. The
+  capture is saved, and `t-sab-sfx-capture` plants a tick, a value, an end and a guest
+  byte left changed on it, without a host run. MEASURED: 34 ids, 6,394 writes, ids 31
+  and 32 without an end, all equal; a run with the capture on to m12 matched the
+  reference (40,066,706 services, 31,703 interrupts and 20,651 OPL writes equal).
 
 Open: the play layer and the cache ([open work](open-work.md)).

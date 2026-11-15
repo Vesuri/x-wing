@@ -178,16 +178,15 @@ t-host-%:
 	$(call RUN,host-$*,python3 tests/host_run.py --milestone $*)
 test-host: host
 	@$(MAKE) -s -k -j$(JOBS) $(HOST_MILESTONES:%=t-host-%)
-# The effect capture (src/runtime/sfx.c) against tools/sfx_capture.py in the host
-# lockstep to m12, whose milestone still matches; and its plants.
+# The effect capture (src/runtime/sfx.c): host lockstep to its return in the m12
+# flight, compared with tools/sfx_capture.py and the guest as before it; saved for
+# its plants, which run on the saved capture in seconds.
 SFX_MILESTONE = m12-training-flight
-SFX_PLANTS    = restore tick value end
 SFX_TIMEOUT   = 10000
 t-sfx-capture: host
 	$(call RUN,sfx-capture,python3 tests/host_run.py --milestone $(SFX_MILESTONE) --bypass --sfx-capture --timeout $(SFX_TIMEOUT))
-t-sab-sfx-capture: host
-	$(call RUN,sabotage-sfx-capture,for s in $(SFX_PLANTS); do \
-		python3 tests/host_run.py --milestone $(SFX_MILESTONE) --bypass --sfx-capture $$s --timeout $(SFX_TIMEOUT) || exit 1; done)
+t-sab-sfx-capture:
+	$(call RUN,sabotage-sfx-capture,python3 tests/host_run.py --sfx-plants)
 
 # The A1200 image (amiga/Makefile), copied from Secret Weapons of the Luftwaffe's.
 # test-amiga (gate 5): the diagnostic replay image (tests/amiga_replay.py) replays
