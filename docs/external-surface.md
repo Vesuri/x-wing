@@ -122,6 +122,23 @@ game in two ways:
 
 Its INT 08h handlers (the calibration handler, then the timer handler) are the only other ways into it.
 
+The structures the effect capture and its oracle rely on (DERIVED from the listing,
+MEASURED under Unicorn by `tools/sfx_capture.py`):
+- The entry's first argument picks the command: high byte 0 through the table at
+  `DS:003C` (start 08h, stop 09h, stop all 0Bh, status 0Dh, group 10h, far callback 0Fh);
+  high byte 1 is a player's parameter: 101h priority, 102h volume, 103h pan.
+- `DS` is the code segment plus 4D0h (`+00BEF`); the image and its minimum allocation
+  span 7760h bytes.
+- `DS:06E2` holds a far pointer to the game's sound table, one far pointer per id. Ids
+  0–2 are the music in the EMS frame; FLIGHT's loader (`FLIGHT.OVL+197A0`) registers
+  `SFXADL.LFD`'s 34 effects from id 4 and returns their count at `+19977`.
+- The timer handler (`+00A1B`) runs the sequencer every tick and the game's timer through
+  `[06DE]` when its accumulator `DS:0678` passes 108Dh; its countdown `CS:0910` chains to
+  the BIOS every 16 ticks.
+- OPL writes skip a register whose shadow (`DS:0342`, 256 bytes) already holds the value.
+- Requests queued at interrupt level (64 entries of 16 bytes at `DS:0EC0`, read index
+  `DS:0EBE`, write index `DS:12C0`) run from the tick; one is the flight callback.
+
 ## VGA
 
 - Mode 13h, chained: no sequencer, graphics-controller or CRTC writes, so no unchained mode

@@ -888,11 +888,16 @@ publish_voices:
 
 /* Prerendered effects (docs/sound-plan.md R2): a captured effect synthesised
  * once, directly at FM_EFFECT_RATE (the chip rate / 3) with continuous phase:
- * the registers from `opl`, then `w[0..n)` applied at their ticks (236.7 Hz,
- * 5041/72 output samples each); a key-on edge restarts both operators'
- * phase and attack, as the chip. Envelopes advance per tick (eg_advance);
- * operators as op_out, feedback per output sample. Channels written by the
- * effect are mixed into buf (16 bits: three channels fit), then scaled to
+ * the registers from `opl`, then `w[0..n)` applied at their ticks (the
+ * driver's PIT rate, 1193182/4096 Hz: 512/9 output samples each); a key-on
+ * edge restarts both operators' phase and attack, as the chip. Envelopes
+ * advance per tick (eg_advance) to the tick's middle (a whole tick ahead ran a
+ * fast release a tick early); operators as op_out, the modulator's feedback
+ * per chip sample (three an output sample: a strong loop at a third of the
+ * rate turned a tone noisy), tremolo and vibrato as the chip's per tick. Channels written by the effect are mixed into
+ * buf, each channel's output shifted right by FX_SHIFT of the number written
+ * (an additive channel reaches 2 * 4084: up to four fit 16 bits unshifted,
+ * eight at 1, nine at 2), then scaled to
  * full 8 bits in place, *level the peak. A channel is silent below the 8-bit
  * floor of the scaled sample: ATT_SILENT under the peak so far (never above
  * the final one, 32 units per halving). Then the end (fm_paula.h): 20 ms
@@ -900,11 +905,13 @@ publish_voices:
  * the peak's pass) against the loudest's, FM_EFFECT_END_DB in 1 dB steps of
  * 1000/1122; the fade after the last window above it; trailing samples that
  * scale to 0 are cut. */
-#define FX_TICK_NUM 5041u           /* output samples per tick, / FX_TICK_DEN */
-#define FX_TICK_DEN 72u
-#define FX_TAIL_TICKS 474u          /* release tail after the last write, 2 s at most */
+#define FX_TICK_NUM 512u            /* output samples per tick, / FX_TICK_DEN */
+#define FX_TICK_DEN 9u
+#define FX_TICK_HZ (1193182.0 / 4096)   /* ADLIB.IMS's PIT divisor 1000h */
+#define FX_TAIL_TICKS 583u          /* release tail after the last write, 2 s at most */
+#define FX_SHIFT(channels) ((channels) <= 4 ? 0 : (channels) <= 8 ? 1 : 2)
 #define FX_WINDOW (FM_EFFECT_RATE / 50)     /* the end's 20 ms windows */
-#define FX_WINDOWS 512u            /* 10.3 s: past the capture's 8 s and the tail */
+#define FX_WINDOWS 512u            /* 10.2 s: past the capture's 8 s and the tail */
 static uint32_t fx_wins[FX_WINDOWS];
 
 struct fx_channel {
@@ -937,13 +944,14 @@ static void fx_build(void)
     fx_tables = 1;
 }
 
-/* m samples of one channel added to mix, phases in 1/128 of op_out's units
- * (the index the high word); specialised per feedback on and connection. */
+/* m samples of one channel added to mix, each shifted right by osh, phases in
+ * 1/128 of op_out's units (the index the high word); specialised per feedback
+ * on, connection and shift. */
 static inline __attribute__((always_inline)) void fx_run(struct fx_channel *x, int16_t *mix, uint32_t m,
                                                          const uint16_t *wm, const uint16_t *wc,
                                                          const int16_t *em, const int16_t *ec, uint32_t im,
                                                          uint32_t ic, uint16_t sh, const int feedback,
-                                                         const int cnt)
+                                                         const int cnt, const int osh)
 {
     uint32_t pm = x->pm, pc = x->pc;
     int32_t p1 = x->prev1, p2 = x->prev2;
@@ -955,8 +963,19 @@ static inline __attribute__((always_inline)) void fx_run(struct fx_channel *x, i
         p2 = p1;
         p1 = mv;
         cv = ec[wc[(uint16_t)((pc >> 16) + (cnt ? 0 : mv)) & 0x3ff]];
-        *mix++ += (int16_t)(cnt ? cv + mv : cv);
+        *mix++ += (int16_t)((cnt ? cv + mv : cv) >> osh);
         pm += im;
+        if (feedback) {             /* the loop at the chip's rate: its other two samples */
+            int16_t f;
+            f = em[wm[(uint16_t)((pm >> 16) + ((p1 + p2) >> sh)) & 0x3ff]];
+            p2 = p1;
+            p1 = f;
+            pm += im;
+            f = em[wm[(uint16_t)((pm >> 16) + ((p1 + p2) >> sh)) & 0x3ff]];
+            p2 = p1;
+            p1 = f;
+            pm += im;
+        }
         pc += ic;
     }
     x->pm = pm;
@@ -966,29 +985,100 @@ static inline __attribute__((always_inline)) void fx_run(struct fx_channel *x, i
 }
 
 #ifdef FM_EFFECT_ASM
-/* fm_effect_run.s (the Amiga build): the same loop, mode = feedback on * 2 + connection. */
+/* fm_effect_run.s (the Amiga build): the same loop, mode = (shift * 2 + feedback on) * 2 + connection. */
 void fx_run_asm(struct fx_channel *x, int16_t *mix, uint32_t m, const uint16_t *wm, const uint16_t *wc,
                 const int16_t *em, const int16_t *ec, uint32_t im, uint32_t ic, uint32_t sh, uint32_t mode);
 #endif
 
 static __attribute__((noinline)) void fx_channel_run(struct fx_channel *x, int16_t *mix, uint32_t m, uint8_t wfm,
                                                      uint8_t wfc, uint16_t am, uint16_t ac, uint32_t im,
-                                                     uint32_t ic, uint8_t fb, uint8_t cnt)
+                                                     uint32_t ic, uint8_t fb, uint8_t cnt, uint8_t osh)
 {
     const uint16_t *wm = fx_wave[wfm], *wc = fx_wave[wfc];
     const int16_t *em = fx_exp + (am << 3), *ec = fx_exp + (ac << 3);
     uint16_t sh = (uint16_t)(9 - fb);
     im <<= 7;
     ic <<= 7;
+    if (fb) {
+        im /= 3;                    /* a chip sample's (im is three of them) */
+    }
 #ifdef FM_EFFECT_ASM
-    fx_run_asm(x, mix, m, wm, wc, em, ec, im, ic, sh, (uint32_t)((fb != 0) * 2 + cnt));
+    fx_run_asm(x, mix, m, wm, wc, em, ec, im, ic, sh, (uint32_t)((osh * 2 + (fb != 0)) * 2 + cnt));
     return;
 #endif
-    switch ((fb != 0) * 2 + cnt) {
-    case 0: fx_run(x, mix, m, wm, wc, em, ec, im, ic, sh, 0, 0); break;
-    case 1: fx_run(x, mix, m, wm, wc, em, ec, im, ic, sh, 0, 1); break;
-    case 2: fx_run(x, mix, m, wm, wc, em, ec, im, ic, sh, 1, 0); break;
-    default: fx_run(x, mix, m, wm, wc, em, ec, im, ic, sh, 1, 1); break;
+#define FX_CASE(k) case k: fx_run(x, mix, m, wm, wc, em, ec, im, ic, sh, k >> 1 & 1, k & 1, k >> 2); break;
+    switch ((osh * 2 + (fb != 0)) * 2 + cnt) {
+    FX_CASE(0) FX_CASE(1) FX_CASE(2) FX_CASE(3) FX_CASE(4) FX_CASE(5)
+    FX_CASE(6) FX_CASE(7) FX_CASE(8) FX_CASE(9) FX_CASE(10) default: fx_run(x, mix, m, wm, wc, em, ec, im, ic, sh, 1, 1, 2); break;
+    }
+#undef FX_CASE
+}
+
+/* A slow envelope (rate below 12) steps where Nuked's does: at envelope-timer
+ * values (one every other chip sample, from 0 at tick 0) whose low 13 bits
+ * have eg_add - 1 trailing zeros, eg_add 12 - rate_hi, and 13 or 14 by the
+ * low rate bits. A slow attack's first steps are 5-12 dB, so each lands at
+ * its own sample (fm_effect renders up to it). Faster rates step every
+ * envelope cycle and keep eg_advance's average. fx_slow: the operator's rate
+ * now, 0 if not slow. */
+static uint8_t fx_slow(const struct op *o, const uint8_t *opl, uint8_t off, uint8_t ks)
+{
+    uint8_t ad = opl[0x60 + off], sr = opl[0x80 + off];
+    uint8_t reg = o->gen == ATTACK ? ad >> 4 : o->gen == DECAY ? ad & 15
+                : o->gen == SUSTAIN && (opl[0x20 + off] & 0x20) ? 0 : sr & 15;
+    uint8_t rate = (uint8_t)(reg * 4 + ks);
+    return reg && rate < 48 && (o->rout >> 8 < 0x1f8 || o->gen == ATTACK) ? rate : 0;
+}
+
+/* The first envelope-timer value >= t where slow rate `rate` steps. */
+static uint32_t fx_next(uint8_t rate, uint32_t t)
+{
+    uint8_t hi = rate >> 2, lo = rate & 3, n;
+    uint32_t best = ~0u;
+    for (n = (uint8_t)(12 - hi); n <= 14 - hi; ++n) {
+        if (n > 13 || (n == 13 - hi && !(lo & 2)) || (n == 14 - hi && !(lo & 1))) continue;
+        uint32_t half = 1u << (n - 1), at = t + ((half - t) & ((half << 1) - 1));
+        if (at < best) best = at;
+    }
+    return best;
+}
+
+/* One slow step (Nuked's attack, decay, sustain and release increments). */
+static void fx_step(struct op *o, const uint8_t *opl, uint8_t off)
+{
+    uint32_t r = o->rout >> 8, sr = opl[0x80 + off], sl = (sr >> 4 == 15 ? 31 : sr >> 4) << 4;
+    if (o->gen == ATTACK) {
+        r -= (r + 8) >> 3;          /* Nuked: rout += ~rout >> 3 */
+        if (!r) o->gen = DECAY;
+    } else if (o->gen == DECAY && r >= sl) {
+        o->gen = SUSTAIN;
+    } else if (r < 0x1f8) {
+        ++r;
+    } else {
+        r = 0x1ff;
+    }
+    o->rout = r << 8;
+    o->acc = 0;
+}
+
+static uint8_t fx_ks(const uint8_t *opl, uint8_t c, uint8_t off)
+{
+    uint8_t b0 = opl[0xb0 + c], ksv = (uint8_t)(((b0 >> 2) & 7) << 1 | ((opl[0xa0 + c] | (b0 & 3) << 8) >> 9 & 1));
+    return (opl[0x20 + off] & 0x10) ? ksv : ksv >> 2;
+}
+
+/* The written channels' operators not slow, advanced dt/256 field. */
+static void fx_eg(struct op *fop, const uint8_t *opl, uint16_t used, uint32_t dt)
+{
+    uint8_t c, k2;
+    for (c = 0; c < 9; ++c) {
+        if (!(used >> c & 1)) continue;
+        for (k2 = 0; k2 < 2; ++k2) {
+            uint8_t off = (uint8_t)(op_off[c] + 3 * k2), ks = fx_ks(opl, c, off);
+            if (!fx_slow(&fop[2 * c + k2], opl, off, ks)) {
+                eg_advance(&fop[2 * c + k2], opl, off, ks, dt);
+            }
+        }
     }
 }
 
@@ -998,12 +1088,13 @@ uint32_t fm_effect(const uint8_t *opl0, const struct fm_write *w, uint32_t n, in
     uint8_t opl[256];
     struct op fop[18];
     struct fx_channel ch[9];
-    uint16_t used = 0, c, silent = 0x1ff;
+    uint16_t used = 0, c, silent = 0x1ff, channels = 0;
+    uint8_t osh;
     uint32_t i = 0, tick, frac = 0, k = 0, len = 0, last = n ? w[n - 1].tick : 0, peak = 1, p = 1;
     /* per 20 ms window the sum of |sample| (the end's level), filled as the peak is found */
     uint32_t *wins = fx_wins, nw = 0, wsum = 0, wn = 0;
     /* the envelope's ticks in 1/256 field, 16.16 */
-    uint32_t dt = (uint32_t)((fm_ntsc ? 59.826 : FM_FIELD_HZ) * 65536.0 * 256.0 / 236.7), dacc = 0;
+    uint32_t dt = (uint32_t)((fm_ntsc ? 59.826 : FM_FIELD_HZ) * 65536.0 * 256.0 / FX_TICK_HZ), dacc = 0, carry = 0;
     int8_t *out = (int8_t *)buf;
     if (!fx_tables) {
         fx_build();
@@ -1014,6 +1105,8 @@ uint32_t fm_effect(const uint8_t *opl0, const struct fm_write *w, uint32_t n, in
             used |= (uint16_t)(1u << (r & 15));
         }
     }
+    for (c = 0; c < 9; ++c) channels = (uint16_t)(channels + (used >> c & 1));
+    osh = (uint8_t)FX_SHIFT(channels);
     for (c = 0; c < 256; ++c) opl[c] = opl0[c];
     for (c = 0; c < 18; ++c) {
         fop[c].rout = 0x1ffu << 8;
@@ -1028,6 +1121,8 @@ uint32_t fm_effect(const uint8_t *opl0, const struct fm_write *w, uint32_t n, in
     for (tick = 0; tick <= last + FX_TAIL_TICKS && k < max; ++tick) {
         uint32_t m_n, s;
         int audible = 0;
+        uint32_t s0 = tick * 512u / 3u, s1 = (tick * 512u + 256u) / 3u, sn = (tick + 1) * 512u / 3u;  /* chip samples */
+        fx_eg(fop, opl, used, carry);   /* the last tick's second half, before its writes */
         for (; i < n && w[i].tick == tick; ++i) {
             uint8_t r = w[i].reg, v = w[i].value;
             if (r >= 0xb0 && r <= 0xb8) {
@@ -1047,31 +1142,55 @@ uint32_t fm_effect(const uint8_t *opl0, const struct fm_write *w, uint32_t n, in
         frac %= FX_TICK_DEN;
         if (m_n > max - k) m_n = max - k;
         dacc += dt;
-        uint32_t step = dacc >> 16;
+        /* the envelope at the tick's middle: half the tick now, the rest at the next */
+        fx_eg(fop, opl, used, (dacc >> 16) >> 1);
+        carry = (dacc >> 16) - ((dacc >> 16) >> 1);
         dacc &= 0xffff;
         for (s = 0; s < m_n; ++s) buf[k + s] = 0;
+        /* the chip's LFOs at the tick's middle, its timer from 0 at tick 0
+         * (Nuked's: tremolo a 210-step triangle every 64 chip samples, depth
+         * BD bit 7; vibrato 8 steps every 1024, depth BD bit 6) */
+        uint32_t timer = s1, tp = (timer >> 6) % 210u;
+        uint8_t trem = (uint8_t)((tp < 105 ? tp : 210 - tp) >> (opl[0xbd] & 0x80 ? 2 : 4));
+        uint8_t vibpos = (uint8_t)((timer >> 10) & 7), vibshift = opl[0xbd] & 0x40 ? 0 : 1;
         for (c = 0; c < 9; ++c) {
             if (!(used >> c & 1)) continue;
             uint8_t b0 = opl[0xb0 + c], block = (b0 >> 2) & 7, mo = op_off[c], co = (uint8_t)(mo + 3);
             uint16_t fnum = (uint16_t)(opl[0xa0 + c] | (b0 & 3) << 8);
-            uint8_t ksv = (uint8_t)(block << 1 | ((fnum >> 9) & 1));
             uint8_t ws = (opl[1] & 0x20) != 0, c0 = opl[0xc0 + c], cnt = c0 & 1;
             uint8_t wfm = ws ? opl[0xe0 + mo] & 3 : 0, wfc = ws ? opl[0xe0 + co] & 3 : 0;
-            uint16_t am, ac;
-            for (uint8_t k2 = 0; k2 < 2; ++k2) {
-                uint8_t off = (uint8_t)(mo + 3 * k2);
-                eg_advance(&fop[2 * c + k2], opl, off, (opl[0x20 + off] & 0x10) ? ksv : ksv >> 2, step);
+            uint8_t ksm = fx_ks(opl, (uint8_t)c, mo), ksc = fx_ks(opl, (uint8_t)c, co);
+            int16_t range = (int16_t)((fnum >> 7) & 7);    /* vibrato: Nuked's f_num offset */
+            if (!(vibpos & 3)) range = 0;
+            else if (vibpos & 1) range >>= 1;
+            range = (int16_t)(range >> vibshift);
+            if (vibpos & 4) range = (int16_t)-range;
+            uint32_t bm = (uint32_t)((fnum + (opl[0x20 + mo] & 0x40 ? range : 0)) << block) >> 1;
+            uint32_t bc = (uint32_t)((fnum + (opl[0x20 + co] & 0x40 ? range : 0)) << block) >> 1;
+            uint32_t im = 3 * (bm * mt[opl[0x20 + mo] & 15] >> 1), ic = 3 * (bc * mt[opl[0x20 + co] & 15] >> 1);
+            /* the tick in segments up to each slow step (output sample j is chip sample 3 (k + j)) */
+            uint32_t t = s0 >> 1, te = sn >> 1, pos = 0;
+            for (;;) {
+                uint8_t rm = fx_slow(&fop[2 * c], opl, mo, ksm), rc = fx_slow(&fop[2 * c + 1], opl, co, ksc);
+                uint32_t nm = rm ? fx_next(rm, t) : ~0u, nc = rc ? fx_next(rc, t) : ~0u, nx = nm < nc ? nm : nc;
+                uint32_t upto = nx >= te ? m_n : (2 * nx + 2 > 3 * k ? (2 * nx + 2 - 3 * k) / 3 : 0);
+                if (upto > m_n) upto = m_n;
+                if (upto > pos) {
+                    uint16_t am = (uint16_t)(op_att(&fop[2 * c], opl, mo, fnum, block) + (opl[0x20 + mo] & 0x80 ? trem : 0));
+                    uint16_t ac = (uint16_t)(op_att(&fop[2 * c + 1], opl, co, fnum, block) + (opl[0x20 + co] & 0x80 ? trem : 0));
+                    if (am > 0x1ff) am = 0x1ff;
+                    if (ac > 0x1ff) ac = 0x1ff;
+                    if (ac < silent || (cnt && am < silent)) {
+                        audible = 1;
+                        fx_channel_run(&ch[c], buf + k + pos, upto - pos, wfm, wfc, am, ac, im, ic, (c0 >> 1) & 7, cnt, osh);
+                    }
+                    pos = upto;
+                }
+                if (nx >= te) break;
+                if (nm == nx) fx_step(&fop[2 * c], opl, mo);
+                if (nc == nx) fx_step(&fop[2 * c + 1], opl, co);
+                t = nx + 1;
             }
-            am = op_att(&fop[2 * c], opl, mo, fnum, block);
-            ac = op_att(&fop[2 * c + 1], opl, co, fnum, block);
-            if (am > 0x1ff) am = 0x1ff;
-            if (ac > 0x1ff) ac = 0x1ff;
-            if (ac >= silent && (!cnt || am >= silent)) continue;
-            audible = 1;
-            uint32_t base = (uint32_t)(fnum << block) >> 1;
-            fx_channel_run(&ch[c], buf + k, m_n, wfm, wfc, am, ac,
-                           3 * (base * mt[opl[0x20 + mo] & 15] >> 1), 3 * (base * mt[opl[0x20 + co] & 15] >> 1),
-                           (c0 >> 1) & 7, cnt);
         }
         for (s = 0; s < m_n; ++s) {
             int32_t v = buf[k + s];
@@ -1084,7 +1203,7 @@ uint32_t fm_effect(const uint8_t *opl0, const struct fm_write *w, uint32_t n, in
             }
         }
         k += m_n;
-        for (silent = ATT_SILENT, p = peak; p < FM_EFFECT_FULL && silent < 0x1ff; p <<= 1) silent += 32;
+        for (silent = ATT_SILENT, p = peak << osh; p < FM_EFFECT_FULL && silent < 0x1ff; p <<= 1) silent += 32;
         if (audible || tick <= last) {
             len = k;
         } else {
@@ -1108,12 +1227,12 @@ uint32_t fm_effect(const uint8_t *opl0, const struct fm_write *w, uint32_t n, in
         int32_t scale = (int32_t)((127L << 16) / (int32_t)peak);
         uint32_t end = 0;
         for (k = 0; k < len; ++k) {
-            int32_t q = (buf[k] * scale) >> 16;
+            int32_t q = (buf[k] * scale + 0x8000) >> 16;   /* rounded: a floor biased a quiet tail half a step */
             out[k] = (int8_t)(q > 127 ? 127 : q < -128 ? -128 : q);
             if (q) end = k + 1;
         }
         len = end;
     }
-    *level = peak;
+    *level = peak << osh;
     return len;
 }

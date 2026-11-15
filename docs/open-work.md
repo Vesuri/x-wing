@@ -8,12 +8,18 @@ and the whole game (P6: host lockstep and the Amiga replay over every pinned mil
 gate 6) are in place, and P7's music plays on Paula (`make gates-audio`,
 `make test-amiga-audio`).
 
-1. P7: FM effects. Find how the game starts its effects through `ADLIB.IMS` (ids,
-   channels, priorities), then price the worst-case effect live on the 68030 model and
-   prerendered, Chip RAM included, for an owner decision. The owner leans to prerendered,
-   as Secret Weapons of the Luftwaffe's (2026-11-14): its `sfx.c` capture,
-   `fm_effect_run.s` and the effect half of `Audio.cpp` are the starting point.
-   Acceptance: the effects play through the decided route; its gates and plants pass.
+1. P7: FM effects, prerendered (owner decision 2026-11-15). The capture and the render
+   are in place ([translator design](translator-design.md#sound-d10)); left, from Secret
+   Weapons of the Luftwaffe's effect half of `Audio.cpp`:
+   - play: an observe-only hook at the driver's start counts each effect's starts; per
+     field, the driver's voice records (`DS:1ED2`, 9 × 62h: part, OPL channel; part
+     `+0`: player; player `+8`: sound id) mask its channels from the re-hoster, the
+     player's volume (`+0E`) sets Paula's, an early stop fades, and the two looping
+     effects (ids 31 and 32) stay live;
+   - a cache of the rendered effects keyed by their captures, and the production image
+     capturing (`rt_sfx_prerender_on`) with an Amiga smoke into flight.
+   Acceptance: in flight the effects play from Paula samples with their channels masked;
+   the play and cache checks and their plants pass on the host and the 68030 model.
 2. P1: the two milestones not yet reached ([DOS reference](dos-reference.md#not-yet-reached)).
    The rest of P1 is in place: `make dos-reference` passes 19 pinned milestones.
    Acceptance:

@@ -292,6 +292,9 @@ volatile ULONG amiga_ticks = 0, amiga_ticks_async = 0;
 static ULONG cia_tick(void)
 {
     ++amiga_ticks;
+    if (rt_sfx_capturing) {
+        return 0;               /* the effect capture holds the tick: game time pauses */
+    }
 #ifndef XWING_SYNC
     /* Production has no poll checks (Secret Weapons of the Luftwaffe's docs/irq-plan.md I8): ticks posted while
      * IRQ0 could not run go first, then this one. */
@@ -526,6 +529,22 @@ static void key_script_step(void)
     key_up = code;
     key_up_frame = amiga_frames + 5;
     key_up_reads = amiga_mouse_reads + (code >= SCRIPT_LMB ? 2 : 0);
+}
+
+/* Effect capture (runtime.h rt_sfx_*): every effect; the prerender follows
+ * in Audio (docs/translator-design.md Sound: effects). */
+__attribute__((aligned(4))) volatile uint32_t amiga_sfx_capture_fields;  /* the capture's fields (diagnostics) */
+int plat_sfx_wanted(uint8_t id)
+{
+    if (id == 4) {
+        amiga_sfx_capture_fields = amiga_frames;
+    }
+    return 1;
+}
+
+void plat_sfx_captured(void)
+{
+    amiga_sfx_capture_fields = amiga_frames - amiga_sfx_capture_fields;
 }
 
 void plat_service(void)

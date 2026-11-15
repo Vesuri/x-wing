@@ -241,6 +241,25 @@ extern uint8_t rt_opl_keyon[9];     /* per channel: key-on edges, wrapping (FM r
 extern uint16_t rt_deliver_cs, rt_deliver_ip;
 extern void *rt_deliver_code;
 
+/* Effect capture (sfx.c, docs/translator-design.md Sound: effects R1): at the
+ * return of FLIGHT's sound loader, with rt_sfx_prerender_on, each effect id's
+ * OPL writes in rt_sfx_capture[rt_sfx_first[id]..+rt_sfx_writes[id]), ticks of
+ * the music driver's 291.3 Hz timer from its start (0); rt_sfx_ticks[id] the
+ * tick its status read 0 (0: not within the capture's 8 s, a loop the game
+ * stops); rt_sfx_opl the driver's OPL shadow the captures start from. While
+ * rt_sfx_capturing, rt_out8's data writes go to rt_sfx_write, not rt_opl. */
+#define RT_SFX_IDS 48
+#define RT_SFX_WRITES 12288
+struct rt_sfx_write { uint16_t tick; uint8_t reg, value; };
+extern uint8_t rt_sfx_prerender_on;
+extern volatile uint8_t rt_sfx_capturing;
+extern struct rt_sfx_write rt_sfx_capture[RT_SFX_WRITES];
+extern uint16_t rt_sfx_first[RT_SFX_IDS], rt_sfx_writes[RT_SFX_IDS], rt_sfx_ticks[RT_SFX_IDS];
+extern uint8_t rt_sfx_opl[256];
+extern uint32_t rt_sfx_captures;    /* completed captures */
+void rt_sfx_write(uint32_t reg, uint32_t value);
+void rt_sfx_prerender(void);
+
 /* stop: report and halt, never resumes */
 void rt_stop(const char *what, uint32_t a, uint32_t b) __attribute__((noreturn));
 void rt_unsupported(const char *what, uint16_t vector, uint16_t cs, uint16_t ip) __attribute__((noreturn));

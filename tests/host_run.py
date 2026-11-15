@@ -324,7 +324,13 @@ class Host:
                                                 "plat_delete", "plat_seek",
                                                 "plat_calendar_date", "plat_file_stamp", "plat_close", "plat_dir_names", "plat_file_info", "plat_timer_rate", "plat_mouse", "plat_present", "plat_palette",
                                                 "plat_service", "plat_vga_status", "plat_log", "plat_console",
-                                                "plat_exit")}
+                                                "plat_sfx_wanted", "plat_sfx_captured", "plat_exit")}
+        # --sfx-capture: the effect captures (src/runtime/sfx.c), each with the
+        # guest RAM it started from; sfx_cap while one runs (out of the game's
+        # flow: no poll, service, OPL, IRQ or memory check sees it)
+        self.sfx_cap = False
+        self.sfx_plant = "on"
+        self.sfx_captures: list[dict] = []
         # VGA status replay: (service events, value, reads) runs of trace/retrace.csv
         self.retrace = list(retrace or [])
         self.retrace_i = self.retrace_used = 0
@@ -426,6 +432,8 @@ class Host:
 
         @U.CODE_CB
         def out8(h, addr, size, user):
+            if self.sfx_cap:
+                return
             port, v = self.r("d7") & 0xFFFF, self.r("d6") & 0xFF
             if port in (0x388, 0x389):
                 self.opl_ports.append((port, v))
@@ -454,6 +462,8 @@ class Host:
 
         @U.CODE_CB
         def irq_deliver(h, addr, size, user):
+            if self.sfx_cap:
+                return
             # The reference runs the IRQ0 handler on the interrupted stack: its
             # frame and its proved depth there (irq-footprint.csv stack row) are
             # dead below SS:SP; ours runs it on the private stack (I4).
@@ -485,6 +495,8 @@ class Host:
         # boundaries for the monitor's race check
         @U.CODE_CB
         def driver_request(h, addr, size, user):
+            if self.sfx_cap:
+                return
             if self.sabotage != "song-requests":
                 self.irq.request()
         e.hook_range(U.HOOK_CODE, driver_request, self.syms["AD_00000"], self.syms["AD_00000"])
@@ -507,6 +519,8 @@ class Host:
 
         @U.MEM_CB
         def write(h, kind, addr, size, value, user):
+            if self.sfx_cap:
+                return True
             self.irq.write(TOP - addr - size + 1, size)    # I3 (tests/irq_monitor.py)
             span = range(TOP - addr - size + 1, TOP - addr + 1)
             if self.dead_stored and not self.dead_stored.isdisjoint(span):
@@ -591,7 +605,7 @@ class Host:
         def store_hook(seen):
             @U.MEM_CB
             def hook(h, kind, addr, size, value, user):
-                if self.watching and self.code[0] <= self.r("pc") < self.code[1]:
+                if self.watching and not self.sfx_cap and self.code[0] <= self.r("pc") < self.code[1]:
                     lin = store_lin(addr, size)
                     if lin is not None:
                         seen(lin, size)
@@ -607,6 +621,8 @@ class Host:
 
         @U.MEM_CB
         def read(h, kind, addr, size, value, user):
+            if self.sfx_cap:
+                return True
             lin = TOP - addr - size + 1
             self.irq.read(lin, size)    # I3 (tests/irq_monitor.py)
             if (machine[lin] or machine[lin + size - 1]) and not self.in_service \
@@ -828,11 +844,46 @@ class Host:
             print(self.log[-1])
         elif n == "plat_console":
             self.console += self.mem(args[0], args[1])
+        elif n == "plat_sfx_wanted":
+            res = 1
+        elif n == "plat_sfx_captured":
+            if self.sfx_plant == "restore":     # a driver byte the restore missed
+                seg = int.from_bytes(self.mem(TOP - (8 * 4 + 3), 2), "big")   # IVT 08h
+                a = TOP - ((seg + 0x4D0) * 16 + 0x342)     # its OPL shadow of register 0,
+                self.e.write(a, bytes([self.mem(a, 1)[0] ^ 1]))  # which it never writes
+            self.sfx_captures.append(self.sfx_state())
         elif n == "plat_exit":
             self.exit = args[0]
             self.halted = True
             self.e.stop()
         self.e.reg_write(U.M68K["d0"], res & 0xFFFFFFFF)
+
+    def sfx_enable(self, plant: str = "on") -> None:
+        """Turn the effect capture on (rt_sfx_prerender_on) and mark its window."""
+        self.e.write(self.syms["rt_sfx_prerender_on"], b"\1")
+        self.sfx_plant = plant
+
+        @U.CODE_CB
+        def cap(h, addr, size, user):
+            self.sfx_cap = addr == self.syms["rt_hle_sfx_prerender"]
+
+        for n in ("rt_hle_sfx_prerender", "rt_hle_sfx_prerender_done"):
+            self.e.hook_range(U.HOOK_CODE, cap, self.syms[n], self.syms[n])
+
+    def sfx_state(self) -> dict:
+        """At plat_sfx_captured: the capture (runtime.h rt_sfx_*) and the guest RAM
+        (linear, restored to the hook's) with DS and ES."""
+        ids = 48
+        words = lambda n: struct.unpack(f">{ids}H", self.mem(self.syms[n], 2 * ids))
+        first, writes, ticks = words("rt_sfx_first"), words("rt_sfx_writes"), words("rt_sfx_ticks")
+        total = max((f + w for f, w in zip(first, writes)), default=0)
+        raw = self.mem(self.syms["rt_sfx_capture"], 4 * total)
+        cap = [struct.unpack_from(">HBB", raw, 4 * k) for k in range(total)]
+        ram = self.e.read(TOP - GUEST_BYTES + 1, GUEST_BYTES)[::-1]
+        return {"ids": {i: (ticks[i], cap[first[i]:first[i] + writes[i]])
+                        for i in range(ids) if writes[i] or ticks[i]},
+                "opl": self.mem(self.syms["rt_sfx_opl"], 256), "ram": ram,
+                "ds": self.state(1, 2), "es": self.state(5, 2)}
 
     def vga_status(self) -> int:
         """The reference's next 3DAh value, read in the same service interval."""
@@ -1017,7 +1068,7 @@ class Host:
                 self.e.stop()
 
         def replay(addr):
-            if self.irq_i == len(self.irqs):
+            if self.irq_i == len(self.irqs) or self.sfx_cap:
                 return
             n = len(self.services)
             if n != self.visit_n:  # executions of each poll point since the service event
@@ -1081,6 +1132,8 @@ class Host:
 
         @U.CODE_CB
         def executed(h, addr, size, user):
+            if self.sfx_cap:
+                return
             n = len(self.services)
             if n != self.visit_n:
                 self.visit_n, self.visits = n, {}
@@ -1093,6 +1146,9 @@ class Host:
         if rep is not None:
             @U.CODE_CB
             def rep_checkpoint(h, addr, size, user):
+                if self.sfx_cap:            # the capture's driver code: no interrupt cuts it
+                    self.e.write(self.r("a7") + 4, struct.pack(">I", 0))
+                    return
                 try:
                     sp = self.r("a7")
                     point, done = struct.unpack(">II", self.mem(sp + 4, 8))
@@ -1444,6 +1500,49 @@ def check_capture(tag, regs, state, ram, dac, ref_regs, ref, snap, h, exempt=Non
     return problems
 
 
+# --sfx-capture plants (each must fail the check; tests/host_run.py --sfx-capture NAME):
+# "restore" leaves a driver byte changed after the capture (the milestone's RAM and the
+# oracle from it differ); "tick", "value" and "end" alter one id's capture after it ran.
+SFX_SABOTAGE = ("restore", "tick", "value", "end")
+
+
+def sfx_problems(h: "Host", plant: str) -> list[str]:
+    """Every capture (src/runtime/sfx.c) against tools/sfx_capture.py: the original
+    driver under Unicorn x86 from the guest RAM it started from, the same ids."""
+    import sfx_capture as X
+    if not h.sfx_captures:
+        return ["effect capture: the sound loader's hook (FLIGHT.OVL+19977) was not reached"]
+    problems = []
+    for n, c in enumerate(h.sfx_captures):
+        seg = X.driver_segment(c["ram"])
+        ids = X.effect_ids(c["ram"], seg, c["ds"], c["es"])
+        if sorted(c["ids"]) != ids:
+            problems.append(f"effect capture {n}: ids {sorted(c['ids'])}, the sound table's {ids}")
+        got = dict(c["ids"])
+        if plant in ("tick", "value", "end") and ids and got.get(ids[0], (0, []))[1]:
+            end, w = got[ids[0]]
+            t, r, v = w[0]
+            w = [(t + (plant == "tick"), r, v ^ (plant == "value"))] + w[1:]
+            got[ids[0]] = (end + (plant == "end"), w)
+        opl0 = None
+        for sid in ids:
+            o, writes, end = X.capture(c["ram"], seg, c["ds"], c["es"], sid)
+            opl0 = opl0 or o
+            if sid not in got:
+                continue
+            ours_end, ours = got[sid]
+            if ours_end != end or ours != writes:
+                k = next((k for k, (a, b) in enumerate(zip(ours, writes)) if a != b), min(len(ours), len(writes)))
+                problems.append(f"effect capture {n} id {sid}: end tick {ours_end}, {len(ours)} writes; "
+                                f"the original's {end}, {len(writes)}; first difference at write {k}: "
+                                f"{ours[k] if k < len(ours) else '-'} vs {writes[k] if k < len(writes) else '-'}")
+        if opl0 is not None and bytes(c["opl"]) != opl0:
+            problems.append(f"effect capture {n}: start registers differ from the driver's shadow")
+        print(f"effect capture {n}: {len(got)} ids, {sum(len(w) for _, w in got.values())} writes, "
+              f"{sum(1 for e, _ in got.values() if not e)} without an end", flush=True)
+    return problems
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--milestone", default="m01-logo")
@@ -1461,6 +1560,9 @@ def main(argv=None) -> int:
     ap.add_argument("--exempt-out", type=Path, metavar="CSV",
                     help="write the service register bytes exempt as loaded from dead stack "
                          "(for tests/amiga_replay.py --exempt)")
+    ap.add_argument("--sfx-capture", nargs="?", const="on", choices=("on",) + SFX_SABOTAGE,
+                    help="turn the effect capture on (src/runtime/sfx.c) and compare every capture "
+                         "with tools/sfx_capture.py; a plant name must fail")
     ap.add_argument("--bypass", action="store_true",
                     help="the copy-protection hook replaces the screen: at "
                          f"{BYPASS_MILESTONE} lockstep to it, then the state at the return "
@@ -1508,9 +1610,12 @@ def main(argv=None) -> int:
     if args.screen and args.bypass:
         raise SystemExit("--screen and --bypass exclude each other")
     problems = check(args.milestone, args.timeout, args.amiga, None, bypass=args.bypass,
-                     screen=args.screen, exempt_out=args.exempt_out)
+                     screen=args.screen, exempt_out=args.exempt_out, sfx=args.sfx_capture)
     for p in problems:
         print(p)
+    if args.sfx_capture in SFX_SABOTAGE:
+        print(f"effect capture plant {args.sfx_capture}: {'caught' if problems else 'MISSED'}")
+        return 0 if problems else 1
     print(f"host run to {args.milestone}: {'ok' if not problems else 'FAIL'}")
     return 1 if problems else 0
 
@@ -1778,7 +1883,7 @@ BYPASS_LATE_SABOTAGE = {"answer": "the bypass leaves AX = 0, a wrong answer"}
 def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None,
           trace: Path | None = None, elf: Path | None = None, bypass: bool = False,
           bypass_sabotage: str | None = None, screen: bool = False,
-          exempt_out: Path | None = None) -> list[str]:
+          exempt_out: Path | None = None, sfx: str | None = None) -> list[str]:
     # past the screen (BYPASS_MILESTONE's return) the bypassed port runs in lockstep
     # with the bypassed reference (owner decision 2026-11-08): no state is exempt
     late = bypass and milestone != BYPASS_MILESTONE
@@ -1806,9 +1911,13 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     if int(summary.get("polls", "0"), 16) != fnv(POLLS.read_bytes()):
         problems.append("reference recorded with other poll points: rerun tools/reference.py --polls")
     h.services = ServiceLog(iter_services(trace), h.dead_reads)
+    if sfx:
+        h.sfx_enable(sfx)
     t0 = time.monotonic()
     h.run(script, timeout)
     print(f"host run: {time.monotonic() - t0:.0f} s")
+    if sfx:
+        problems += sfx_problems(h, sfx)
     if late:
         want_n = reference_bypass(trace)
         if h.bypass_hits != 1 or h.bypass_n != want_n:

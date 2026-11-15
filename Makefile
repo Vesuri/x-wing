@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio sound-reference sound-fm gates-audio
+.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture sound-reference sound-fm gates-audio
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -178,6 +178,16 @@ t-host-%:
 	$(call RUN,host-$*,python3 tests/host_run.py --milestone $*)
 test-host: host
 	@$(MAKE) -s -k -j$(JOBS) $(HOST_MILESTONES:%=t-host-%)
+# The effect capture (src/runtime/sfx.c) against tools/sfx_capture.py in the host
+# lockstep to m12, whose milestone still matches; and its plants.
+SFX_MILESTONE = m12-training-flight
+SFX_PLANTS    = restore tick value end
+SFX_TIMEOUT   = 10000
+t-sfx-capture: host
+	$(call RUN,sfx-capture,python3 tests/host_run.py --milestone $(SFX_MILESTONE) --bypass --sfx-capture --timeout $(SFX_TIMEOUT))
+t-sab-sfx-capture: host
+	$(call RUN,sabotage-sfx-capture,for s in $(SFX_PLANTS); do \
+		python3 tests/host_run.py --milestone $(SFX_MILESTONE) --bypass --sfx-capture $$s --timeout $(SFX_TIMEOUT) || exit 1; done)
 
 # The A1200 image (amiga/Makefile), copied from Secret Weapons of the Luftwaffe's.
 # test-amiga (gate 5): the diagnostic replay image (tests/amiga_replay.py) replays
@@ -235,6 +245,24 @@ sound-reference: build/tools/opl_render
 	python3 tools/reference.py --opl --jobs 2 --name sound $(FM_RUNS)
 	mkdir -p tmp/sound
 	for r in $(FM_RUNS); do build/tools/opl_render $(call FM_OPL,$$r) tmp/sound/$$r-fm.wav || exit 1; done
+build/tools/fm_effect_check: tools/fm_effect_check.cpp src/platform/amiga/fm_paula.c src/platform/amiga/fm_paula.h
+	@mkdir -p build/tools
+	cc -O2 -std=c99 -Wall -Wextra -Werror -c -o build/tools/fm_effect_paula.o src/platform/amiga/fm_paula.c
+	c++ -O2 -std=c++17 -Isrc/platform/amiga -I$(NUKED) -o $@ $< build/tools/fm_effect_paula.o $(NUKED)/nukedopl.cpp
+# Prerendered effects against Nuked OPL on the original driver's captures
+# (tools/sfx_capture.py from the m13 reference snapshot); WAVs in tmp/sound/sfx-wav.
+tmp/sound/sfx-writes.csv: tools/sfx_capture.py
+	python3 tools/sfx_capture.py
+t-fm-effect: build/tools/fm_effect_check tmp/sound/sfx-writes.csv
+	$(call RUN,fm-effect,mkdir -p tmp/sound/sfx-wav && build/tools/fm_effect_check tmp/sound/sfx-writes.csv tmp/sound/sfx-wav)
+t-sab-fm-effect: build/tools/fm_effect_check tmp/sound/sfx-writes.csv
+	$(call RUN,sabotage-fm-effect,mkdir -p tmp/test/sfx-wav && for s in pitch level end fade; do \
+		! build/tools/fm_effect_check tmp/sound/sfx-writes.csv tmp/test/sfx-wav --sabotage $$s || exit 1; done)
+# The prerender's assembly loop (fm_effect_run.s) on the 68020 core against the C loop.
+t-fm-effect-asm: tmp/sound/sfx-writes.csv
+	$(call RUN,fm-effect-asm,. amiga/env.sh && python3 tests/test_fm_effect_asm.py)
+t-sab-fm-effect-asm: tmp/sound/sfx-writes.csv
+	$(call RUN,sabotage-fm-effect-asm,. amiga/env.sh && python3 tests/test_fm_effect_asm.py --sabotage)
 sound-fm: build/tools/fm_check
 	mkdir -p tmp/sound
 	-for r in $(FM_RUNS); do build/tools/fm_check $(call FM_OPL,$$r) tmp/sound/$$r-paula.wav; done
@@ -251,4 +279,5 @@ t-sab-fm-%:
 	$(call RUN,sabotage-fm-$*,python3 tests/test_fm_$*.py --sabotage)
 # Isolated audio changes: the sound checks and their plants.
 gates-audio:
-	@$(MAKE) -s -k -j$(JOBS) t-fm t-sab-fm $(FM_UNITS:%=t-fm-%) $(FM_UNITS:%=t-sab-fm-%)
+	@$(MAKE) -s -k -j$(JOBS) t-fm t-sab-fm $(FM_UNITS:%=t-fm-%) $(FM_UNITS:%=t-sab-fm-%) \
+		t-fm-effect t-sab-fm-effect t-fm-effect-asm t-sab-fm-effect-asm

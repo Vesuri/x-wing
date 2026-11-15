@@ -40,6 +40,10 @@ G_DS	equ	1
 	xdef	rt_stop_unknown
 	xdef	rt_hle_copy_protection
 	xref	rt_hle_copy_protection_c
+	xdef	rt_hle_sfx_prerender,rt_hle_sfx_prerender_done
+	xref	rt_sfx_prerender
+	xref	rt_sfx_capturing
+	xref	rt_sfx_write
 	xdef	rt_run_guest
 	xdef	rt_vram_mark
 	xdef	rt_vdrv_return
@@ -346,6 +350,42 @@ rt_hle_copy_protection:
 	moveq	#1,d7
 	rts
 
+; HLE sfx_prerender (annotations/hle.csv, sfx.c): the return of FLIGHT's
+; sound loader. The effect capture runs guest code: the 68k registers, the
+; state block and rt_r are saved around it and restored (copied from Secret
+; Weapons of the Luftwaffe's). Observe only: EQ.
+rt_hle_sfx_prerender:
+	movem.l	d0-d7/a0-a6,-(a7)
+	bsr	save_regs
+	lea	-32(a7),a7
+	movea.l	a7,a0
+	move.l	1(a6),(a0)+
+	move.l	5(a6),(a0)+
+	move.l	9(a6),(a0)+
+	move.l	13(a6),(a0)+
+	lea	rt_r,a1
+	move.l	(a1)+,(a0)+
+	move.l	(a1)+,(a0)+
+	move.l	(a1)+,(a0)+
+	move.l	(a1)+,(a0)+
+	jsr	rt_sfx_prerender
+	movea.l	rt_guest,a6
+	movea.l	a7,a0
+	move.l	(a0)+,1(a6)
+	move.l	(a0)+,5(a6)
+	move.l	(a0)+,9(a6)
+	move.l	(a0)+,13(a6)
+	lea	rt_r,a1
+	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+	lea	32(a7),a7
+	movem.l	(a7)+,d0-d7/a0-a6
+rt_hle_sfx_prerender_done:		; tests/host_run.py: the capture's window ends
+	cmp.w	d7,d7
+	rts
+
 rt_halt:
 	bsr	save_regs
 	move.l	d7,-(a7)
@@ -409,6 +449,8 @@ rt_out8:
 .opl_handler:
 	rts
 .opl_data:
+	tst.b	rt_sfx_capturing
+	bne	opl_capture
 	tst.b	rt_irq0_running
 	bne.s	.opl_pair_done
 	sf	rt_opl_pair
@@ -434,6 +476,18 @@ rt_out8:
 .port:	movem.l	d0-d1/a1,-(a7)
 	pea	8.w
 	bra.s	port_out
+; The effect capture (sfx.c) runs: the data write goes to rt_sfx_write.
+opl_capture:
+	movem.l	d0-d1/a0-a1,-(a7)
+	moveq	#0,d0
+	move.b	d6,d0
+	move.l	d0,-(a7)
+	move.b	rt_opl_index,d0
+	move.l	d0,-(a7)
+	jsr	rt_sfx_write
+	addq.l	#8,a7
+	movem.l	(a7)+,d0-d1/a0-a1
+	rts
 rt_out16:
 	movem.l	d0-d1/a1,-(a7)
 	pea	16.w

@@ -26,6 +26,8 @@
 	xdef	plat_log
 	xdef	plat_console
 	xdef	plat_exit
+	xdef	plat_sfx_wanted
+	xdef	plat_sfx_captured
 	xdef	host_stubs
 	xdef	host_stubs_end
 	xref	host_main
@@ -78,6 +80,10 @@ plat_vga_status:	nop
 plat_log:	nop
 	rts
 plat_console:	nop
+	rts
+plat_sfx_wanted:	nop
+	rts
+plat_sfx_captured:	nop
 	rts
 plat_exit:	nop
 	illegal

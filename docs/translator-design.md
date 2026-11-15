@@ -663,3 +663,40 @@ its additive cases at 0 dB carrier keep their samples. On the Amiga, `make test-
 image on the 68030 model to m01's label and 500 fields past it, and requires OPL key-ons,
 re-hoster renders and Paula restarts (MEASURED: 16, 91, 8; at the label itself, 107
 fields after the start, all 0).
+
+Effects are prerendered (owner decision 2026-11-15), as Secret Weapons of the Luftwaffe's
+(its `docs/sound-plan.md`). In place:
+- Capture (`src/runtime/sfx.c`, HLE `sfx_prerender`, observe only): at the return of
+  FLIGHT's sound loader (`FLIGHT.OVL+19977`, AX the effects registered from id 4), the
+  runtime saves the driver's 7760h bytes, holds the tick, and per effect runs the
+  driver's own commands and timer handler as `tools/sfx_capture.py` describes. Its
+  writes go to `rt_sfx_capture` (`rt_out8` while `rt_sfx_capturing`), not the chip;
+  then the driver's memory and the OPL index are restored. MEASURED (the m13 reference
+  snapshot under Unicorn): 34 effects, ids 4–37, from 13 to 696 writes; 32 end within
+  0.07–2.8 s, ids 31 and 32 loop until stopped.
+- Render (`fm_effect`, `src/platform/amiga/fm_paula.c`; its inner loop
+  `fm_effect_run.s` on the Amiga): changed from Secret Weapons of the Luftwaffe's for
+  `ADLIB.IMS`: writes at its 291.3 Hz tick (512/9 samples); each channel's output shifted
+  so nine fit the 16-bit mix; the envelope at each tick's middle, slow rates (below
+  12) stepped at Nuked's envelope-timer values with the render split at each step;
+  the modulator's feedback at the chip's rate; the chip's tremolo and vibrato (11
+  effects set AM and VIB); and the 8-bit scaling rounded (its floor put a quiet tail
+  half a step low). Each fixed a miss of the check below; MEASURED before them, 29 of
+  the 32 one-shot effects passed.
+- Checks: `make t-fm-effect` renders each one-shot effect against Nuked OPL from the
+  same registers (`tools/fm_effect_check.cpp`, Secret Weapons of the Luftwaffe's
+  thresholds: level within 3 dB on 90% of 20 ms windows and none past 6 dB, pitch within
+  10 cents on 99% of tonal windows, the end and fade); MEASURED: all 32 pass, 548,551
+  bytes (33.1 s at 16,572 Hz). `t-sab-fm-effect` plants pitch, level, end and fade
+  faults. `make t-fm-effect-asm` runs `fm_effect` with the assembly loop on the Unicorn
+  68020 core against the C loop on every capture and 12 synthetic variants (feedback,
+  connection, shift): every byte equal; its plants alter the phase mask, the feedback,
+  its history, the shift and the chip-rate steps. `make t-sfx-capture` runs the host
+  lockstep to m12 with the capture on and compares every capture with
+  `tools/sfx_capture.py` run from the guest RAM at the hook, the harness's own replays
+  (interrupts, polls, REP slices, ports, EMS stores) suspended while the capture runs;
+  its plants alter a tick, a value and an end, and leave a driver byte unrestored.
+  MEASURED: 34 ids, 6,394 writes, ids 31 and 32 without an end, all equal; m12 still
+  matches (40,066,706 services, 31,703 interrupts and 20,651 OPL writes equal).
+
+Open: the play layer and the cache ([open work](open-work.md)).

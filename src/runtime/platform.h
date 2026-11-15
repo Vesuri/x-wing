@@ -55,6 +55,10 @@ void plat_palette(const uint8_t *dac);
 /* VGA input status 1 (port 3DAh) now: bit 3 vertical retrace, bit 0 display
  * disabled (the host replays the reference's reads, trace/retrace.csv). */
 uint8_t plat_vga_status(void);
+/* Effect capture (runtime.h rt_sfx_*): whether to capture effect id; the
+ * capture is complete (called once after the last id, the guest state restored). */
+int plat_sfx_wanted(uint8_t id);
+void plat_sfx_captured(void);
 /* The platform's own work from the main program at a vertical blank. */
 void plat_service(void);
 void plat_log(const char *line);
