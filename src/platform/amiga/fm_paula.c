@@ -752,7 +752,7 @@ void fm_field(const uint8_t *opl, const uint8_t *keyon, uint16_t mute_mask, stru
     int16_t score[9];
     uint8_t c, i, j, newkey[9], reserved = 0;
     int8_t choice[FM_VOICES], assigned[FM_VOICES];
-    uint16_t taken = mute_mask;
+    uint16_t taken = mute_mask & 0x1ff;
     uint16_t available = 0, held = 0;
     ++stamp;
     budget = RENDER_BUDGET;
@@ -814,7 +814,7 @@ void fm_field(const uint8_t *opl, const uint8_t *keyon, uint16_t mute_mask, stru
     }
     for (i = 0; i < FM_VOICES; ++i) {
         int8_t ch = voice_ch[i];
-        if (i < 3 && (mute_mask & (7u << (3 * i)))) reserved |= (uint8_t)(1u << i);
+        if (mute_mask & FM_RESERVE(i)) reserved |= (uint8_t)(1u << i);
         assigned[i] = -1;
         if (ch >= 0 && score[(uint8_t)ch] != 0x7fff && !(reserved >> i & 1)) {
             assigned[i] = ch;
@@ -831,11 +831,11 @@ void fm_field(const uint8_t *opl, const uint8_t *keyon, uint16_t mute_mask, stru
         if (ch >= 0 && score[(uint8_t)ch] != 0x7fff) score[(uint8_t)ch] -= STICKY;
     }
     /* Choose the set before assigning voices: an extra note must not steal
-     * another group's only representative. A sample owns its physical slot. */
+     * another group's only representative. A reserved voice is a sample's. */
     for (i = 0; i < FM_VOICES; ++i) {
         choice[i] = assigned[i] = -1;
         if (i < 3) {
-            if (mute_mask & (7u << (3 * i))) {
+            if (mute_mask & FM_RESERVE(i)) {
                 reserved |= (uint8_t)(1u << i);
             } else {
                 choice[i] = choose_channel(score, (uint8_t)(3 * i), (uint8_t)(3 * i + 2));

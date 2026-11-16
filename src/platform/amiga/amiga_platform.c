@@ -531,20 +531,24 @@ static void key_script_step(void)
     key_up_reads = amiga_mouse_reads + (code >= SCRIPT_LMB ? 2 : 0);
 }
 
-/* Effect capture (runtime.h rt_sfx_*): every effect; the prerender follows
- * in Audio (docs/translator-design.md Sound: effects). */
+/* Effect capture (runtime.h rt_sfx_*): every effect when Audio has its
+ * Chip; the prerender follows in Audio (docs/translator-design.md Sound:
+ * effects). */
+extern int amiga_audio_effect_wanted(uint8_t id);
+extern void amiga_audio_effects(void);
 __attribute__((aligned(4))) volatile uint32_t amiga_sfx_capture_fields;  /* the capture's fields (diagnostics) */
 int plat_sfx_wanted(uint8_t id)
 {
     if (id == 4) {
         amiga_sfx_capture_fields = amiga_frames;
     }
-    return 1;
+    return amiga_audio_effect_wanted(id);
 }
 
 void plat_sfx_captured(void)
 {
     amiga_sfx_capture_fields = amiga_frames - amiga_sfx_capture_fields;
+    amiga_audio_effects();
 }
 
 void plat_service(void)
@@ -687,6 +691,7 @@ int amiga_guest_open(void)
         return 0;
     }
     key_script_check();
+    rt_sfx_prerender_on = 1;    /* effects prerendered at FLIGHT's sound loader (runtime.h) */
 #ifndef XWING_SYNC
     rt_mickeys_y = 1;       /* vertical counts 1:1, as a real PC mouse (runtime.h) */
 #endif

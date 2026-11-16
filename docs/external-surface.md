@@ -139,6 +139,16 @@ MEASURED under Unicorn by `tools/sfx_capture.py`):
 - Requests queued at interrupt level (64 entries of 16 bytes at `DS:0EC0`, read index
   `DS:0EBE`, write index `DS:12C0`) run from the tick; one is the flight callback.
 
+The effect player reads two more (DERIVED from the listing, MEASURED under Unicorn):
+- 8 players of 12h bytes at `DS:06EA` (`+00E8E`): `+6` 1 while it plays (`+01215`),
+  `+8` its sound id, `+0C` priority, `+0D` and `+0E` volume (command 102h; 0–127),
+  `+0F` pan. A start of an id already playing takes another player.
+- 9 voices of 62h bytes at `DS:1ED2`: `+0` its part (0 free), whose word 0 is its
+  player; `+7` its OPL channel.
+- A player's volume raises its carriers' total level at each note: about 14 units
+  (10.5 dB) for each halving, in steps of 4 (`tools/sfx_capture.py --volume`). The game
+  sets it after each start, from the effect's distance (`FLIGHT.OVL+19BF6`, `+19DC6`).
+
 ## VGA
 
 - Mode 13h, chained: no sequencer, graphics-controller or CRTC writes, so no unchained mode

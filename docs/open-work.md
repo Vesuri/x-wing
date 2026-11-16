@@ -5,22 +5,10 @@ the reference loop (P1, but for the two milestones below), the static and live m
 x86 semantics (P3: `make test-x86`), the 68020 backend (P4: `make test-m68k`) and the
 first vertical slice (P5: `make test-amiga`, the Amiga replay and the host lockstep to m01)
 and the whole game (P6: host lockstep and the Amiga replay over every pinned milestone,
-gate 6) are in place, and P7's music plays on Paula (`make gates-audio`,
-`make test-amiga-audio`).
+gate 6) are in place, and P7's music and prerendered effects play on Paula (`make gates-audio`,
+`make test-amiga-audio`, `make t-amiga-sfx`).
 
-1. P7: FM effects, prerendered (owner decision 2026-11-15). The capture and the render
-   are in place ([translator design](translator-design.md#sound-d10)); left, from Secret
-   Weapons of the Luftwaffe's effect half of `Audio.cpp`:
-   - play: an observe-only hook at the driver's start counts each effect's starts; per
-     field, the driver's voice records (`DS:1ED2`, 9 × 62h: part, OPL channel; part
-     `+0`: player; player `+8`: sound id) mask its channels from the re-hoster, the
-     player's volume (`+0E`) sets Paula's, an early stop fades, and the two looping
-     effects (ids 31 and 32) stay live;
-   - a cache of the rendered effects keyed by their captures, and the production image
-     capturing (`rt_sfx_prerender_on`) with an Amiga smoke into flight.
-   Acceptance: in flight the effects play from Paula samples with their channels masked;
-   the play and cache checks and their plants pass on the host and the 68030 model.
-2. Host lockstep resumed from a verified milestone, so a check in flight need not replay
+1. Host lockstep resumed from a verified milestone, so a check in flight need not replay
    the menus from boot (MEASURED: to m12, 4,286–4,802 s; the flight's sound loader at 4,619 s, after 39,962,872
    of the run's 40,066,706 services).
    The resume must work on a rebuilt host image, since most changes rebuild it:
@@ -43,19 +31,19 @@ gate 6) are in place, and P7's music plays on Paula (`make gates-audio`,
    the boot run does, in minutes; a planted omission from the saved state (an EMS
    mapping, a file position) fails the resumed run; a change to code that ran before
    the save is refused a resume.
-3. P1: the two milestones not yet reached ([DOS reference](dos-reference.md#not-yet-reached)).
+2. P1: the two milestones not yet reached ([DOS reference](dos-reference.md#not-yet-reached)).
    The rest of P1 is in place: `make dos-reference` passes 19 pinned milestones.
    Acceptance:
    - A film-room replay: a flight is ended and its film played back in the film room.
    - A Star Destroyer battle, or the heaviest combat scene a reachable pilot state allows,
      chosen by a measured cost. Instructions per frame rank scenes only if the flight does
      not pace its frames, which is not yet known.
-4. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
+3. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
    `--seed 7` a walk case's x86 store faults at an unmapped address and the oracle then
    reads its recorded writes back, raising UC_ERR_READ_UNMAPPED (the same at P4's commit).
    Acceptance: `tests/m68k_blocks.py` completes for seeds 1–8; a faulting store is
    compared as an exception, not a crash.
-5. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh reference reach named milestones and
+4. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh reference reach named milestones and
    map its 68k CODE.
    Acceptance: a bounded run reaches a positively identified game state by guest state,
    writes a framebuffer read from video memory and a trap log, and reproduces their pinned

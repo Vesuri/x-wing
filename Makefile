@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture sound-reference sound-fm gates-audio
+.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx sound-reference sound-fm gates-audio
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -31,6 +31,7 @@ help:
 	@echo 'make test-amiga-audio       the production image plays music past the m01 label (key-ons, renders, restarts)'
 	@echo 'make sound-reference        milestone runs with the OPL log; Nuked OPL WAVs in tmp/sound'
 	@echo 'make sound-fm               the FM re-hoster's Paula WAVs beside them'
+	@echo 'make t-amiga-sfx            the effects in flight: the m12 Amiga replay with capture and player (no host check)'
 	@echo 'make gates-audio            every sound check and its sabotage'
 
 verify-input:
@@ -276,7 +277,16 @@ t-fm-%:
 	$(call RUN,fm-$*,python3 tests/test_fm_$*.py)
 t-sab-fm-%:
 	$(call RUN,sabotage-fm-$*,python3 tests/test_fm_$*.py --sabotage)
+# The effect player (src/platform/amiga/fx_play.c) on synthetic driver states.
+t-fx-play:
+	$(call RUN,fx-play,python3 tests/test_fx_play.py)
+t-sab-fx-play:
+	$(call RUN,sabotage-fx-play,python3 tests/test_fx_play.py --sabotage)
+# The effects in flight on the 68030 model: the Amiga replay to m12 with the capture,
+# the prerender and the player running; no host check (tests/amiga_replay.py --sfx).
+t-amiga-sfx: host
+	$(ENV) AMIGA_CPU=$(AMIGA_CPU) python3 tests/amiga_replay.py --milestone $(SFX_MILESTONE) --screen --sfx
 # Isolated audio changes: the sound checks and their plants.
 gates-audio:
 	@$(MAKE) -s -k -j$(JOBS) t-fm t-sab-fm $(FM_UNITS:%=t-fm-%) $(FM_UNITS:%=t-sab-fm-%) \
-		t-fm-effect t-sab-fm-effect t-fm-effect-asm t-sab-fm-effect-asm
+		t-fm-effect t-sab-fm-effect t-fm-effect-asm t-sab-fm-effect-asm t-fx-play t-sab-fx-play

@@ -27,8 +27,11 @@ extern uint8_t fm_ntsc;
 /* Loop storage (Chip RAM on the Amiga): `bytes` a multiple of 4 pages. */
 void fm_init(int8_t *pool, uint32_t bytes);
 /* One field: `opl` the 256 register bytes, `keyon` per channel a count of
- * key-on edges (B0-B8 bit 5 rising), wrapping. mute_mask excludes OPL
- * channels owned by samples from every voice; envelopes still advance. Fills `voice[FM_VOICES]`. */
+ * key-on edges (B0-B8 bit 5 rising), wrapping. mute_mask: bits 0-8 exclude
+ * OPL channels owned by samples from every voice (envelopes still advance),
+ * FM_RESERVE(v) leaves Paula voice v to a sample (voice[v] silent). Fills
+ * `voice[FM_VOICES]`. */
+#define FM_RESERVE(v) (1u << (12 + (v)))
 void fm_field(const uint8_t *opl, const uint8_t *keyon, uint16_t mute_mask, struct fm_voice *voice);
 /* Prerendered effect (docs/sound-plan.md R2), after fm_init: OPL data writes
  * at the driver's ticks (1193182/4096 Hz; tick 0 the start), the same layout as the

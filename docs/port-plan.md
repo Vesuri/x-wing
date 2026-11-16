@@ -316,6 +316,10 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
   ([translator design](translator-design.md#sound-d10)). `check_opl` holds the OPL
   writes to the reference in every host run; `make gates-audio` passes on m01, m02, m06
   and m13; `make test-amiga-audio` plays the music on the 68030 model.
+- Effects, in place (prerendered, owner decision 2026-11-15): the capture (`sfx.c`), the
+  render (`fm_effect`, `fm_effect_run.s`), and the player (`fx_play.c`, from SWOTL's
+  `tfh_paula.c`) with its cache, played from the driver's players; 549,044 Chip bytes
+  for the 32 one-shot effects (MEASURED, `make t-amiga-sfx`).
 
 ### P8. Speed (gate 7)
 

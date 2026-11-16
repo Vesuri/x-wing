@@ -18,6 +18,12 @@ input: the start registers ("# opl", the same for every id), "# loop ID" for eac
 never ends, then tick,id,reg,value rows.
 
     tools/sfx_capture.py [--snapshot DIR] [ID ...]
+    tools/sfx_capture.py --volume [--snapshot DIR]
+
+--volume measures how a player's volume (command 102h) lowers an effect: per volume,
+the most a carrier's total level rises over the first ticks against volume 127, on
+an effect whose carriers start near 0 dB, and the error of src/platform/amiga/fx_play.c's
+gain table against it (0.75 dB a level unit).
 
 tests/host_run.py --sfx-capture runs it (capture()) from the port's guest RAM at the
 capture's hook and compares.
@@ -209,12 +215,60 @@ def effect_ids(ram: bytes, seg: int, ds: int, es: int) -> list[int]:
     return [i for i in Driver(ram, seg, ds, es).sound_table() if i >= FIRST_EFFECT]
 
 
+VOLUME = 0x102                      # a player parameter: its volume (FLIGHT.OVL+18B04)
+CARRIER = {3, 4, 5, 11, 12, 13, 19, 20, 21}     # operator offsets of the channels' carriers
+
+
+def carrier_levels(ram: bytes, seg: int, ds: int, es: int, sid: int, vol: int | None,
+                   ticks: int = 60) -> list[tuple[int, int]]:
+    """(register, total level) of each carrier level write over `ticks` from the start."""
+    d = Driver(ram, seg, ds, es)
+    d.e.write((seg + DATA_PARA) * 16 + QUEUE_HEAD, struct.pack("<H", d.word(QUEUE_TAIL)))
+    d.command(STOP_ALL)
+    d.writes.clear()
+    d.command(START, sid)
+    d.command(GROUP, sid, 1)
+    if vol is not None:
+        d.command(VOLUME, sid, vol)
+    for t in range(ticks):
+        d.tick_n = t
+        d.tick()
+    return [(r, v & 63) for _, r, v in d.writes if 0x40 <= r < 0x56 and r - 0x40 in CARRIER]
+
+
+def volume_curve(ram: bytes, seg: int, ds: int, es: int) -> int:
+    import math
+    sys.path.insert(0, str(REPO / "tests"))
+    from test_fx_play import gain   # the C table's formula, checked against the C by that test
+    ids = effect_ids(ram, seg, ds, es)
+    lowest = {i: min((v for _, v in carrier_levels(ram, seg, ds, es, i, None, 8)), default=63) for i in ids}
+    sid = min(ids, key=lambda i: lowest[i])
+    base = carrier_levels(ram, seg, ds, es, sid, None)
+    print(f"effect {sid}: carriers from level {lowest[sid]}")
+    worst = 0.0
+    for vol in range(1, 128):
+        got = carrier_levels(ram, seg, ds, es, sid, vol)
+        rise = max((v - b for (r, v), (rb, b) in zip(got, base) if r == rb), default=0)
+        if len(got) != len(base):       # a level the shadow already held is not rewritten
+            continue
+        g = gain(vol)
+        err = -20 * math.log10(max(g, 0.5) / 256) - 0.75 * rise
+        if vol >= 16:
+            worst = max(worst, abs(err))
+        print(f"volume {vol:3}: level +{rise:2} ({0.75 * rise:5.2f} dB), table {g:3}/256, error {err:+5.2f} dB")
+    print(f"largest error for volume 16 up: {worst:.2f} dB")
+    return 0 if worst <= 1.5 else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("ids", nargs="*", type=int)
     ap.add_argument("--snapshot")
+    ap.add_argument("--volume", action="store_true")
     args = ap.parse_args()
     ram, seg, ds, es = snapshot_image(find_snapshot(args.snapshot))
+    if args.volume:
+        return volume_curve(ram, seg, ds, es)
     ids = args.ids or effect_ids(ram, seg, ds, es)
     (OUT / "sfx").mkdir(parents=True, exist_ok=True)
     rows, start, log = [], None, []

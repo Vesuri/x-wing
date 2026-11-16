@@ -162,6 +162,9 @@ static void executed(uint32_t point)
 int32_t replay_point(uint32_t point)
 {
     if (point >= REPLAY_POINTS) fail("replay point", point, 0);
+    /* The effect capture (sfx.c) runs the music driver out of the game's
+     * time, as tests/host_run.py: no visit, step or interrupt. */
+    if (rt_sfx_capturing) return 0;
     if (release_pending) {
         int target = replay_steps < REPLAY_STEPS && point == replay_script[replay_steps].point;
         if (replay_services != release_interval) {
@@ -258,6 +261,7 @@ uint32_t replay_next(uint32_t group)
  * output. A restart re-enters the existing diagnostic poll at the same IP. */
 uint32_t replay_rep(uint32_t point, uint32_t done, const uint32_t *r)
 {
+    if (rt_sfx_capturing) return 0;     /* the effect capture: no slice */
 #if REPLAY_REPS
     if (replay_rep_index >= REPLAY_REPS) fail("replay REP exhausted", point, done);
     if (!rep_cursor_started) {

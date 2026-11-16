@@ -185,7 +185,7 @@ def build(out, screen=False):
     return work
 
 
-def run(name, out, trace, work, late=False, screen=False, timeout=TIMEOUT):
+def run(name, out, trace, work, late=False, screen=False, timeout=TIMEOUT, sfx=False):
     capture = out / 'capture'
     capture.mkdir(exist_ok=True)
     template = (ROOT / 'amiga/milestone.gdb.in').read_text()
@@ -205,6 +205,8 @@ def run(name, out, trace, work, late=False, screen=False, timeout=TIMEOUT):
         'rep_record.service, rep_record.hits, rep_record.point, rep_record.cx, rep_record.end_cx, '
         'rep_record.restart, rep_record.repeat, replay_rep_offset\n'
         '  printf "XWING_REPLAY_VISITS %u epoch=%u\\n", visits[*(unsigned *)($sp+8)], epochs[*(unsigned *)($sp+8)]\n'))
+    if sfx:
+        check += '\n' + SFX_REPORT.replace('@OUT@', os.path.relpath(capture, ROOT / 'amiga'))
     template = template.replace('set $bm = &amiga_bitmap', check + '\nset $bm = &amiga_bitmap')
     (capture / 'fixture.gdb').write_text(template)
     with socket.socket() as listener:
@@ -244,11 +246,82 @@ def run(name, out, trace, work, late=False, screen=False, timeout=TIMEOUT):
     regs = [line.removeprefix('XWING_REGS ') for line in lines if line.startswith('XWING_REGS ')]
     assert len(regs) == 1, regs
     (capture / 'regs.txt').write_text(regs[0])
+    if sfx:
+        problems = sfx_problems(capture, lines)
+        if problems:
+            raise SystemExit('\n'.join(problems))
+        print(f'Amiga diagnostic replay {name}: the reference\'s service history, interrupts and REP '
+              f'slices consumed with the effect capture and player running; every start a play, '
+              f'every effect playing at the end started and its channels muted', flush=True)
+        return
     problems = H.check(name, timeout, capture, None, trace=trace, bypass=late, screen=screen)
     if problems:
         raise SystemExit('\n'.join(problems))
     print(f'Amiga diagnostic replay {name}: registers, state, RAM, DAC, shown pixels and '
           f'service history match DOSBox-X', flush=True)
+
+
+# The effect smoke (--sfx, make t-amiga-sfx): at the replay's end the effect
+# capture's and player's state (runtime.h rt_sfx_*, fx_play.h, Audio.cpp).
+SFX_REPORT = r"""printf "XWING_SFX captures=%u capture_fields=%u fields=%u bytes=%u cached=%u started=%u mask=%u\n", rt_sfx_captures, amiga_sfx_capture_fields, amiga_audio_effect_fields, amiga_audio_effect_bytes, amiga_audio_effect_cached, fx_started, fx_mask
+dump binary memory @OUT@/sfx-starts.bin &rt_sfx_starts[0] &rt_sfx_starts[48]
+dump binary memory @OUT@/sfx-ticks.bin &rt_sfx_ticks[0] &rt_sfx_ticks[48]
+dump binary memory @OUT@/sfx-writes.bin &rt_sfx_writes[0] &rt_sfx_writes[48]"""
+DRV_DATA, DRV_PLAYERS, DRV_VOICES = 0x4D0, 0x6EA, 0x1ED2    # runtime sfx.c
+
+
+def sfx_problems(capture, lines):
+    """The capture ran and rendered; every start the driver took of an effect
+    with a sample became a play; each driver player playing an effect at the
+    end (guest RAM, the driver's players and voices as sfx.c reads them) has a
+    counted start, and one with a sample its OPL channels muted. Whether its
+    play still holds a Paula voice is not checked: the replay runs the driver
+    on the reference's game time, here slower than the fields the sample
+    plays in."""
+    report = [x for x in lines if x.startswith('XWING_SFX ')]
+    if len(report) != 1:
+        return ['no XWING_SFX report']
+    print(report[0], flush=True)
+    f = dict(kv.split('=') for kv in report[0].split()[1:])
+    f = {k: int(v) for k, v in f.items()}
+    ram = (capture / 'ram.bin').read_bytes()
+    b = lambda a: ram[0xFFFFF - a]
+    w = lambda a: b(a) | b(a + 1) << 8
+    starts = (capture / 'sfx-starts.bin').read_bytes()
+    ticks = struct.unpack('>48H', (capture / 'sfx-ticks.bin').read_bytes())
+    writes = struct.unpack('>48H', (capture / 'sfx-writes.bin').read_bytes())
+    problems = []
+    if f['captures'] < 1 or not f['bytes']:
+        return [f'no capture or no samples: {f}']
+    ds = (w(8 * 4 + 2) + DRV_DATA) * 16
+    owner = {}
+    for v in range(9):
+        part = w(ds + DRV_VOICES + 0x62 * v)
+        if part:
+            k, r = divmod(w(ds + part) - DRV_PLAYERS, 0x12)
+            if not r and 0 <= k < 8:
+                owner.setdefault(k, set()).add(b(ds + DRV_VOICES + 0x62 * v + 7))
+    seen = 0
+    for k in range(8):
+        at = ds + DRV_PLAYERS + 0x12 * k
+        sid = w(at + 8)
+        if b(at + 6) != 1 or not 4 <= sid < 48:
+            continue
+        seen += 1
+        channels = owner.get(k, set())
+        print(f'player {k}: effect {sid}, volume {b(at + 14)}, channels {sorted(channels)}, '
+              f'starts {starts[sid]}, ticks {ticks[sid]}', flush=True)
+        if not starts[sid]:
+            problems.append(f'effect {sid} plays with no start counted')
+        if ticks[sid] and writes[sid]:
+            if any(not f['mask'] >> c & 1 for c in channels):
+                problems.append(f'effect {sid}: channels {sorted(channels)} not muted (mask {f["mask"]:#x})')
+    took = sum(starts[i] for i in range(48) if ticks[i] and writes[i])
+    if f['started'] != took:
+        problems.append(f'{f["started"]} plays for {took} starts of effects with samples')
+    if not seen:
+        problems.append('no effect plays at the end: nothing to check')
+    return problems
 
 
 if __name__ == '__main__':
@@ -263,6 +336,9 @@ if __name__ == '__main__':
     ap.add_argument('--exempt', type=Path, metavar='CSV',
                     help='tests/host_run.py --exempt-out of the same milestone and mode: the service '
                          'hash leaves out the register bytes the host exempts as loaded from dead stack')
+    ap.add_argument('--sfx', action='store_true',
+                    help='the effect smoke: no host check; at the end the effect capture and player '
+                         'state against the driver players in the guest RAM')
     ap.add_argument('--timeout', type=int, default=TIMEOUT,
                     help='seconds for the FS-UAE run and for the host run of the check')
     args = ap.parse_args()
@@ -274,4 +350,5 @@ if __name__ == '__main__':
     prepare(args.milestone, out, trace, late=args.bypass,
             exempt=read_exempt(args.exempt, args.milestone, trace) if args.exempt else None)
     work = build(out, screen=args.screen)
-    run(args.milestone, out, trace, work, late=args.bypass, screen=args.screen, timeout=args.timeout)
+    run(args.milestone, out, trace, work, late=args.bypass, screen=args.screen, timeout=args.timeout,
+        sfx=args.sfx)

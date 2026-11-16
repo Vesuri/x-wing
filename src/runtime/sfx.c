@@ -11,7 +11,11 @@
  * does). The driver's
  * memory is saved before and restored before each id and after the last, the
  * CIA tick held meanwhile (game time pauses). The writes go to
- * rt_sfx_capture, not rt_opl. tools/sfx_capture.py is the oracle. */
+ * rt_sfx_capture, not rt_opl. tools/sfx_capture.py is the oracle.
+ *
+ * In play, rt_sfx_read gives the effect player (fx_play.c) the driver's
+ * players and which of them each OPL channel's voice plays, and HLE
+ * sfx_start (rt_entry.s) counts each id's starts in rt_sfx_starts. */
 #include "platform.h"
 #include "runtime.h"
 
@@ -27,6 +31,15 @@
 #define DRV_SHADOW 0x0342           /* DS: the driver's OPL register shadow (ADLIB.IMS+04BD2) */
 #define DRV_QUEUE_HEAD 0x0ebe       /* DS words: the request queue's read and write index (+02B7D) */
 #define DRV_QUEUE_TAIL 0x12c0
+#define DRV_PLAYERS 0x06ea          /* DS: 8 players of 12h (ADLIB.IMS+00E8E) */
+#define DRV_PLAYER_BYTES 0x12
+#define PLAYER_ACTIVE 0x06           /* byte, 1 while it plays (ADLIB.IMS+01215) */
+#define PLAYER_SOUND 0x08            /* word: the sound id */
+#define PLAYER_VOLUME 0x0e           /* byte: its volume, 0-127 (command 102h) */
+#define DRV_VOICES 0x1ed2           /* DS: 9 voices of 62h (ADLIB.IMS+03F1E) */
+#define DRV_VOICE_BYTES 0x62
+#define VOICE_PART 0x00             /* word: its part, 0 free; the part's word 0 its player */
+#define VOICE_CHANNEL 0x07          /* byte: its OPL channel */
 #define CMD_START 0x08
 #define CMD_STOP_ALL 0x0b
 #define CMD_STATUS 0x0d
@@ -42,7 +55,8 @@ __attribute__((aligned(4))) struct rt_sfx_write rt_sfx_capture[RT_SFX_WRITES];
 __attribute__((aligned(4))) uint16_t rt_sfx_first[RT_SFX_IDS], rt_sfx_writes[RT_SFX_IDS], rt_sfx_ticks[RT_SFX_IDS];
 __attribute__((aligned(4))) uint8_t rt_sfx_opl[256];    /* the driver's OPL shadow after the stop */
 uint32_t rt_sfx_captures;
-static uint16_t capture_n, capture_tick;
+__attribute__((aligned(4))) uint8_t rt_sfx_starts[RT_SFX_IDS];
+static uint16_t capture_n, capture_tick, driver_cs;
 
 uint32_t rt_guest_call(uint32_t sentinel);
 void *rt_lookup(uint32_t cs, uint32_t ip, uint32_t far);
@@ -167,11 +181,47 @@ void rt_sfx_prerender(void)
         rt_sfx_ticks[id] = end;     /* 0: it did not end (a loop the game stops) */
     }
     memory(cs, save, 1);
-    rt_sfx_capturing = 0;
-    rt_irq0_running = 0;
     rt_opl_index = index;
     rt_opl_pair = pair;
     plat_free(save);
+    driver_cs = cs;
     ++rt_sfx_captures;
-    plat_sfx_captured();
+    plat_sfx_captured();            /* the prerender, game time still paused */
+    rt_sfx_capturing = 0;
+    rt_irq0_running = 0;
+}
+
+/* The driver's players and voices now (any time after a capture; the field
+ * task calls it with the tick masked): per player active, its sound id (0xff
+ * one past RT_SFX_IDS) and volume; per OPL channel the player its voice
+ * plays, 0xff none. 0 before the first capture. */
+int rt_sfx_read(uint8_t *active, uint8_t *id, uint8_t *volume, uint8_t *owner)
+{
+    if (!driver_cs) {
+        return 0;
+    }
+    uint16_t ds = (uint16_t)(driver_cs + DRV_DATA);
+    for (unsigned p = 0; p < RT_SFX_PLAYERS; ++p) {
+        uint16_t at = (uint16_t)(DRV_PLAYERS + p * DRV_PLAYER_BYTES);
+        uint16_t sound = rd16(lin(ds, (uint16_t)(at + PLAYER_SOUND)));
+        active[p] = rd8(lin(ds, (uint16_t)(at + PLAYER_ACTIVE))) == 1;
+        id[p] = sound < RT_SFX_IDS ? (uint8_t)sound : 0xff;
+        volume[p] = rd8(lin(ds, (uint16_t)(at + PLAYER_VOLUME)));
+    }
+    for (unsigned c = 0; c < 9; ++c) {
+        owner[c] = 0xff;
+    }
+    for (unsigned v = 0; v < 9; ++v) {
+        uint16_t at = (uint16_t)(DRV_VOICES + v * DRV_VOICE_BYTES);
+        uint16_t part = rd16(lin(ds, (uint16_t)(at + VOICE_PART)));
+        uint8_t c = rd8(lin(ds, (uint16_t)(at + VOICE_CHANNEL)));
+        if (!part || c >= 9) {
+            continue;
+        }
+        uint16_t k = (uint16_t)(rd16(lin(ds, part)) - DRV_PLAYERS);
+        if (k % DRV_PLAYER_BYTES == 0 && k / DRV_PLAYER_BYTES < RT_SFX_PLAYERS) {
+            owner[c] = (uint8_t)(k / DRV_PLAYER_BYTES);
+        }
+    }
+    return 1;
 }

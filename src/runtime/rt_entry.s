@@ -44,6 +44,8 @@ G_DS	equ	1
 	xref	rt_sfx_prerender
 	xref	rt_sfx_capturing
 	xref	rt_sfx_write
+	xdef	rt_hle_sfx_start
+	xref	rt_sfx_starts
 	xdef	rt_run_guest
 	xdef	rt_vram_mark
 	xdef	rt_vdrv_return
@@ -383,6 +385,21 @@ rt_hle_sfx_prerender:
 	lea	32(a7),a7
 	movem.l	(a7)+,d0-d7/a0-a6
 rt_hle_sfx_prerender_done:		; tests/host_run.py: the capture's window ends
+	cmp.w	d7,d7
+	rts
+
+; HLE sfx_start (annotations/hle.csv, sfx.c): the return of FLIGHT's effect
+; start (command 08h), d7 its AX (0: the driver took it), d6 SI, the id:
+; counted in rt_sfx_starts for the effect player (fx_play.c). Clobbers d7
+; and a0. Observe only: EQ.
+rt_hle_sfx_start:
+	tst.w	d7
+	bne.s	.sfx_start_done
+	cmp.w	#48,d6			; runtime.h RT_SFX_IDS
+	bhs.s	.sfx_start_done
+	lea	rt_sfx_starts,a0
+	addq.b	#1,(a0,d6.w)
+.sfx_start_done:
 	cmp.w	d7,d7
 	rts
 

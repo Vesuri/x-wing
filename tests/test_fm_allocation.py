@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / 'src/platform/amiga'
 
 
+def RESERVE(v):
+    return 1 << (12 + v)    # fm_paula.h FM_RESERVE
+
+
 def checks(source):
     with tempfile.TemporaryDirectory(prefix='fm-allocation-', dir=ROOT/'tmp') as td:
         p = Path(td)
@@ -39,9 +43,9 @@ def checks(source):
             selected = [v.channel for v in voices if v.channel >= 0]
             assert len(selected) == len(set(selected)), 'duplicate OPL voice'
             assert not any(mask & (1 << c) for c in selected), 'sample-owned OPL channel selected'
-            for i in range(3):
-                if mask & (7 << (3*i)):
-                    assert voices[i].volume == 0, 'sample-owned Paula voice selected'
+            for i in range(4):
+                if mask & RESERVE(i):
+                    assert voices[i].channel < 0 and voices[i].volume == 0, 'sample-owned Paula voice selected'
             return {v.channel: i for i, v in enumerate(voices) if v.channel >= 0}
         initial = frame()
         assert set(initial) == {0, 1, 3, 4}, ('unused music capacity', initial)
@@ -55,8 +59,11 @@ def checks(source):
         current = frame()
         assert current == initial
         assert [v.channel for v in voices if v.restart] == [1], 'lost or spurious key-on'
-        frame(7)
-        frame(7 << 3)
+        frame(7 | RESERVE(0))
+        frame(7 << 3 | RESERVE(3))
+        # Reserved voices only: the music moves to the voices left.
+        moved = frame(RESERVE(1) | RESERVE(2))
+        assert len(moved) == 2 and set(moved.values()) == {0, 3}, ('reserved voice used or left idle', moved)
         frame(511)
         assert all(v.volume == 0 for v in voices)
         # A newly audible group must enter even if all four voices were busy.
@@ -77,8 +84,8 @@ def checks(source):
         opl[0x43+offsets[0]] = 8
         assert frame() == stable, 'rank change moved a retained winner'
         assert not any(v.restart for v in voices), 'rank change restarted a retained winner'
-        frame(7 << 6)
-        print('FM allocation: spare capacity, stable notes, key-ons, sample ownership, silence: ok')
+        frame(7 << 6 | RESERVE(2))
+        print('FM allocation: spare capacity, stable notes, key-ons, sample ownership, reserved voices, silence: ok')
 
 
 def main():
@@ -91,7 +98,8 @@ def main():
             ('idle capacity', 'if (choice[i] < 0 && !(reserved >> i & 1))',
              'if (i == 3 && choice[i] < 0 && !(reserved >> i & 1))'),
             ('note migration', 'if (voice_ch[i] >= 0 && !(reserved >> i & 1))',
-             'if (0 && voice_ch[i] >= 0 && !(reserved >> i & 1))')):
+             'if (0 && voice_ch[i] >= 0 && !(reserved >> i & 1))'),
+            ('reserved voice', 'mute_mask & FM_RESERVE(i)', '0')):
         assert old in source, name
         try:
             checks(source.replace(old, new))

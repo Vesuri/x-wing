@@ -550,8 +550,9 @@ handler reads: sync for the declared span).
   Output `build/gen/irq-footprint.csv`; `t-irq-footprint` and its sabotage.
 - HLE (`annotations/hle.csv`, G3): at a range's first instruction
   `jsr rt_hle_<service>`; NE skips to the instruction after `last`, EQ runs
-  the guest code. X-Wing's only entry is `copy_protection` ([port plan](port-plan.md),
-  P6); the SWOTL entries below are not used. `args`: up to two guest word registers (not SP, BP), in d7
+  the guest code. X-Wing's entries are `copy_protection` ([port plan](port-plan.md),
+  P6) and the effects' `sfx_prerender` and `sfx_start` (Sound); the SWOTL entries below
+  are not used. `args`: up to two guest word registers (not SP, BP), in d7
   and d6. Both ends are leaders, the first's live-in includes the
   resume's, and a hook where the CCR holds live flags fails `make gen`. The
   block differential runs the guest path. Entries: `sfx_start` (observe
@@ -635,8 +636,9 @@ to the reference's writes in every host run. The FM re-hoster
 (`src/platform/amiga/fm_paula.c`, Secret Weapons of the Luftwaffe's, its
 `docs/sound-plan.md`) turns them into four Paula voices once a field: the field task runs
 it from `plat_service`, and the vertical blank stages its commands
-(`src/platform/amiga/Audio.cpp`, Secret Weapons of the Luftwaffe's without its TFH samples
-and prerendered effects). Voices 0 and 3 play left, 1 and 2 right.
+(`src/platform/amiga/Audio.cpp`, Secret Weapons of the Luftwaffe's without its TFH
+samples). Voices 0 and 3 play left, 1 and 2 right; an effect takes the voice the effect
+player gives it.
 
 Changed for `ADLIB.IMS`:
 - Additive channels (C0 bit 0): the music uses them (271 of its 1,905 C0 writes over the
@@ -702,4 +704,37 @@ Effects are prerendered (owner decision 2026-11-15), as Secret Weapons of the Lu
   and 32 without an end, all equal; a run with the capture on to m12 matched the
   reference (40,066,706 services, 31,703 interrupts and 20,651 OPL writes equal).
 
-Open: the play layer and the cache ([open work](open-work.md)).
+Play (`src/platform/amiga/fx_play.c`, the effect half of Secret Weapons of the
+Luftwaffe's `tfh_paula.c`, its fixed slots replaced by the driver's players):
+- The capture now runs every flight; `Audio.cpp` renders the one-shot effects (ids with
+  an end; 31 and 32 stay on FM) at the capture's end, game time still paused, keeps them
+  when the next capture's key is the same, and caches them in the game drawer
+  (`sfx.cache`, keyed by `fm_effect`'s version, PAL/NTSC and the captures). An effect
+  that does not fit in Chip stays on FM.
+- Once a field, under the masked tick, `rt_sfx_read` (`sfx.c`) reads the driver's 8
+  players and 9 voices ([external surface](external-surface.md#music-driver-interface)),
+  and HLE `sfx_start` (observe only, `FLIGHT.OVL+18A53` after FLIGHT's start call) counts
+  each start the driver took (AX 0) in `rt_sfx_starts`. A player that newly plays an
+  effect with a sample, or whose id gained a start no new player shows (a stop and start
+  within the field), starts a play: the sample on a Paula voice from its first sample,
+  at the sample's level scaled by the player's volume (`((4k + 1.5) / 127)^1.75` for
+  volume 4k..4k+3; MEASURED by `tools/sfx_capture.py --volume`: within 1.05 dB of the
+  driver's carrier levels for volume 16 up). The OPL channels of a player playing an
+  effect with a sample are muted from the re-hoster, and the play's voice reserved
+  (`fm_field`'s `FM_RESERVE`). A stop more than two fields before the driver's end fades
+  over three fields, a later one plays out; at most three play, the oldest giving way,
+  so the music keeps a voice. The pan is not used: the AdLib is mono.
+- Checks: `make t-fx-play` (in `make gates-audio`) runs the player on synthetic driver
+  states (masks, chunks and their latch, volume, two instances of an id, the restart
+  seen in the counts, fade, tail, the voice cap, PAL and NTSC); `t-sab-fx-play` plants
+  ten faults. `t-fm-allocation` checks the reserved voices; its plant drops them.
+  `make t-amiga-sfx` runs the Amiga replay to m12 (`--screen`) with the capture, render
+  and player on and no host check: the replay must consume the reference's service
+  history, interrupts and REP slices (the guest undisturbed), every start of an effect
+  with a sample must become a play, and each effect a driver player plays at the end
+  must have a counted start and its channels muted. The replay's points and REP slices
+  ignore the capture (`tests/amiga_replay.c`), as the host run's. Whether a play holds
+  a voice at the end is not checked: the replay runs the driver on the reference's game
+  time, slower here than the fields the sample plays in. MEASURED: the capture 332
+  fields, the render and cache write 1,007 fields (549,044 Chip bytes), 8 starts of id
+  17 and 8 plays, at the end id 17 on OPL channels 1–7, all muted.

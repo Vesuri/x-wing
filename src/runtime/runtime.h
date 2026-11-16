@@ -259,6 +259,12 @@ extern uint8_t rt_sfx_opl[256];
 extern uint32_t rt_sfx_captures;    /* completed captures */
 void rt_sfx_write(uint32_t reg, uint32_t value);
 void rt_sfx_prerender(void);
+/* In play (fx_play.c): rt_sfx_starts[id] counts the starts the driver took
+ * (HLE sfx_start), wrapping; rt_sfx_read the driver's RT_SFX_PLAYERS players
+ * and each OPL channel's player (sfx.c). */
+#define RT_SFX_PLAYERS 8
+extern uint8_t rt_sfx_starts[RT_SFX_IDS];
+int rt_sfx_read(uint8_t *active, uint8_t *id, uint8_t *volume, uint8_t *owner);
 
 /* stop: report and halt, never resumes */
 void rt_stop(const char *what, uint32_t a, uint32_t b) __attribute__((noreturn));

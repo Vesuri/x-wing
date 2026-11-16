@@ -13,6 +13,9 @@ public:
     // without the Chip RAM.
     static bool begin();
     static void end();
+    // The prerendered effects of the runtime's capture (fx_play.c), at
+    // plat_sfx_captured.
+    static void loadEffects();
 
     // DMA on for the four channels on a silent loop; off again, volume 0.
     static void takeOver();
