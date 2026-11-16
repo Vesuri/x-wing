@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx sound-reference sound-fm gates-audio
+.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx t-resume-plants t-sab-resume sound-reference sound-fm gates-audio
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -25,6 +25,9 @@ help:
 	@echo 'make test-m68k              gate 4: gen-check, then 68020 differential, blocks, guards, sabotage'
 	@echo 'make host                   link generated program + runtime for Unicorn 68020 -> build/host/xwing.elf'
 	@echo 'make test-host              gate 5 host: lockstep to m01 against its host reference (tests/host_run.py)'
+	@echo 'make t-resume-M             host lockstep to flight milestone M from its save at the flight start (else from boot, saving)'
+	@echo 'make t-resume-plants        a resume refuses changes to what ran before its save (no host run)'
+	@echo 'make t-sab-resume           a resume with an EMS mapping or a file position left out must diverge'
 	@echo 'make amiga                  the A1200 image -> amiga/out/XWing.exe (SYNC=1: amiga-sync)'
 	@echo 'make test-amiga             gate 5: m01 replayed on the 68030 model (A1200 chipset, FS-UAE + GDB capture; AMIGA_CPU)'
 	@echo 'make test-amiga-live        the production image runs to the m01 label in real time (no compare)'
@@ -149,8 +152,11 @@ t-sab-m68k: t-m68k-boundary.0-of-1
 # at the sync points; interrupts are replayed there.
 CROSS     = $${AMIGA_TOOLCHAIN}/bin/m68k-amiga-elf-
 VASMELF   = $${VASM} -quiet -m68020 -Felf -x -nowarn=62
+# XWING_RESUME and one section per function and object: the resume's fingerprints
+# (tests/host_resume.py) compare what ran before a save by input section.
 RT_CFLAGS = -m68020 -O2 -ffreestanding -nostdlib -fomit-frame-pointer \
-	-fno-tree-loop-distribute-patterns -Wall -Wextra -Werror -Isrc/runtime -DXWING_SYNC
+	-fno-tree-loop-distribute-patterns -Wall -Wextra -Werror -Isrc/runtime -DXWING_SYNC \
+	-DXWING_RESUME -ffunction-sections -fdata-sections
 RUNTIME_C = $(wildcard src/runtime/*.c)
 HOST_OBJ  = build/host/host_s.o build/host/host.o build/host/rt_entry.o \
 	$(patsubst src/runtime/%.c,build/host/%.o,$(RUNTIME_C)) build/host/program.o
@@ -171,7 +177,7 @@ build/host/%.o: src/runtime/%.c src/runtime/runtime.h src/runtime/platform.h
 	@mkdir -p $(dir $@)
 	@$(ENV) $(CROSS)gcc $(RT_CFLAGS) -c -o $@ $<
 build/host/xwing.elf: $(HOST_OBJ)
-	@$(ENV) $(CROSS)ld -Ttext=0x10000 -e _start -o $@ $(HOST_OBJ)
+	@$(ENV) $(CROSS)ld -Ttext=0x10000 -e _start -Map=$(@:.elf=.map) -o $@ $(HOST_OBJ)
 host: gen-fresh build/host/xwing.elf
 
 HOST_MILESTONES = m01-logo
@@ -185,9 +191,33 @@ test-host: host
 SFX_MILESTONE = m12-training-flight
 SFX_TIMEOUT   = 10000
 t-sfx-capture: host
-	$(call RUN,sfx-capture,python3 tests/host_run.py --milestone $(SFX_MILESTONE) --bypass --sfx-capture --timeout $(SFX_TIMEOUT))
+	$(call RUN,sfx-capture,python3 tests/host_run.py --milestone $(SFX_MILESTONE) --bypass --sfx-capture --resume --timeout $(SFX_TIMEOUT))
 t-sab-sfx-capture:
 	$(call RUN,sabotage-sfx-capture,python3 tests/host_run.py --sfx-plants)
+# Host lockstep resume (tests/host_resume.py, docs/translator-design.md Resume): a
+# flight milestone from its save at the flight's start (tmp/resume) when nothing that
+# ran before the save changed, else from boot, saving anew. Its controls: changes to
+# what ran before the save are refused and others are not (on the save, no host run);
+# a resume with the handles' EMS mappings or an open file's position left out fails
+# with a lockstep divergence (a timeout alone does not count): a planted run leaves
+# the reference's path and need not reach the milestone, so it gets PLANT_TIMEOUT
+# (seconds; an unplanted m12 resume runs in about 200).
+RESUME_MILESTONE = m12-training-flight
+RESUME_TIMEOUT   = 40000
+PLANT_TIMEOUT    = 600
+DIVERGED = ^(reference irq \#[0-9]+ .* not reached \(service events|service \#[0-9]+ |host: .*bytes differ|host: register |host: machine byte |frame: |EMS: guest read )
+t-resume-%: host
+	$(call RUN,resume-$*,python3 tests/host_run.py --milestone $* --bypass --resume --timeout $(RESUME_TIMEOUT))
+t-resume-plants:
+	$(call RUN,resume-plants,python3 tests/host_run.py --milestone $(RESUME_MILESTONE) --bypass --resume-plants)
+t-sab-resume: host
+	@mkdir -p tmp/test; for p in ems file; do \
+		log=tmp/test/sabotage-resume-$$p.log; \
+		if $(ENV) python3 tests/host_run.py --milestone $(RESUME_MILESTONE) --bypass --resume-plant $$p \
+			--timeout $(PLANT_TIMEOUT) > $$log 2>&1; then echo "FAIL  plant $$p not caught ($$log)"; exit 1; \
+		elif grep -q "^host run to .*: FAIL" $$log && grep -Eq '$(DIVERGED)' $$log; then \
+			echo "ok    plant $$p caught: $$(grep -E '$(DIVERGED)' $$log | head -n 1)"; \
+		else echo "FAIL  plant $$p: no lockstep divergence ($$log)"; tail -n 5 $$log; exit 1; fi; done
 
 # The A1200 image (amiga/Makefile), copied from Secret Weapons of the Luftwaffe's.
 # test-amiga (gate 5): the diagnostic replay image (tests/amiga_replay.py) replays

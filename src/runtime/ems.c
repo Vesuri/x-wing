@@ -398,3 +398,19 @@ void rt_int67(void)
     }
     SET_AH(rt_r.ax, 0);
 }
+
+#ifdef XWING_RESUME
+int rt_ems_fields(rt_field_fn *f, void *ctx, int saving)
+{
+    (void)saving;
+    f(ctx, "ems.free", &ems_free, sizeof ems_free);
+    f(ctx, "ems.pages", pages, sizeof pages);
+    f(ctx, "ems.page_of", page_of, sizeof page_of);
+    f(ctx, "ems.used", used, sizeof used);
+    f(ctx, "ems.mapped", rt_ems_mapped, sizeof rt_ems_mapped);
+    f(ctx, "ems.live", rt_ems_live, sizeof rt_ems_live);
+    f(ctx, "ems.fast", rt_ems_fast, sizeof rt_ems_fast);
+    f(ctx, "ems.ds_exits", &rt_ems_ds_exits, sizeof rt_ems_ds_exits);
+    return 0;
+}
+#endif

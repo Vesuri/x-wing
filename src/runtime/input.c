@@ -424,3 +424,20 @@ void rt_int33(void)
         rt_unsupported("mouse function", 0x33, 0, 0);
     }
 }
+
+#ifdef XWING_RESUME
+int rt_input_fields(rt_field_fn *f, void *ctx, int saving)
+{
+    (void)saving;
+    f(ctx, "input.key_ring", rt_key_ring, sizeof rt_key_ring);
+    f(ctx, "input.key_tail", &rt_key_tail, sizeof rt_key_tail);
+    f(ctx, "input.key_head", &key_head, sizeof key_head);
+    f(ctx, "input.mouse_x", &mouse_x, sizeof mouse_x);
+    f(ctx, "input.mouse_y", &mouse_y, sizeof mouse_y);
+    f(ctx, "input.mickey_x", &mickey_x, sizeof mickey_x);
+    f(ctx, "input.mickey_y", &mickey_y, sizeof mickey_y);
+    f(ctx, "input.mickeys_y", &rt_mickeys_y, sizeof rt_mickeys_y);
+    f(ctx, "input.mouse_buttons", &mouse_buttons, sizeof mouse_buttons);
+    return 0;
+}
+#endif

@@ -41,10 +41,14 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import copy
+import ctypes
 import json
 import gzip
 import csv
+import pickle
 import struct
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -55,6 +59,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import uc as U  # noqa: E402
 import rep_replay  # noqa: E402
 import irq_monitor  # noqa: E402
+import host_resume  # noqa: E402
 from translator import emit, image  # noqa: E402
 import reference as R  # noqa: E402  tools/reference.py: the milestone table's sites and keys
 
@@ -170,33 +175,81 @@ def reference_services(trace: Path) -> list[tuple[str, dict]]:
     return list(iter_services(trace))
 
 
-def reference_inputs(trace: Path, *, exact_releases: bool = False) -> tuple[list, list]:
+FIELDS = ("icount", "kind", "module", "offset", "detail")   # events.csv
+
+
+def trace_lines(trace: Path, skip: int = 0):
+    """The lines of events.csv.gz after its first `skip` (the header is line 1);
+    a skip goes through gzip and tail, not Python."""
+    if not skip:
+        with events(trace) as f:
+            yield from f
+        return
+    p = subprocess.Popen(f'gzip -dc "{trace / "events.csv.gz"}" | tail -n +{skip + 1}', shell=True,
+                         stdout=subprocess.PIPE, text=True)
+    try:
+        yield from p.stdout
+    finally:
+        p.stdout.close()
+        p.kill()
+        p.wait()
+
+
+def trace_rows(trace: Path, skip: int = 0):
+    return csv.DictReader(trace_lines(trace, skip), fieldnames=FIELDS if skip else None)
+
+
+class ServiceSource:
+    """The reference's services as (kind, regs) for ServiceLog, from line `line`
+    of events.csv on; `line` counts the lines read (a save's cursor)."""
+
+    def __init__(self, trace: Path, line: int = 0):
+        self.trace, self.line, self.start = trace, line, line
+
+    def lines(self):
+        for text in trace_lines(self.trace, self.start):
+            self.line += 1
+            yield text
+
+    def __iter__(self):
+        rows = csv.DictReader(self.lines(), fieldnames=FIELDS if self.start else None)
+        for r in rows:
+            if r["kind"] in ("svc", "svc_ret"):
+                vec, *kv = r["detail"].split()
+                regs = {k: int(v, 16) for k, v in (x.split("=") for x in kv)}
+                regs["vector"] = int(vec, 16)
+                yield r["kind"], regs
+
+
+def reference_inputs(trace: Path, *, exact_releases: bool = False,
+                     start: tuple[int, int] = (0, 0)) -> tuple[list, list]:
     """The reference's hardware interrupts as (service events so far, poll
     point label, its executions since the last service event, vector), and
     the service-event count at each key release. Exact releases additionally
     retain recorded ineligible visits to the next trigger in that interval.
-    The default preserves the existing diagnostic Amiga replay input format."""
-    irqs, releases, n = [], [], 0
-    with events(trace) as f:
-        for r in csv.DictReader(f):
-            if r["kind"] in ("svc", "svc_ret"):
-                n += 1
-            elif r["kind"] == "irq":
-                vec, svc, hits = r["detail"].split()
-                assert int(svc[4:]) == n, r
-                irqs.append((n, emit.label(r["module"], int(r["offset"], 16)),
-                             int(hits[5:]), int(vec, 16)))
-            elif r["kind"] == "key_up":
-                fields = r["detail"].split()
-                release = n
-                if exact_releases and len(fields) > 1:
-                    if len(fields) != 2 or not fields[1].startswith("skip="):
-                        raise ValueError(f"invalid key release: {r}")
-                    skipped = int(fields[1][5:])
-                    if skipped < 0:
-                        raise ValueError(f"negative key release visits: {r}")
-                    release = (n, skipped)
-                releases.append(release)
+    The default preserves the existing diagnostic Amiga replay input format.
+    start: (lines, service events) to begin after (a resume's)."""
+    irqs, releases = [], []
+    n = start[1]
+    for r in trace_rows(trace, start[0]):
+        if r["kind"] in ("svc", "svc_ret"):
+            n += 1
+        elif r["kind"] == "irq":
+            vec, svc, hits = r["detail"].split()
+            assert int(svc[4:]) == n, r
+            irqs.append((n, emit.label(r["module"], int(r["offset"], 16)),
+                         int(hits[5:]), int(vec, 16)))
+        elif r["kind"] == "key_up":
+            fields = r["detail"].split()
+            release = n
+            if exact_releases and len(fields) > 1:
+                if len(fields) != 2 or not fields[1].startswith("skip="):
+                    raise ValueError(f"invalid key release: {r}")
+                skipped = int(fields[1][5:])
+                if skipped < 0:
+                    raise ValueError(f"negative key release visits: {r}")
+                release = (n, skipped)
+            releases.append(release)
     return irqs, releases
 
 
@@ -299,6 +352,9 @@ class Host:
         self.frame_writer = functions["push_frame"]
         e = self.e = U.Engine(U.ARCH_M68K, U.MODE_BIG_ENDIAN, U.CPU_M68K_M68020)
         e.map(0, MEM)
+        # resume (tests/host_resume.py): the harness's scratch memory and runtime-call sentinel
+        e.map(host_resume.SCRATCH, host_resume.SCRATCH_BYTES)
+        e.write(host_resume.SENTINEL, b"\x4a\xfc")   # illegal
         for vaddr, data, memsz in segs:
             if vaddr < BLOCK + GUEST_BYTES + 16 + EMS_STORE_PAGES * EMS_PAGE and BLOCK < vaddr + memsz:
                 raise SystemExit(f"host image {vaddr:x}+{memsz:x} meets the guest block at {BLOCK:x}")
@@ -648,6 +704,9 @@ class Host:
             if self.watching:
                 return
             self.watching = True
+            # rt_run_guest: movem.l d2-d7/a2-a6 and jsr rt_dispatch_far: the guest
+            # entry's native stack holds that return address (host_resume.open_calls)
+            self.entry_a7 = self.r("a7") - 48
             # Below the entry SS:SP the loader's own frame is dead stack (DOSBox-X's
             # EXEC leaves the entry CS:IP there): masked as at a service call
             sp = int.from_bytes(self.mem(self.syms["rt_r"] + 8, 2), "big")  # struct rt_regs
@@ -675,6 +734,18 @@ class Host:
         self.watching = False
         a = self.syms["rt_run_guest"]
         e.hook_range(U.HOOK_CODE, guest_start, a, a)
+
+        self.cov = None             # --save: the block hook's library (Host.record)
+        # guest addresses hooked here: a save point must not share one (Host.run)
+        self.hooked = {self.syms[n] for n in ("FLT_19424", "AD_02B4D", "AD_02B6D", "AD_00000")
+                       if n in self.syms}
+        for r in image.rows("flags.csv"):
+            lab = emit.label(r["module"], int(r["save"], 16))
+            self.hooked |= {self.syms[x] for x in (lab, lab + "_bp") if x in self.syms}
+        self.resume = None          # a save to resume from (check)
+        self.saved = None           # the save this run made (Host.save_now)
+        self.save_why = None        # why it made none
+        self.opl_base = None        # the OPL writes before a resume (check_opl)
 
     def r(self, name: str) -> int:
         return self.e.reg_read(U.M68K[name])
@@ -941,6 +1012,202 @@ class Host:
             self.e.write(self.syms["rt_key_ring"] + 2 * (tail % 16), struct.pack(">H", ev))
             self.e.write(self.syms["rt_key_tail"], bytes([(tail + 1) & 0xFF]))
 
+    # -- resume (tests/host_resume.py) ---------------------------------------------
+    def record(self) -> None:
+        """--save: every translated block run, once (tests/host_cov.c), from the start."""
+        self.cov = host_resume.coverage()
+        seen = ctypes.c_uint8.in_dll(self.cov, "cov_seen")
+        ctypes.memset(ctypes.addressof(seen), 0, 1 << 23)
+        for n in ("cov_n", "cov_lost"):
+            ctypes.c_uint32.in_dll(self.cov, n).value = 0
+        ctypes.c_uint64.in_dll(self.cov, "cov_base").value = 0x10000
+        ctypes.c_uint8.in_dll(self.cov, "cov_on").value = 1
+        self.e.hook_range(8, self.cov.cov_block, 0x10000, self.code[1])   # UC_HOOK_BLOCK
+
+    def unsaveable(self) -> str | None:
+        """Why the state here cannot be saved (None: it can)."""
+        if self.pending or self.in_service:
+            return "a service is in progress"
+        if self.irq.in_handler or self.groups:
+            return "an interrupt handler runs"
+        if self.sfx_cap:
+            return "an effect capture runs"
+        if self.rep is not None and self.rep.active:
+            return "a REP slice is replayed"
+        if self.cov is None:
+            return "no coverage recorded"
+        return None
+
+    def files_state(self) -> dict:
+        out = {}
+        for handle, f in self.files.items():
+            if isinstance(f, MemFile):
+                name = next((n for n, d in self.written.items() if d is f.data), None)
+                out[handle] = ("mem", name, None if name else bytes(f.data), f.pos, f.modified,
+                               f.dos_stamp)
+            else:
+                out[handle] = ("disk", str(Path(f.name).relative_to(self.root)), f.tell())
+        return out
+
+    def harness_state(self) -> dict:
+        s, m = self.services, self.irq
+        regs, edges, got, n = opl_summary(self)
+        return {
+            "services": dict(n=s.n, consumed=s.consumed, bad=list(s.bad), dead_bytes=s.dead_bytes,
+                             dead_first=s.dead_first, exempt=list(s.exempt)),
+            "services_line": self.services_source.line,
+            "masked": set(self.masked), "dead_reads": set(self.dead_reads),
+            "dead_stored": set(self.dead_stored), "dead_flags": self.dead_flags,
+            "machine_reads": set(self.machine_reads), "vram_written": set(self.vram_written),
+            "irq_top": self.irq_top, "presents": self.presents, "display_miss": self.display_miss,
+            "mouse": (self.mouse_dx, self.mouse_dy, self.mouse_buttons),
+            "retrace": (self.retrace_i, self.retrace_used, self.retrace_bad, len(self.retrace)),
+            "irq_lost": self.irq_lost, "opl": (bytes(regs), bytes(edges), dict(got), n),
+            "irq_counts": dict(self.irq_counts),
+            "ems_alias": (self.ems_alias_reads, list(self.ems_alias_bad)),
+            "files": self.files_state(), "next_file": self.next_file,
+            "written": {k: bytes(v) for k, v in self.written.items()},
+            "file_stamps": dict(self.file_stamps), "deleted": set(self.deleted),
+            "log": list(self.log), "console": self.console,
+            "bypass": (self.bypass_n, self.bypass_hits), "screen_n": getattr(self, "screen_n", None),
+            "monitor": {k: getattr(m, k) for k in MONITOR_STATE},
+            "run": dict(step=self.step, hits=self.hits,
+                        release=None if self.release is None else dict(vars(self.release)),
+                        releases=list(self.releases), irq_i=self.irq_i,
+                        irq_before=sum(1 for r in self.irqs if r[0] < self.services.n),
+                        irqs=len(self.irqs), visit_n=self.visit_n, visits=dict(self.visits),
+                        makes=self.makes, rep=None if self.rep is None else self.rep.index,
+                        dead_planted=self.dead_planted),
+        }
+
+    def save_now(self, label: str, pc: int) -> None:
+        """At the resume point: everything a resume needs (tests/host_resume.py); kept
+        in self.saved, written once the run passes its milestone (check)."""
+        names = [n for n in (label, label + "_bp") if self.syms.get(n) == pc]
+        lib = self.cov
+        ctypes.c_uint8.in_dll(lib, "cov_on").value = 0     # the save's own code did not run before it
+        try:
+            regs = {r: self.r(r) for r in host_resume.REG_NAMES}
+            if not names:
+                raise ValueError(f"stopped at {pc:x}, not at {label}")
+            ret = self.u32(self.entry_a7)
+            if not self.syms["rt_run_guest"] <= ret < self.syms["rt_run_guest"] + 0x40:
+                raise ValueError(f"guest entry's return address {ret:x} not in rt_run_guest")
+            calls = host_resume.open_calls(self, regs["a7"], self.entry_a7)
+            n = host_resume.call(self, U, "rt_snapshot_save", host_resume.SCRATCH,
+                                 host_resume.SCRATCH_BYTES)
+            if n == 0 or n >= 0x80000000:
+                raise ValueError(f"rt_snapshot_save: {n - (1 << 32) if n >> 31 else n} "
+                                 "(runtime.h RT_UNSAVED_*; 0: no room)")
+            image = host_resume.Image(self.elf, self.syms)
+            ran = image.executed(host_resume.blocks(lib))
+            self.saved = {
+                "format": host_resume.FORMAT, "label": names[0], "regs": regs, "calls": calls,
+                "memory": self.mem(BLOCK, BLOCK_BYTES), "fields": self.mem(host_resume.SCRATCH, n),
+                "harness": copy.deepcopy(self.harness_state()),   # as here, not at the end
+                "fingerprints": host_resume.fingerprints(image, ran, harness_hash()),
+            }
+            print(f"resume: saved at {names[0]} after {self.services.n} service events: "
+                  f"{len(calls)} open guest calls, {n} field bytes, "
+                  f"{sum(k[0] == 'gen' for k in ran)} guest labels and "
+                  f"{sum(k[0] == 'rt' for k in ran)} runtime sections ran before it")
+        except (ValueError, RuntimeError) as error:
+            self.save_why = str(error)
+            print(f"resume: no save at {label}: {error}")
+        ctypes.c_uint8.in_dll(lib, "cov_on").value = 1
+
+    def resume_now(self) -> int:
+        """At the guest entry of this image: the save's state; returns its label here."""
+        s = self.resume
+        entry = self.r("a7")
+        ret = self.u32(entry)
+        if not self.syms["rt_run_guest"] <= ret < self.syms["rt_run_guest"] + 0x40:
+            raise SystemExit(f"resume: rt_dispatch_far first called from {ret:x}, not rt_run_guest")
+        self.e.write(BLOCK, s["memory"])
+        plant, fields = s.get("plant"), bytearray(s["fields"])
+        if plant == "ems":      # the handles' EMS mappings left out: every page at store page 0
+            at, n = host_resume.field_span(fields, "ems.page_of")
+            fields[at:at + n] = bytes(n)
+            print("resume: plant ems: ems.page_of zeroed")
+        elif plant == "file":   # the open files left out: their SFT entries free
+            at, n = host_resume.field_span(fields, "dos.file_of_sft")
+            sft = list(struct.unpack(f">{n // 4}i", fields[at:at + n]))
+            dropped = [k for k, f in enumerate(sft) if f >= 0]
+            if not dropped:
+                raise SystemExit("resume: plant file: no open file")
+            fields[at:at + n] = struct.pack(f">{len(sft)}i", *(-1 if f >= 0 else f for f in sft))
+            print(f"resume: plant file: SFT entries {dropped} left out")
+        self.e.write(host_resume.SCRATCH, bytes(fields))
+        bad = host_resume.call(self, U, "rt_snapshot_load", host_resume.SCRATCH, len(s["fields"]))
+        if bad:
+            raise SystemExit(f"resume: rt_snapshot_load refused field {bad - (1 << 32) if bad >> 31 else bad}")
+        self.load_harness(s["harness"])
+        # the open guest calls, each returning through a stub of its return site
+        top = entry - 4 * len(s["calls"])
+        for k, (width, value, label, stop) in enumerate(s["calls"]):
+            if label not in self.syms:
+                raise SystemExit(f"resume: return label {label} missing in this image")
+            at = host_resume.STUBS + 32 * k
+            self.e.write(at, host_resume.stub(width, value, self.syms[label], self.syms[stop]))
+            self.e.write(top + 4 * k, struct.pack(">I", at))
+        for r, v in s["regs"].items():
+            self.e.reg_write(U.M68K[r], v)
+        self.e.reg_write(U.M68K["a7"], top)
+        print(f"resume: at {s['label']} after {self.services.n} service events, "
+              f"{len(s['calls'])} open guest calls")
+        return self.syms[s["label"]]
+
+    def load_harness(self, st: dict) -> None:
+        s = self.services
+        for k, v in st["services"].items():
+            setattr(s, k, v)
+        for name in ("masked", "dead_reads", "dead_stored", "machine_reads", "vram_written"):
+            live = getattr(self, name)
+            live.clear()
+            live.update(st[name])
+        self.dead_flags, self.irq_top = st["dead_flags"], st["irq_top"]
+        self.presents, self.display_miss = st["presents"], st["display_miss"]
+        self.mouse_dx, self.mouse_dy, self.mouse_buttons = st["mouse"]
+        self.retrace_i, self.retrace_used, self.retrace_bad, count = st["retrace"]
+        if count != len(self.retrace):
+            raise SystemExit("resume: the reference's VGA status reads differ from the save's")
+        self.irq_lost = st["irq_lost"]
+        self.opl_base = st["opl"]
+        self.irq_counts = Counter(st["irq_counts"])
+        self.ems_alias_reads, self.ems_alias_bad = st["ems_alias"][0], list(st["ems_alias"][1])
+        self.written = {k: bytearray(v) for k, v in st["written"].items()}
+        self.file_stamps, self.deleted = dict(st["file_stamps"]), set(st["deleted"])
+        self.files = {}
+        for handle, f in st["files"].items():
+            if f[0] == "mem":
+                _, name, data, pos, modified, stamp = f
+                m = MemFile(self.written[name] if name else bytearray(data))
+                m.pos, m.modified, m.dos_stamp = pos, modified, stamp
+                self.files[handle] = m
+            else:
+                d = (self.root / f[1]).open("rb")
+                d.seek(f[2])
+                self.files[handle] = d
+        self.next_file = st["next_file"]
+        self.log, self.console = list(st["log"]), st["console"]
+        self.bypass_n, self.bypass_hits = st["bypass"]
+        self.screen_n = st["screen_n"]
+        for k, v in st["monitor"].items():
+            setattr(self.irq, k, v)
+        self.irq.dirty, self.irq.mask = True, None
+        r = st["run"]
+        self.step, self.hits = r["step"], r["hits"]
+        self.release = None
+        if r["release"] is not None:
+            self.release = KeyRelease(0)
+            vars(self.release).update(r["release"])
+        self.releases = list(r["releases"])
+        self.irq_i = r["irq_i"] - r["irq_before"]     # the reference's interrupts from the save on
+        self.visit_n, self.visits, self.makes = r["visit_n"], dict(r["visits"]), r["makes"]
+        if self.rep is not None:
+            self.rep.index = r["rep"]
+        self.dead_planted = r["dead_planted"]
+
     def run(self, script: dict | None, timeout: int) -> None:
         """Run to the script's last snapshot trigger (None: until a stop).
         Hardware interrupts replay the reference's (script["irqs"]): posted at
@@ -948,18 +1215,62 @@ class Host:
         key release eligibility uses recorded trigger visits when available."""
         steps = [(t, k) for t, k in script["keys"]] + [(t, None) for t in script["snapshots"]] \
             if script else []
-        releases = list(script["releases"]) if script else []
+        self.releases = list(script["releases"]) if script else []
         self.irqs = list(script["irqs"]) if script else []
         self.step, self.hits, self.release = 0, 0, None
         self.irq_i, self.visit_n, self.visits, self.groups = 0, None, {}, {}
         self.irq_lost: str | None = None
-        makes = 0
+        self.makes = 0
         rep = script.get("rep") if script else None
+        self.rep = rep
         rep_labels = set(rep.labels) if rep else set()
+        save = script.get("save") if script else None     # --save: (label, hits)
         # an instruction's label and its guarded copy's (R6) are one guest instruction
         at = {lab: {self.syms[x] for x in (lab, lab + "_bp") if x in self.syms}
-              for lab in {t[0] for t, _ in steps} | {lab for _, lab, _, _ in self.irqs} | rep_labels}
+              for lab in {t[0] for t, _ in steps} | {lab for _, lab, _, _ in self.irqs} | rep_labels
+              | ({save[0]} if save else set())}
         canon = {a: lab for lab, addrs in at.items() for a in addrs}
+
+        # --save at the resume point (tests/host_resume.py POINTS), hooked before every
+        # other hook of the address: stopping there skips them, and they run once
+        # when the run goes on from the label
+        self.save_due = False
+        if save:
+            if at[save[0]] & self.hooked:
+                raise SystemExit(f"save point {save[0]} shares an address hooked at start-up")
+            self.save_hits = 0
+
+            @U.CODE_CB
+            def save_hit(h, addr, size, user):
+                if self.saved is not None or self.save_why is not None:
+                    return
+                self.save_hits += 1
+                if self.save_hits < save[1]:
+                    return
+                self.save_why = self.unsaveable()
+                if self.save_why:
+                    print(f"resume: no save at {save[0]}: {self.save_why}")
+                    return
+                self.save_due = True
+                self.e.stop()
+
+            for a in at[save[0]]:
+                self.e.hook_range(U.HOOK_CODE, save_hit, a, a)
+
+        # --resume: the image boots to its guest entry (rt_run_guest's call of
+        # rt_dispatch_far), where the save's state replaces the boot's
+        self.resume_due = False
+        resume_hook = None
+        if self.resume is not None:
+            @U.CODE_CB
+            def resume_hit(h, addr, size, user):
+                if not self.resume_due and self.resume is not None and not self.resumed:
+                    self.resume_due = True
+                    self.e.stop()
+
+            self.resumed = False
+            a = self.syms["rt_dispatch_far"]
+            resume_hook = self.e.hook_range(U.HOOK_CODE, resume_hit, a, a)
 
         # --bypass: the copy-protection hook (annotations/hle.csv) replaces the
         # screen. The reference's service events from the hook to the screen's
@@ -1063,7 +1374,7 @@ class Host:
                     self.mouse_buttons = amount
             elif key is not None:
                 self.press(key)
-                self.release = KeyRelease(releases.pop(0))
+                self.release = KeyRelease(self.releases.pop(0))
             elif self.step == len(steps):
                 self.stopped_at = lab
                 self.halted = True
@@ -1098,14 +1409,13 @@ class Host:
             for the BIOS's handlers (instant) the whole group. One the guest
             handles, the reference took the next of its group only after the IRET
             back to the same poll point (rt_irq_back at this stack depth)."""
-            nonlocal makes
             key = self.irqs[self.irq_i][:3]
             while self.irq_i < len(self.irqs) and self.irqs[self.irq_i][:3] == key:
                 vector = self.irqs[self.irq_i][3]
                 guest = self.guest_vector(vector)
                 if vector == 9:
-                    makes += 1
-                    vector = 9 if makes % 2 else 0x89  # make, then the key's break
+                    self.makes += 1
+                    vector = 9 if self.makes % 2 else 0x89  # make, then the key's break
                 self.post(vector)
                 self.irq_i += 1
                 if guest:
@@ -1183,7 +1493,22 @@ class Host:
         self.e.reg_write(U.M68K["sr"], 0x2700)
         self.e.reg_write(U.M68K["a7"], STACK_TOP)
         self.halted = False
-        err = self.e.start(self.entry, 0xFFFFFFFF, timeout_us=timeout * 1_000_000)
+        deadline = time.monotonic() + timeout
+        begin = self.entry
+        while True:
+            left = max(1, int((deadline - time.monotonic()) * 1_000_000))
+            err = self.e.start(begin, 0xFFFFFFFF, timeout_us=left)
+            if not err and self.save_due:       # at the resume point: save, go on there
+                self.save_due = False
+                begin = self.r("pc")
+                self.save_now(save[0], begin)
+                continue
+            if not err and self.resume_due:     # at the guest entry: the save's state
+                self.resume_due, self.resumed = False, True
+                self.e.unhook(resume_hook)
+                begin = self.resume_now()
+                continue
+            break
         self.timed_out = self.e.timed_out()
         if err:
             print(f"unicorn error {U.uc.uc_strerror(err).decode()} pc={self.r('pc'):x}")
@@ -1619,7 +1944,25 @@ def main(argv=None) -> int:
                     help="the copy-protection hook replaces the screen: at "
                          f"{BYPASS_MILESTONE} lockstep to it, then the state at the return "
                          "outside the screen's; past it, lockstep with the bypassed reference")
+    ap.add_argument("--save", action="store_true",
+                    help="save at the milestone's resume point (tests/host_resume.py POINTS), "
+                         "kept if the run passes")
+    ap.add_argument("--resume", action="store_true",
+                    help="resume from the milestone's save if this image may (else run from boot "
+                         "and save)")
+    ap.add_argument("--resume-plant", choices=("ems", "file"),
+                    help="control: resume with the EMS mapping or an open file's position left "
+                         "out; the run must fail")
+    ap.add_argument("--resume-plants", action="store_true",
+                    help="controls: changes to what ran before the save are refused, others "
+                         "not (no host run)")
+    ap.add_argument("--point", metavar="MODULE+HEX#N",
+                    help="another resume point for this milestone (tests/host_resume.py POINTS)")
     args = ap.parse_args(argv)
+    if args.point:
+        host_resume.POINTS[args.milestone] = args.point
+    if args.resume_plants:
+        return resume_plants(args.milestone, args.bypass)
     if args.sfx_plants:
         return sfx_plants(args.sfx_plants)
     if args.sfx_check:
@@ -1668,7 +2011,9 @@ def main(argv=None) -> int:
     if args.screen and args.bypass:
         raise SystemExit("--screen and --bypass exclude each other")
     problems = check(args.milestone, args.timeout, args.amiga, None, bypass=args.bypass,
-                     screen=args.screen, exempt_out=args.exempt_out, sfx=args.sfx_capture)
+                     screen=args.screen, exempt_out=args.exempt_out, sfx=args.sfx_capture,
+                     save=args.save, resume=args.resume or bool(args.resume_plant),
+                     plant=args.resume_plant)
     for p in problems:
         print(p)
     print(f"host run to {args.milestone}: {'ok' if not problems else 'FAIL'}")
@@ -1784,6 +2129,24 @@ def rearm_problems() -> list[str]:
     return problems
 
 
+def opl_summary(h) -> tuple:
+    """The run's AdLib writes so far (with a resumed run's before the save): the
+    registers, the key-on edges (B0-B8 bit 5 rising), the port/value counts and the
+    data writes."""
+    if h.opl_base:
+        regs, edges, got, n = bytearray(h.opl_base[0]), bytearray(h.opl_base[1]), \
+            Counter(h.opl_base[2]), h.opl_base[3]
+    else:
+        regs, edges, got, n = bytearray(256), bytearray(9), Counter(), 0
+    for port, v in h.opl_ports:
+        got[(port, v)] += 1
+    for reg, v in h.opl:
+        if 0xB0 <= reg <= 0xB8 and v & 0x20 and not regs[reg] & 0x20:
+            edges[reg - 0xB0] = (edges[reg - 0xB0] + 1) & 0xFF
+        regs[reg] = v
+    return regs, edges, dict(got), n + len(h.opl)
+
+
 def check_opl(h, trace: Path, counts: bool = True) -> list[str]:
     """The host's AdLib writes, per port and value, are the reference's
     (ports.csv of the same run); rt_opl and rt_opl_keyon hold the registers and
@@ -1793,20 +2156,13 @@ def check_opl(h, trace: Path, counts: bool = True) -> list[str]:
         if r["direction"] == "out" and r["port"] in ("0x0388", "0x0389"):
             k = (int(r["port"], 16), int(r["value"], 16))
             want[k] = want.get(k, 0) + int(r["count"])
-    got: dict[tuple[int, int], int] = {}
-    for port, v in h.opl_ports:
-        got[(port, v)] = got.get((port, v), 0) + 1
+    regs, edges, got, writes = opl_summary(h)
     data = sum(n for (p, _), n in want.items() if p == 0x389)
-    print(f"OPL: {len(h.opl)} writes, {data} in the reference")
+    print(f"OPL: {writes} writes, {data} in the reference")
     if counts and got != want:
         diff = sorted(k for k in set(got) | set(want) if got.get(k) != want.get(k))
         return [f"OPL: {len(diff)} port/value counts differ, first {diff[0][0]:x}={diff[0][1]:02x}: "
                 f"{got.get(diff[0], 0)} vs {want.get(diff[0], 0)}"]
-    regs, edges = bytearray(256), bytearray(9)
-    for reg, v in h.opl:
-        if 0xB0 <= reg <= 0xB8 and v & 0x20 and not regs[reg] & 0x20:
-            edges[reg - 0xB0] = (edges[reg - 0xB0] + 1) & 0xFF
-        regs[reg] = v
     problems = []
     if h.mem(h.syms["rt_opl"], 256) != bytes(regs):
         problems.append("OPL: rt_opl differs from the writes")
@@ -1819,6 +2175,15 @@ def check_opl(h, trace: Path, counts: bool = True) -> list[str]:
 
 EMS_FRAME, EMS_PAGE = 0xE0000, 0x4000
 EMS_STORE, EMS_STORE_PAGES = STATE + 16, 0x40     # runtime.h RT_STATE_BYTES, RT_EMS_STORE
+BLOCK_BYTES = GUEST_BYTES + 16 + EMS_STORE_PAGES * EMS_PAGE   # guest RAM, state block, EMS store
+# the I3 monitor's state across a resume (its layout is recomputed from guest RAM)
+MONITOR_STATE = ("loadseg", "g", "song_span", "song_reads", "song_pending", "epoch", "in_handler",
+                 "k", "tick", "entries", "found", "masked", "services", "song_writes", "problems",
+                 "uncovered")
+
+
+def harness_hash() -> str:
+    return host_resume.harness_hash(sys.modules[__name__], rep_replay)
 
 
 def host_ems_state(h) -> tuple:
@@ -1938,7 +2303,8 @@ BYPASS_LATE_SABOTAGE = {"answer": "the bypass leaves AX = 0, a wrong answer"}
 def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None,
           trace: Path | None = None, elf: Path | None = None, bypass: bool = False,
           bypass_sabotage: str | None = None, screen: bool = False,
-          exempt_out: Path | None = None, sfx: str | None = None) -> list[str]:
+          exempt_out: Path | None = None, sfx: str | None = None, save: bool = False,
+          resume: bool = False, plant: str | None = None) -> list[str]:
     # past the screen (BYPASS_MILESTONE's return) the bypassed port runs in lockstep
     # with the bypassed reference (owner decision 2026-11-08): no state is exempt
     late = bypass and milestone != BYPASS_MILESTONE
@@ -1955,17 +2321,39 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     h = Host(image.M.REF, sabotage, elf=elf or rep_replay.host_image(rep.labels),
              retrace=retrace_runs(trace))
     h.calendar_date, h.file_clock = reference_clocks(trace)
+    # --resume (tests/host_resume.py): from the milestone's save if this image may,
+    # else from boot, saving anew
+    path = save_path(milestone, late)
+    saved = None
+    if resume:
+        saved, why = load_save(path, milestone, trace, h)
+        if saved is None and plant:
+            raise SystemExit(f"--resume-plant needs a save this image may resume from: {why}")
+        if saved is None:
+            print(f"resume: from boot: {why}")
+            save = True
+        else:
+            saved["plant"] = plant
+            h.resume = saved
+    if save:
+        if milestone not in host_resume.POINTS or screen or sabotage or bypass_sabotage:
+            raise SystemExit(f"--save: no resume point for {milestone} in this mode")
+        h.record()
+        script["save"] = trigger(host_resume.POINTS[milestone])[0::2]
     if bypass and not late:
         script["bypass"] = bypass_return(trace)
     if late:
         script["bypassed"] = bypass_sabotage
     label = script["snapshots"][-1][0]
-    script["irqs"], script["releases"] = reference_inputs(trace, exact_releases=True)
+    start = (saved["harness"]["services_line"], saved["harness"]["services"]["consumed"]) \
+        if saved else (0, 0)
+    script["irqs"], script["releases"] = reference_inputs(trace, exact_releases=True, start=start)
     summary = dict(kv.split("=", 1) for kv in (trace / "summary.txt").read_text().split())
     problems = rearm_problems() + resident_problems(sabotage) + ems_guard_problems(h.elf)
     if int(summary.get("polls", "0"), 16) != fnv(POLLS.read_bytes()):
         problems.append("reference recorded with other poll points: rerun tools/reference.py --polls")
-    h.services = ServiceLog(iter_services(trace), h.dead_reads)
+    h.services_source = ServiceSource(trace, start[0])
+    h.services = ServiceLog(iter(h.services_source), h.dead_reads)
     if sfx:
         h.sfx_enable()
     t0 = time.monotonic()
@@ -1981,9 +2369,12 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
         SFX_SAVE.write_bytes(gzip.compress(pickle.dumps(saved), 1))
         print(f"services: {len(h.services)} run in lockstep to the capture; saved to "
               f"{SFX_SAVE.relative_to(REPO)} (--sfx-check, --sfx-plants)")
-        return problems + sfx_problems(saved)
+        problems += sfx_problems(saved)
+        keep_save(h, path, trace, milestone, problems, late)
+        return problems
     if late:
-        want_n = reference_bypass(trace)
+        want_n = (h.resume or {}).get("reference_bypass") or reference_bypass(trace)
+        h.reference_bypass = want_n
         if h.bypass_hits != 1 or h.bypass_n != want_n:
             problems.append(f"bypass: the hook ran {h.bypass_hits} times, first after "
                             f"{h.bypass_n} service events; the reference's after {want_n}")
@@ -2102,7 +2493,60 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
                                                   if (amiga / f"ems-page{k}.bin").exists()}),
                                       (amiga / "dac.bin").read_bytes() if frame else None,
                                       ref_regs, ref, snap, h)
+    keep_save(h, path, trace, milestone, problems, late)
     return problems
+
+
+def resume_plants(milestone: str, bypass: bool) -> int:
+    """The resume's refusal controls on the milestone's save against this image."""
+    late = bypass and milestone != BYPASS_MILESTONE
+    path = save_path(milestone, late)
+    saved = pickle.loads(gzip.decompress(path.read_bytes()))
+    trace = host_reference(milestone, bypassed=late)
+    elf = rep_replay.host_image(rep_replay.Replay(rep_replay.read(trace, required=True)).labels)
+    syms = elf_load(elf)[2]
+    missed = host_resume.plants(saved["fingerprints"], lambda: host_resume.Image(elf, syms),
+                                harness_hash())
+    print("resume plants: " + ("all as expected" if not missed else "MISSED " + ", ".join(missed)))
+    return 1 if missed else 0
+
+
+def save_path(milestone: str, late: bool) -> Path:
+    return host_resume.SAVES / f"{milestone}{'-bypass' if late else ''}.pkl.gz"
+
+
+def load_save(path: Path, milestone: str, trace: Path, h) -> tuple[dict | None, str]:
+    """The milestone's save if this image may resume from it, else (None, why)."""
+    if not path.exists():
+        return None, f"no save {path.relative_to(REPO)}"
+    saved = pickle.loads(gzip.decompress(path.read_bytes()))
+    if saved.get("format") != host_resume.FORMAT:
+        return None, "a save of another format"
+    if (saved["milestone"], saved["trace"]) != (milestone, str(trace.relative_to(REPO))):
+        return None, f"the save is of {saved['trace']}"
+    if saved["point"] != host_resume.POINTS.get(milestone):
+        return None, f"the save is at {saved['point']}"
+    why = host_resume.refusals(saved["fingerprints"], host_resume.Image(h.elf, h.syms), harness_hash())
+    return (None, "; ".join(why)) if why else (saved, "")
+
+
+def keep_save(h, path: Path, trace: Path, milestone: str, problems: list, late: bool) -> None:
+    """The save this run made counts once it passed its milestone (or its capture)."""
+    if h.saved is None:
+        if h.cov is not None:
+            print(f"resume: no save: {h.save_why or 'the resume point was not reached'}")
+        return
+    if problems:
+        print("resume: the run failed: its save is not kept")
+        return
+    h.saved.update(milestone=milestone, trace=str(trace.relative_to(REPO)),
+                   point=host_resume.POINTS[milestone],
+                   reference_bypass=getattr(h, "reference_bypass", None))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(f".{id(h)}.tmp")
+    tmp.write_bytes(gzip.compress(pickle.dumps(h.saved, protocol=5), 1))
+    tmp.rename(path)
+    print(f"resume: save kept in {path.relative_to(REPO)} ({path.stat().st_size} bytes)")
 
 
 if __name__ == "__main__":

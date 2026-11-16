@@ -648,3 +648,29 @@ void rt_unsupported(const char *what, uint16_t vector, uint16_t cs, uint16_t ip)
     plat_log(line);
     plat_exit(2);
 }
+
+#ifdef XWING_RESUME
+int rt_machine_fields(rt_field_fn *f, void *ctx, int saving)
+{
+    if (saving && irq_stop_what) {
+        return RT_UNSAVED_STOP;
+    }
+    if (saving && (rt_irq0_running || rt_irq_mask || rt_irq_interrupting)) {
+        return RT_UNSAVED_HANDLER;
+    }
+    f(ctx, "machine.r", &rt_r, sizeof rt_r);
+    f(ctx, "machine.entry_cs", &rt_entry_cs, sizeof rt_entry_cs);
+    f(ctx, "machine.entry_ip", &rt_entry_ip, sizeof rt_entry_ip);
+    f(ctx, "machine.deliver_cs", &rt_deliver_cs, sizeof rt_deliver_cs);
+    f(ctx, "machine.deliver_ip", &rt_deliver_ip, sizeof rt_deliver_ip);
+    f(ctx, "machine.irq_ring", rt_irq_ring, sizeof rt_irq_ring);
+    f(ctx, "machine.irq_tail", &rt_irq_tail, sizeof rt_irq_tail);
+    f(ctx, "machine.irq_head", &irq_head, sizeof irq_head);
+    f(ctx, "machine.irq_pending", &rt_irq_pending, sizeof rt_irq_pending);
+    f(ctx, "machine.opl_pair", &rt_opl_pair, sizeof rt_opl_pair);
+    f(ctx, "machine.irq0_runs", &rt_irq0_runs, sizeof rt_irq0_runs);
+    f(ctx, "machine.irq0_bios", &rt_irq0_bios, sizeof rt_irq0_bios);
+    f(ctx, "machine.irq_saved", rt_irq_saved, sizeof rt_irq_saved);
+    return 0;
+}
+#endif

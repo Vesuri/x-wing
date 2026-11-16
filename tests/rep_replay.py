@@ -187,7 +187,7 @@ def host_image(labels):
                     str(out / 'rep.s')], check=True)
     toolchain = Path(os.environ.get('AMIGA_TOOLCHAIN') or Path.home() / '.local/opt')
     subprocess.run([str(toolchain / 'bin/m68k-amiga-elf-ld'), '-Ttext=0x10000', '-e', '_start',
-                    '-o', str(elf), *(str(p) for p in objects), str(out / 'program.o'),
+                    f'-Map={out / "xwing.map"}', '-o', str(elf), *(str(p) for p in objects), str(out / 'program.o'),
                     str(out / 'rep.o')], check=True)
     try:
         out.rename(final)

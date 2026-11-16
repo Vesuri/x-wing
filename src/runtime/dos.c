@@ -694,9 +694,9 @@ static void get_time(void)
 /* AH=08h: CON input, no echo, as the reference's CON device reads INT 16h
  * AH=10h: an F0h low byte reads as 0; a 0 or E0h low byte gives 0, then the
  * scan code. */
+static uint8_t scan_next;   /* read_char: the scan code a 0 character announced */
 static void read_char(uint16_t cs, uint16_t ip)
 {
-    static uint8_t scan_next;
     if (scan_next) {
         SET_AL(rt_r.ax, scan_next);
         scan_next = 0;
@@ -971,3 +971,25 @@ void rt_int21(uint16_t cs, uint16_t ip)
         rt_unsupported("DOS function", 0x21, cs, ip);
     }
 }
+
+#ifdef XWING_RESUME
+int rt_dos_fields(rt_field_fn *f, void *ctx, int saving)
+{
+    for (int k = 0; saving && k < SEARCH_SLOTS; ++k) {
+        if (searches[k].active) {
+            return RT_UNSAVED_SEARCH;
+        }
+    }
+    f(ctx, "dos.file_of_sft", file_of_sft, sizeof file_of_sft);
+    f(ctx, "dos.file_action", file_action, sizeof file_action);
+    f(ctx, "dos.file_stamped", file_stamped, sizeof file_stamped);
+    f(ctx, "dos.file_time", file_time, sizeof file_time);
+    f(ctx, "dos.file_date", file_date, sizeof file_date);
+    f(ctx, "dos.calendar", &dos_calendar, sizeof dos_calendar);
+    f(ctx, "dos.dta_seg", &dta_seg, sizeof dta_seg);
+    f(ctx, "dos.dta_off", &dta_off, sizeof dta_off);
+    f(ctx, "dos.next_search", &next_search, sizeof next_search);
+    f(ctx, "dos.scan_next", &scan_next, sizeof scan_next);
+    return 0;
+}
+#endif

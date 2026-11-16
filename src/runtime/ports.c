@@ -81,3 +81,19 @@ void rt_port_out(uint32_t port, uint32_t value, uint32_t width)
     }
     rt_stop("unsupported port out (port, width)", port, width);
 }
+
+#ifdef XWING_RESUME
+int rt_ports_fields(rt_field_fn *f, void *ctx, int saving)
+{
+    (void)saving;
+    f(ctx, "ports.pic_mask", &pic_mask, sizeof pic_mask);
+    f(ctx, "ports.pit_access", pit_access, sizeof pit_access);
+    f(ctx, "ports.pit_high", pit_high, sizeof pit_high);
+    f(ctx, "ports.pit_reload", pit_reload, sizeof pit_reload);
+    f(ctx, "ports.pit_divisor", &rt_pit_divisor, sizeof rt_pit_divisor);
+    f(ctx, "ports.opl_index", &rt_opl_index, sizeof rt_opl_index);
+    f(ctx, "ports.opl", rt_opl, sizeof rt_opl);
+    f(ctx, "ports.opl_keyon", rt_opl_keyon, sizeof rt_opl_keyon);
+    return 0;
+}
+#endif

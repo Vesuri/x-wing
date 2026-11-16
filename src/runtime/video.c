@@ -301,3 +301,27 @@ void rt_int10(void)
     }
     set_busy(0);
 }
+
+#ifdef XWING_RESUME
+int rt_video_fields(rt_field_fn *f, void *ctx, int saving)
+{
+    if (saving && busy) {
+        return RT_UNSAVED_HANDLER;
+    }
+    f(ctx, "video.dac", rt_dac, sizeof rt_dac);
+    f(ctx, "video.dac_index", &dac_index, sizeof dac_index);
+    f(ctx, "video.dac_component", &dac_component, sizeof dac_component);
+    f(ctx, "video.dac_changed", &dac_changed, sizeof dac_changed);
+    f(ctx, "video.vram_rows", rt_vram_rows, sizeof rt_vram_rows);
+    f(ctx, "video.vram_top", &rt_vram_top, sizeof rt_vram_top);
+    f(ctx, "video.vram_bottom", &rt_vram_bottom, sizeof rt_vram_bottom);
+    f(ctx, "video.vdrv_depth", &rt_vdrv_depth, sizeof rt_vdrv_depth);
+    f(ctx, "video.polled", &polled, sizeof polled);
+    f(ctx, "video.ready", &ready, sizeof ready);
+    f(ctx, "video.poll_irq0", &poll_irq0, sizeof poll_irq0);
+    f(ctx, "video.present_due", &rt_present_due, sizeof rt_present_due);
+    f(ctx, "video.fields", &rt_fields, sizeof rt_fields);
+    f(ctx, "video.frame", frame, sizeof frame);
+    return 0;
+}
+#endif

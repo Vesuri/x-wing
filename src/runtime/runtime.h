@@ -266,6 +266,33 @@ void rt_sfx_prerender(void);
 extern uint8_t rt_sfx_starts[RT_SFX_IDS];
 int rt_sfx_read(uint8_t *active, uint8_t *id, uint8_t *volume, uint8_t *owner);
 
+#ifdef XWING_RESUME
+/* Host lockstep resume (snapshot.c, docs/translator-design.md Resume): the
+ * runtime's state by field. Each module names its fields to `f`, saving or
+ * loading; with `saving` it returns non-zero where its state cannot be saved
+ * (RT_UNSAVED_*). Not saved: caches the load leaves empty (rt_lookup's, the
+ * cell walk's) and pointers the new image keeps (rt_guest, rt_deliver_code). */
+typedef void rt_field_fn(void *ctx, const char *name, volatile void *field, uint32_t bytes);
+#define RT_UNSAVED_SEARCH 1     /* a directory search is open */
+#define RT_UNSAVED_STOP 2       /* a stop raised at interrupt level is pending */
+#define RT_UNSAVED_HANDLER 3    /* an IRQ0 handler or a runtime service runs */
+#define RT_UNSAVED_CAPTURE 4    /* an effect capture runs */
+int rt_machine_fields(rt_field_fn *f, void *ctx, int saving);
+int rt_dos_fields(rt_field_fn *f, void *ctx, int saving);
+int rt_ems_fields(rt_field_fn *f, void *ctx, int saving);
+int rt_input_fields(rt_field_fn *f, void *ctx, int saving);
+int rt_ports_fields(rt_field_fn *f, void *ctx, int saving);
+int rt_video_fields(rt_field_fn *f, void *ctx, int saving);
+int rt_sfx_fields(rt_field_fn *f, void *ctx, int saving);
+/* The fields into out[room]: the bytes used; 0 when they do not fit, else
+ * -RT_UNSAVED_* (as uint32_t) when the state cannot be saved. */
+uint32_t rt_snapshot_save(uint8_t *out, uint32_t room);
+/* Back from in[bytes] (rt_snapshot_save's): 0, else the 1-based index of the
+ * first field whose name or size differs from this runtime's (or that is
+ * missing), or -1 for another version. */
+int32_t rt_snapshot_load(const uint8_t *in, uint32_t bytes);
+#endif
+
 /* stop: report and halt, never resumes */
 void rt_stop(const char *what, uint32_t a, uint32_t b) __attribute__((noreturn));
 void rt_unsupported(const char *what, uint16_t vector, uint16_t cs, uint16_t ip) __attribute__((noreturn));

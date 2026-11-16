@@ -225,3 +225,24 @@ int rt_sfx_read(uint8_t *active, uint8_t *id, uint8_t *volume, uint8_t *owner)
     }
     return 1;
 }
+
+#ifdef XWING_RESUME
+/* rt_sfx_prerender_on is the platform's choice, not state: the resumed run's own. */
+int rt_sfx_fields(rt_field_fn *f, void *ctx, int saving)
+{
+    if (saving && rt_sfx_capturing) {
+        return RT_UNSAVED_CAPTURE;
+    }
+    f(ctx, "sfx.captures", &rt_sfx_captures, sizeof rt_sfx_captures);
+    f(ctx, "sfx.capture", rt_sfx_capture, sizeof rt_sfx_capture);
+    f(ctx, "sfx.first", rt_sfx_first, sizeof rt_sfx_first);
+    f(ctx, "sfx.writes", rt_sfx_writes, sizeof rt_sfx_writes);
+    f(ctx, "sfx.ticks", rt_sfx_ticks, sizeof rt_sfx_ticks);
+    f(ctx, "sfx.opl", rt_sfx_opl, sizeof rt_sfx_opl);
+    f(ctx, "sfx.starts", rt_sfx_starts, sizeof rt_sfx_starts);
+    f(ctx, "sfx.capture_n", &capture_n, sizeof capture_n);
+    f(ctx, "sfx.capture_tick", &capture_tick, sizeof capture_tick);
+    f(ctx, "sfx.driver_cs", &driver_cs, sizeof driver_cs);
+    return 0;
+}
+#endif

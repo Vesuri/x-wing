@@ -430,6 +430,44 @@ handler reads: sync for the declared span).
   at `rt_replay_done` when the last snapshot is reached with every service, interrupt,
   REP slice and VGA read consumed. `make test-amiga-live`: the production image to the
   m01 label in real time, not compared.
+- Resume (`tests/host_resume.py`; `make t-resume-<milestone>`, `t-resume-plants`,
+  `t-sab-resume`): host lockstep to a flight milestone from a save at the flight's
+  start (`POINTS`: FLIGHT.OVL+2856C, the flight's first instruction, before its sound
+  loader and the effect capture). `host_run.py --save` makes it in a boot run where the
+  point is reached in main code with no service, interrupt handler, REP slice or
+  capture in progress, and keeps it (`tmp/resume/`) only once that run passes its
+  milestone. A save holds the guest RAM, state block and EMS store; the runtime's
+  fields (`src/runtime/snapshot.c`: each module names its fields in a versioned
+  record, loaded only by a runtime whose fields agree in name, order and size; caches
+  stay empty and pointers the new image's; an open directory search, a pending
+  interrupt-level stop or a running handler or capture refuses the save); the
+  generated code's registers; the open guest calls, each 68k return address read as
+  its return site (`cmp #ip,d7` or `#cs:ip`, the guest label after it, its mismatch
+  stop); the harness's cursors and checks (services, interrupts, VGA reads, REP
+  slices, keys, files and positions, dead-stack and machine-read sets, OPL writes,
+  the I3 monitor); and the fingerprints of what ran before it, recorded by a C block
+  hook (`tests/host_cov.c`): each guest label region's assembly text, the program
+  header and the dispatch rows per CS:IP, each runtime input section's bytes and
+  relocations by name (host objects are built one section per function and object,
+  linked with a map) and the harness source that decides guest-visible behaviour.
+  `--resume` boots the current image to its guest entry, restores the save, returns
+  each open call through a stub that repeats its site's compare and jumps to its label
+  in this image, and enters at the point's label; the lockstep and the milestone
+  checks then run as from boot, reading the reference from the save's line on. Any
+  fingerprint that differs runs from boot and saves anew. `--resume-plants` changes,
+  on the save, a label and a runtime section that ran, a dispatch row and the harness
+  (each refused) and a label and a section that did not (each may resume);
+  `--resume-plant ems|file` resumes with the handles' EMS page tables (`ems.page_of`)
+  or the open files' SFT entries (`dos.file_of_sft`) left out of the record, and
+  `t-sab-resume` requires a lockstep divergence, not the timeout alone (MEASURED, m12:
+  a lost reference interrupt after 4,152 services; a seek returning invalid handle
+  after 2,819). An open file's position is not a control at this point: the only file
+  open is FLIGHT.OVL, and the overlay manager seeks it absolutely before each of its
+  11 reads after the save line (MEASURED, m12 reference trace), so a resume with it
+  rewound passes. MEASURED (host runs sharing the machine with other projects' runs,
+  not a matched workload): to m12 5,288 s from boot, 125 s resumed; to m14 11,787 s
+  from boot, 2,355 s resumed (13,449 of its 58,737 interrupts after the save); every
+  check of the resumed runs equal to their boot runs'.
 - Display (D9 slice): only the graphics driver (`emit.GRAPHICS_DRIVER`,
   RTSVGA) writes video memory. Before each of its memory stores the
   lowering checks the segment for A000h and calls `rt_vram_mark` (offset,
