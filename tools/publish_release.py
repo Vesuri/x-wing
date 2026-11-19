@@ -12,7 +12,7 @@ release date it derives:
            the archive's ReadMe
 Without PUBLISH=1 it only prints them. With it, it checks the GitHub account, that HEAD is
 on main on GitHub and that the tag and release do not exist, then tags, creates the release
-(a prerelease while the version is below 1.0), uploads the archive and its .sha256 and
+(a normal release, marked latest, as the WHDLoad project's), uploads the archive and its .sha256 and
 downloads the archive again to compare. GitHub's API fails intermittently, so every remote
 step is retried and checked by reading the state back.
 """
@@ -132,11 +132,10 @@ def main():
     if hashlib.sha256(archive.read_bytes()).hexdigest() != digest.read_text().split()[0]:
         sys.exit(f'{archive.name} does not match {digest.name}')
     tag, title = version, f'X-Wing {version} ({DATE})'
-    prerelease = int(version.split('.')[0]) < 1
     notes = notes_of(archive, version)
     head = run('git', 'rev-parse', 'HEAD').stdout.strip()
     print(f'tag      {tag} on {head[:8]} ({run("git", "log", "-1", "--format=%s").stdout.strip()})')
-    print(f'title    {title}' + (' (prerelease)' if prerelease else ''))
+    print(f'title    {title}')
     print(f'files    {archive.name}, {digest.name}')
     print('notes')
     print(''.join(f'         {line}\n' for line in notes.splitlines()), end='')
@@ -161,7 +160,7 @@ def main():
         f.write(notes)
     try:
         create = ['gh', 'release', 'create', tag, '-R', GH_REPO, '--verify-tag',
-                  '--title', title, '--notes-file', f.name] + (['--prerelease'] if prerelease else [])
+                  '--title', title, '--notes-file', f.name, '--latest']
         retry(lambda: run(*create, check=False), lambda: release_exists(tag), f'creating release {tag}')
     finally:
         os.unlink(f.name)

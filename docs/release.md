@@ -76,7 +76,8 @@ is described in [whdload.md](whdload.md).
   archive against them and checks the `.sha256`.
 - **Publishing:** with `PUBLISH=1` it also checks the GitHub account (Vesuri) and that HEAD
   is on `main` on GitHub. It pushes a lightweight tag, the version (`0.1`), on HEAD, and
-  creates the GitHub release `X-Wing <version> (dd.mm.yyyy)`, a prerelease below 1.0.
+  creates the GitHub release `X-Wing <version> (dd.mm.yyyy)`, a normal release marked
+  latest, as the WHDLoad project's (a prerelease is not shown as the latest release).
 - **Notes:** the early-alpha notice, then the version's ReadMe history items.
 - **Assets:** it uploads the archive and its `.sha256`, then downloads the archive again
   to compare.
