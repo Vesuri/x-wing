@@ -1,19 +1,96 @@
-# X-Wing
+# X-Wing — Amiga
 
-Amiga port of LucasArts' X-Wing. The base is the 1993 DOS floppy release 1.0; the
-Macintosh demo's 68k code is an optional donor of native routines, following Vette!,
-Alone in the Dark, Prince of Persia 2 and Secret Weapons of the Luftwaffe. Only reference
-setup exists. The DOS release is installed by its original installer and run unattended
-under a scripted DOSBox-X. The Macintosh demo is installed on a fresh System 7.5.5 volume
-and run on an emulated 68040 Macintosh (MAME `macqd700`). No analysis or port code exists
-yet.
+An unofficial Amiga port of the 1993 PC space combat simulator **X-Wing 1.0** by
+LucasArts and Totally Games, designed by Lawrence Holland and Edward Kilham. Fly the
+Rebel Alliance's starfighters against the Empire: training on the Pilot Proving
+Ground, historical missions and the Tour of Duty campaigns.
 
-## Inputs
+The port runs the original game code, translated offline from 16-bit x86 to 68020 by
+this repository's static translator; there is no x86 emulator. The game runs as the
+original's VGA version (320×200, 256 colours) on AGA, and its AdLib music and sound
+effects are resynthesised on Paula.
 
-AmigaXDev's `make setup` supplies the shared tools (`~/.local/share/amiga/env.sh`); this
-project also needs MAME 0.289, hfsutils, 7zz and DOSBox-X's build dependencies
-(`make dos-emulator` builds the patched DOSBox-X). Supply these yourself, read-only, at the
-paths below. Git ignores them; `manifest/` pins their SHA-256.
+Current Amiga release: **0.1 (19.11.2026), an early alpha**.
+
+## What to expect from 0.1
+
+0.1 runs the whole game, but nothing has been optimized yet. It is for people who
+want to try the port early and report what they find.
+
+- **Checked against the original:** the port was run on an emulated A1200 with a 68030
+  and compared step by step with the PC original under DOSBox-X. At each of these points
+  the screen, the memory and every call the game made matched:
+  - the start, the logo and the title;
+  - pilot registration and the concourse;
+  - the Pilot Proving Ground, Historical Combat, the Tour of Duty and the tech room;
+  - a training flight, a mission flight and a Tour of Duty battle;
+  - the film room and film playback, including a combat film;
+  - the exit to DOS.
+- **Speed:** not optimized and not yet measured. Expect it to be slow, above all in
+  flight. Speed is the next step of the port.
+- **Unsupported paths stop the game:** where the game does something the port does not
+  support yet, it stops rather than guessing, and the tests do not cover every mission
+  or menu choice.
+  - Under WHDLoad the requester says "X-Wing stopped".
+  - From a Shell, a line starting with `XWING_STOP` appears.
+  - Please [report it](https://github.com/Vesuri/x-wing/issues) with that line and
+    what you were doing.
+- **Saving:** pilots and films are written as on the PC, but saving has not been tested
+  under WHDLoad yet. Keep copies of pilots you care about.
+- **Testing:** only on an emulated A1200 with a 68030; not yet on real hardware, a
+  68040 or 68060, or with WHDLoad's `MMU` option.
+- **Memory:** under WHDLoad the game needs **more than 8 MB Fast RAM**. Bringing it
+  within 8 MB is planned.
+- **Not yet:** a joystick; the Sound Blaster's digitized speech and effects; Roland and
+  General MIDI music.
+- **Copy protection:** the code-name question is skipped. The game continues as if it
+  had been answered correctly.
+
+## Requirements and installation
+
+- A PAL or NTSC Amiga with AGA and a 68020 or better; **68030 or better recommended**.
+- **2 MB Chip RAM, and more than 8 MB Fast RAM** under WHDLoad (for example 16 MB). The
+  slave reserves 8.5 MB, including the Kickstart image.
+- WHDLoad 17+, Installer 43+, and a supported Kickstart 3.1 image with its RTB.
+- The five 1.44 MB PC floppies of **X-Wing 1.0** (LucasArts, 1993), as `disk1.img` to
+  `disk5.img`, or as the files `XWING.001` to `.005` with `INSTALL.EXE`, `DETECT.EXE`
+  and `READ.ME` from disk 1. Other releases, such as the CD-ROM editions, are not
+  supported.
+
+Extract `XWing-0.1.lha`, open its **XWing Install** drawer and run **Install**. Select
+the destination and the drawer with the disks. Every file is checked, and damaged or
+other disks are refused. The game is installed as the original installer sets it up for
+AdLib sound. Updating keeps pilots and films. Start the installed **XWing** icon.
+
+No original game code or data, Kickstart image or WHDLoad binary is distributed. See
+[the release ReadMe](release/ReadMe) for the supported ROM file names and the full
+instructions.
+
+## Controls
+
+Keyboard and mouse work as in the PC original, with keys at their US keyboard
+positions; see the original manual. Quit from the game's menus. The WHDLoad QuitKey
+(**Help**) quits immediately, without saving.
+
+## Building
+
+The game uses `m68k-amiga-elf-gcc`, `elf2hunk` and vasm; the WHDLoad slave also needs
+the WHDLoad SDK includes. The environment comes from AmigaXDev's `make setup`
+(`~/.local/share/amiga/env.sh`).
+
+```sh
+make release          # dist/XWing-$(cat VERSION).lha, audited; clean tree only
+make amiga            # standalone executable: amiga/out/XWing.exe
+make help             # every target: references, translator gates, replays, sound
+```
+
+Without WHDLoad, the installed game runs from a Shell in its `data` drawer as `XWing`.
+
+The tests compare the port with the original running under a scripted DOSBox-X. They
+need the inputs below, which you supply yourself, read-only, at these paths. Git
+ignores them, and `manifest/` pins their SHA-256. Building the reference also needs
+DOSBox-X's build dependencies (`make dos-emulator`); the postponed Macintosh reference
+needs MAME 0.289, hfsutils and 7zz.
 
 | Path | What |
 |---|---|
@@ -25,30 +102,16 @@ paths below. Git ignores them; `manifest/` pins their SHA-256.
 | `ref/mame/roms/adbmodem/342s0440-b.bin` | ADB modem ROM, MAME SHA-1 `4a35a44605073ae6076a0292e2056ee4d938d1bd` |
 | `ref/mame/dl/755_2GB_drive.zip` | Steve Taylor's System 7.5.5 2 GB drive archive |
 
-## Commands
+How the port works, its gates and what comes next are in the [port plan](docs/port-plan.md),
+[design](docs/design.md) and [phases](docs/phases.md). Remaining work is in
+[open-work.md](docs/open-work.md), and [AGENTS.md](AGENTS.md) indexes the other docs.
 
-```sh
-make verify-input           # both archives and the manual
-make dos-emulator           # build the scripted DOSBox-X
-make dos-install            # five images, original INSTALL.EXE; prints INSTALL PASS
-make dos-configure          # the installer selects AdLib; prints CONFIGURE PASS
-make dos-reference          # traced milestones, logo to exit to DOS; prints MILESTONES PASS
-make dos-run RUN=name ARGS=...  # one traced run (tools/pc_run.py)
-make map                    # manager check, sweep, code writes, census of the newest milestone set; prints MAP PASS
-make ghidra                 # one Ghidra program per code unit in tmp/ghidra-proj
-make dos-oracle             # unpatched heavy-debug DOSBox-X for the differential's RETF oracle
-make test-x86               # gate 3: Capstone cross-check, Unicorn differential, sabotage (AmigaXDev's Unicorn)
-make gen                    # translate the root, both overlays and ADLIB.IMS to build/gen (audit, coverage)
-make test-m68k              # gate 4: G1 regeneration, 68020 differential, block test, guards, sabotage (vasm)
-make test-host              # gate 5 host: lockstep to m01 against its host reference
-make test-amiga             # gate 5: m01 replayed on the 68030 model (FS-UAE + GDB), then the host lockstep against it
-make test-amiga-live        # the production image runs to the m01 label in real time (no compare)
-make amiga                  # the Amiga executable (amiga/out/XWing.exe); amiga-sync: the sync build
-make dos-play               # play on a period 386; the copy protection is answered for you
-make extract-original-data  # Macintosh demo: both forks and Finder data into tmp/runtime-data
-make reference              # fresh volume, configure, restart, launch; prints REFERENCE PASS
-```
+## Credits and licensing
 
-See [source inventory](docs/source-inventory.md), [DOS reference](docs/dos-reference.md),
-[Macintosh reference](docs/mac-reference.md),
-[design](docs/design.md), [port plan](docs/port-plan.md), [open work](docs/open-work.md) and [agent rules](AGENTS.md).
+X-Wing and its original assets belong to their respective copyright holders. This is an
+unofficial fan port, not affiliated with or endorsed by them. Amiga port by Vesa
+Halttunen (Vesuri).
+
+The install helper uses the AmigaXDev installer helpers (LGPL-2.1-or-later; see
+[its README](tools/install-data/README.md)). That licence applies to the helper only,
+not to the original game.

@@ -91,7 +91,7 @@ def main():
         assert b'$VER: ' + name.encode() + b' ' + version + b' (' + DATE.encode() + b')' in payloads[name], 'version: ' + name
     assert b'$VER: Install ' + version + b' (' + DATE.encode() + b')' in payloads['Install']
     assert b'version ' + version + b' (' + DATE.encode() + b'):' in payloads['ReadMe']
-    for heading in (b'EARLY ALPHA', b'not\n optimized', b'Requirements:', b'Installation:', b'Playing:',
+    for heading in (b'EARLY ALPHA', b'not\n optimized', b'What to expect:', b'Requirements:', b'Installation:', b'Playing:',
                     b'History:', b'Contact:', b'Credits:', b'https://github.com/Vesuri/x-wing'):
         assert heading in payloads['ReadMe'], heading
     # WHDLoadSlave header, whdload.i: flags +14, BaseMem +16, keyexit +31, ExpMem +32.

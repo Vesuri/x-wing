@@ -153,7 +153,7 @@ _bootdos
 _getcacr
         movec cacr,d0
         rte
-_failed dc.b "X-Wing could not start. Check the installed original data files.",0
+_failed dc.b "X-Wing stopped. It could not start, or it reached something this version does not support yet. See the ReadMe.",0
         IFD MEMFREE
 _memfreename dc.b "memfree",0
         ENDC

@@ -13,8 +13,8 @@ the Luftwaffe's `whdload/SwotlSlave.s` (`manifest/references.tsv`) and adapted. 
 - **Start:** `_bootdos` loads `data/XWing` (the stripped release image), locks the current
   drawer as PROGDIR, and runs the image through `RunCommand` with a 16 KiB stack and an empty
   argument line. The same image runs from a Shell.
-- **Failure:** a failed start gives `TDREASON_FAILMSG` ("X-Wing could not start"); a missing
-  executable gives `TDREASON_DOSREAD`.
+- **Failure:** a nonzero result, from a failed start or a runtime stop, gives
+  `TDREASON_FAILMSG` ("X-Wing stopped"). A missing executable gives `TDREASON_DOSREAD`.
 - **Header:**
   - `slv_Version` 17, with `WHDLF_NoError|WHDLF_ReqAGA|WHDLF_Req68020`;
   - `BLACKSCREEN`, `INITAGA`, `SEGTRACKER` and `NO68020`;

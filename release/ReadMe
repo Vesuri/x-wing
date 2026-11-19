@@ -11,9 +11,43 @@
  PC game by LucasArts and Totally Games.
 
  THIS IS AN EARLY ALPHA. The port runs the whole game, but it is not
- optimized yet: flight is slow even on fast processors, and a path the
- tests have not reached may stop with an error message. Bug reports are
- welcome (see Contact).
+ optimized yet. Please read "What to expect" before installing.
+
+
+ What to expect:
+ ---------------
+ What has been checked: the port's code was run in an emulated A1200 with a
+ 68030 and compared step by step against the PC original running under
+ DOSBox-X, at these points of the game: the start, the LucasArts logo, the
+ title, pilot registration, the concourse with the pilot saved, the Pilot
+ Proving Ground, Historical Combat, the Tour of Duty, the tech room, the
+ film room, a training flight, a mission flight, a Tour of Duty battle,
+ playing back recorded films (a combat film among them) and the exit to
+ DOS. At each point the screen, the memory and every call the game made
+ matched the original.
+
+ What to expect when playing:
+ - Speed: nothing has been optimized yet, and the speed has not been
+   measured. Expect the game to run slowly, flight above all. Making it
+   faster is the next step of the port.
+ - Unsupported paths: the port stops rather than guessing when the game
+   does something it does not support yet. The tests cover the paths
+   above, not every mission or menu choice. Under WHDLoad a stop shows the
+   requester "X-Wing stopped"; started from a Shell, the Shell shows a line
+   beginning with XWING_STOP. Please report it with that line and what you
+   were doing (see Contact).
+ - Saving: pilots and films are written as on the PC, but saving under
+   WHDLoad has not been tested yet. Keep copies of pilot files you care
+   about.
+ - Machines: tested only in an emulated A1200 with a 68030, not yet on
+   real hardware, on a 68040 or 68060, or with WHDLoad's MMU option.
+ - Memory: under WHDLoad it needs more than 8 MB Fast RAM (see
+   Requirements). Using less is planned.
+ - Sound: AdLib music and sound effects play on the Amiga. The Sound
+   Blaster's digitized speech and effects are not supported yet.
+ - Input: keyboard and mouse. No joystick yet.
+ - The copy-protection question is skipped: the game continues as if it
+   had been answered correctly.
 
 
  Requirements:
