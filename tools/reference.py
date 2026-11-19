@@ -60,6 +60,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import seeds
 import xwing_model as M
 
 REPO = Path(__file__).resolve().parent.parent
@@ -147,6 +148,8 @@ def run(base: str, rows: dict[str, dict], name: str, polls: bool = False,
         cmd += ['--bypass', bypass_spec()]
     if opl:
         cmd += ['--opl']
+    for path in seeds.files(name):
+        cmd += ['--seed', str(path)]
     trace = REPO / 'ref/dosbox/runs' / run_name / 'trace'
     status = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT).returncode
     if status != 0:

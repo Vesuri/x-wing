@@ -62,6 +62,7 @@ import irq_monitor  # noqa: E402
 import host_resume  # noqa: E402
 from translator import emit, image  # noqa: E402
 import reference as R  # noqa: E402  tools/reference.py: the milestone table's sites and keys
+import seeds  # noqa: E402
 
 REPO = image.REPO
 ELF = REPO / "build/host/xwing.elf"
@@ -2321,6 +2322,9 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     h = Host(image.M.REF, sabotage, elf=elf or rep_replay.host_image(rep.labels),
              retrace=retrace_runs(trace))
     h.calendar_date, h.file_clock = reference_clocks(trace)
+    for path in seeds.files(milestone):   # beside the installation, as a file the guest wrote
+        h.written[path.name.upper()] = bytearray(path.read_bytes())
+        h.file_stamps[path.name.upper()] = dos_file_stamp(seeds.STAMP)
     # --resume (tests/host_resume.py): from the milestone's save if this image may,
     # else from boot, saving anew
     path = save_path(milestone, late)

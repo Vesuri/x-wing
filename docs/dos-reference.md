@@ -248,6 +248,7 @@ milestone can differ slightly between runs with equal pins, so they are reported
 | m14-tour-battle | Right ("Enter Tour of Duty"), Enter (skips the crawl), (Left, Right, Enter) ×2 | Tour I mission 1, "Destroy Imperial Convoy", `frame` #2,500 and 100 later |
 | m15-film-replay | (Film room) | The film recorded in X-Wing mission 4 played in the film room, `frame` #300 and 100 later; `TEST.CLP` is pinned |
 | m16-exit-to-dos | Esc, pointer to "Exit to DOS", click | `XWING.EXE+1660`, INT 21h AX=4C03, after mode 3 at `+11F1` |
+| m17-combat-film | (Combat film) Up, Enter, P, O ×3 | The owner's combat film played with the camera tracking Red 3, `frame` #30 and 50 later: laser fire and TIE fighters on screen |
 
 In the concourse, ready rooms, briefing and flight deck, the arrow keys move the pointer
 between hotspots and Enter selects. "Left, Right" lands on the door that proceeds.
@@ -277,6 +278,25 @@ m15 records a film and plays it (MEASURED, each step's screen seen in a snapshot
    AX=0100 returned) and restores it after the load with INT 21h AH=3Bh `C:\XWING` (AX=0000,
    CF clear). P plays it; the playback runs `frame`.
 
+### Combat film
+
+m17 plays a film the owner recorded in `make dos-play` (X-Wing mission 4, flying into the
+TIE groups): `COMBAT.CLP`, pinned in `manifest/films.sha256` and kept in ignored
+`ref/films/`. It is the P1 combat scene and P8's combat window (owner decision 2026-11-19).
+`reference/seeds.csv` places it in `C:\XWING` beside the installation before the run, with
+one fixed modification time, in the DOS reference, host lockstep and the Amiga replay
+(`tools/seeds.py`). From m10's "Load Mission Film", Up, Enter load it and P plays it
+(MEASURED, snapshots):
+- the camera follows Red 2, the owner's craft; each O moves the tracked object, Red 1, Red 2,
+  Red 3, and turns Track on (T only toggles Track);
+- tracking Red 3, the fight is on screen from about 30 frames after the third O; by about
+  150 frames later only distant craft remain, and the film ends about 450 frames after P
+  ("At end of film"). The milestone stops at its last snapshot.
+
+A film is `START.RPY` (26,505 bytes) followed by the recorded input (`INPUT.SPL`), so the
+playback appears to run the flight again from its start state (INFERRED from the sizes;
+not yet compared with a live flight's executed code or cost).
+
 ### Copy protection
 
 After the intro, a "Copy Protection" dialog cycles triples of glyphs. A key press freezes
@@ -290,18 +310,19 @@ question depends on the clock and on when the key arrives:
 - At 8,000 cycles/ms with DOS clock 1993-02-01 12:00, the question is page 16's right code,
   ALTAR (used by `make dos-play`).
 
-### Not yet reached
+### Flight cost
 
-- **A Star Destroyer battle.** A new pilot can open every Historical Combat mission of a
-  craft (the mission row's arrows, reached with Down; m15 flies X-Wing mission 4, "Beat The
-  Odds", three TIE groups) but only the first of Tour I. Which mission holds a Star
-  Destroyer, and which scene is heaviest, is not yet measured. Left alone, the maze flight
-  stops executing the menu and frame input sites after frame 23,367, about 18.2 billion
-  instructions (about 607 emulated seconds) into the game, in two runs; not investigated
-  since a flight ending at a key prompt was found to look the same (Film room). Instructions
-  per frame over 50–100 frames after the first snapshot (MEASURED): maze about 644,000,
-  X-Wing mission 1 about 506,000, Tour I mission 1 about 499,000. Whether the flight paces
-  its frames is not known:
+- **A Star Destroyer battle** is not reached and no longer required: the owner accepted the
+  combat film (m17) as the P1 scene (owner decision 2026-11-19). A new pilot can open every
+  Historical Combat mission of a craft (the mission row's arrows, reached with Down) but
+  only the first of Tour I.
+- Left alone, the maze flight stops executing the menu and frame input sites after frame
+  23,367, about 18.2 billion instructions (about 607 emulated seconds) into the game, in
+  two runs; not investigated since a flight ending at a key prompt was found to look the
+  same (Film room).
+- Instructions per frame over 50–100 frames after the first snapshot (MEASURED): maze about
+  644,000, X-Wing mission 1 about 506,000, Tour I mission 1 about 499,000. Whether the
+  flight paces its frames is not known:
   - it never reads the retrace status (3DAh) or the timer ports;
   - `ADLIB.IMS` sets PIT channel 0 to divisor 1000h (about 291 Hz) and hooks INT 8, which
     chains to the BIOS at 18.2 Hz.

@@ -18,6 +18,7 @@ XWING.EXE,0x014b3,3A07,0x6dd2,0x6e13,w,"the same startup clear over the flight's
 XWING.EXE,0x00a28,03DF,0x01fc,0x01fd,w,"mov es:[01FCh],ax with ES from DGROUP:636Ah (0C01h, root paragraph 03DFh): the offset of the driver entry pointer the flight's music wrappers call through at interrupt level, stored once at the driver's install (MEASURED: tests/irq_monitor.py at m01-logo and m12-training-flight)"
 XWING.EXE,0x00a2c,03DF,0x01fe,0x01ff,w,"the same pointer's segment (522Ah), stored next (MEASURED: as +00A28)"
 ADLIB.IMS,0x02045,G,0x0932,0x09c5,w,"driver request code in main context writes its voice and instrument tables that the tick uses (MEASURED: tests/irq_monitor.py at m12-training-flight)"
+ADLIB.IMS,0x02045,G,0x09f8,0x0a07,w,"the same request code writing a further voice record (record 3 at G:09F6h) that the tick uses (MEASURED: tests/irq_monitor.py at m17-combat-film)"
 ADLIB.IMS,0x02372,G,0x0d32,0x0e31,w,"driver request code in main context writes its voice and instrument tables that the tick uses (MEASURED: tests/irq_monitor.py at m12-training-flight)"
 FLIGHT.OVL,0x01330,3A07,0xe720,0xe720,w,"flight main code writes the timer flag byte that the root timer callback (the tick chain) reads and writes (MEASURED: tests/irq_monitor.py at m12-training-flight)"
 FLIGHT.OVL,0x0133e,3A07,0xe721,0xe721,w,"flight main code writes the timer flag byte that the root timer callback (the tick chain) reads and writes (MEASURED: tests/irq_monitor.py at m12-training-flight)"

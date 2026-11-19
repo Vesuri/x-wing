@@ -26,6 +26,7 @@ from pathlib import Path
 
 from dos_reference import fresh_game, new_run
 from dosbox_x import DOSBOX, verify as verify_emulator
+import seeds
 from extract_original_data import ROOT
 
 CONF = ROOT / 'reference/dosbox-x.conf'
@@ -85,11 +86,14 @@ def main() -> int:
     parser.add_argument('--bypass', default='',
                         help="MODULE+HEX:LEN:QUESTION: the port's copy-protection bypass at that call")
     parser.add_argument('--set', action='append', default=[], help='extra DOSBox-X setting')
+    parser.add_argument('--seed', action='append', default=[], type=Path,
+                        help='a pinned file placed in C:\\XWING before the run (tools/seeds.py)')
     args = parser.parse_args()
 
     verify_emulator()
     run = new_run('pc', args.name)
     fresh_game(run, configured=True)
+    seeds.place(args.seed, run / 'c/XWING')
     (run / 'trace').mkdir()
     env = dict(os.environ, SDL_VIDEODRIVER='dummy', SDL_AUDIODRIVER='dummy',
                XWING_TRACE='1', XWING_TRACE_DIR=str(run / 'trace'),

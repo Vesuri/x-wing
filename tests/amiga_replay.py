@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path[:0] = [str(Path(__file__).resolve().parent), str(Path(__file__).resolve().parents[1])]
 import host_run as H  # noqa: E402
 import rep_replay  # noqa: E402
+import seeds  # noqa: E402  tools/seeds.py (host_run puts tools/ on the path)
 from translator import cfg, emit, gen  # noqa: E402
 from translator.lower import DRVSEG, LOADSEG  # noqa: E402
 
@@ -215,10 +216,13 @@ def run(name, out, trace, work, late=False, screen=False, timeout=TIMEOUT, sfx=F
     # debug.sh copies the original data but does not delete game writes: a fresh
     # run directory, so a replay inherits no file from an earlier attempt.
     run_dir = Path(tempfile.mkdtemp(prefix='run-', dir=out))
+    seed_dir = run_dir / 'seed'   # the milestone's seed files (tools/seeds.py), copied by debug.sh
+    seed_dir.mkdir()
+    seeds.place(seeds.files(name), seed_dir)
     env = dict(os.environ, DEBUG_PORT=str(port), FSUAE_PORT_PINNED='1',
                AMIGA_CPU=os.environ.get('AMIGA_CPU', '68030'),
                XWING_ELF=str(work / 'out/XWing.elf'), FSUAE_RUN=os.path.relpath(run_dir, ROOT / 'amiga'),
-               FSUAE_CLAIM_STRICT='1', XWING_ARGS='',
+               FSUAE_CLAIM_STRICT='1', XWING_ARGS='', XWING_SEED_DIR=str(seed_dir),
                # The diagnostic image carries the reference (replay_data.h: 2.3 MB of
                # .rodata at m01, 15 MB at m14) beside the code: with the target's 8 MB
                # of Fast RAM the guest block no longer fits ("X-Wing not enough

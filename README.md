@@ -19,6 +19,7 @@ paths below. Git ignores them; `manifest/` pins their SHA-256.
 |---|---|
 | `tmp/originals/000110_x-wing.7z` | the DOS floppy release, five 1.44 MB images, 6,868,271 bytes, SHA-256 `c3efc7a4…a60b8c` |
 | `tmp/X-Wing-Manual.pdf` | the DOS release's Starfighter Pilot Manual, a 9-page scan holding the copy-protection code-names, SHA-256 `d4596c98…993a61` |
+| `ref/films/COMBAT.CLP` | the owner's combat film for m17 (`make dos-play`, X-Wing mission 4), 31,327 bytes, SHA-256 `f88e61a1…100125` |
 | `tmp/originals/xwingdemo.sea__1.hqx` | the Macintosh demo, 8,805,322 bytes, SHA-256 `1cd9cf7a…dfd0cb` |
 | `ref/mame/roms/macqd700/420dbff3.rom` | Quadra 700/900 ROM, 1 MiB, MAME SHA-1 `7a8ee468d16e64f2ad10cb8d1a45e6f07cc9e212` |
 | `ref/mame/roms/adbmodem/342s0440-b.bin` | ADB modem ROM, MAME SHA-1 `4a35a44605073ae6076a0292e2056ee4d938d1bd` |

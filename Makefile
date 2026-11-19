@@ -224,7 +224,7 @@ t-sab-resume: host
 # the host reference's interrupts, REP slices, VGA status reads and clocks on the
 # 68030 model; its capture at the milestone gets the host run's checks.
 # AMIGA_ARGS: --screen (m03, m03c, m03p, m03q) or --bypass (later milestones);
-# m10 and m15 also --exempt with tests/host_run.py --bypass --exempt-out of the same
+# m10, m15 and m17 also --exempt with tests/host_run.py --bypass --exempt-out of the same
 # milestone; a later milestone needs a longer --timeout (AMIGA_ARGS) than the default hour.
 # test-amiga-live: the production image runs to the milestone label in real time
 # (amiga/milestone.gdb.in); its state is timing-dependent, so it is not compared.
