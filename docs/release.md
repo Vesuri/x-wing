@@ -79,13 +79,13 @@ Released ahead of P8 with a reduced gate (`docs/design.md`, "Early alpha 0.1"):
 The rest of gate 8 stays open (`docs/port-plan.md`, P9). The 8 MB Fast RAM target is not met
 under WHDLoad ([whdload.md](whdload.md#memory)).
 
-Built by `make release` from `4094375` on 19.11.2026:
+Built by `make release` from `1dfb2a5` on 19.11.2026:
 
 | Artifact | SHA-256 |
 |---|---|
-| `XWing-0.1.lha`, 1,283,853 bytes | `4ad40947d904e0378a55c4de21d640e5fce858cfcebc6ede6abeb3c04f1a91e9` |
+| `XWing-0.1.lha`, 1,284,645 bytes | `d335939aad6790fc89a78d68a6fb1dcce478c83492a3822a4535337d5cb0cf93` |
 | `XWing` (exe) | `d0db4f9f9ff6956d98481a2bc13c17e2e8462b4946378a4cfd733fb07b4ce847` |
-| `XWing.slave` | `416e4088fd8aca585e98bf37086c094d3dabc276a801c9437fc29b5102df1438` |
+| `XWing.slave` | `d45ad54d7f09911d5e7dea037b0238616b43ed609d46b12855dd38a831c07fbc` |
 | `XWingInstallData` | `6beb192d17c1fd67ab6d69b3f8a64d564f8b0d9d37042cfc67b2fb00712bbeb0` |
 
 ## Original data
