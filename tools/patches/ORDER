@@ -14,3 +14,5 @@ dosbox-x-xwing-game.patch
 dosbox-x-xwing-script.patch
 dosbox-x-xwing-retrace.patch
 dosbox-x-xwing-bypass.patch
+dosbox-x-xwing-key-wait.patch
+dosbox-x-xwing-watch.patch

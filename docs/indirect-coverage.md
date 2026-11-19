@@ -106,6 +106,6 @@ Values are the m01 and m14 reference snapshots' (DGROUP 4229h at run time).
 
 ## Paths still requiring execution coverage
 
-All 165 sites in "Calls through pointers". The milestones in open-work 1 (a film-room
-replay and a Star Destroyer battle) are the planned runs that reach more of FLIGHT and
-FRONTEND.
+All 165 sites in "Calls through pointers". The milestone in open-work 1 (a Star Destroyer
+battle) is the planned run that reaches more of FLIGHT and FRONTEND; m15's film-room
+replay has not been reviewed against these sites.

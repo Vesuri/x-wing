@@ -1,7 +1,7 @@
 # Open work
 
 Steps of the [port plan](port-plan.md), in order; P9 and P10 follow there. The repo rules (P0),
-the reference loop (P1, but for the two milestones below), the static and live map (P2),
+the reference loop (P1, but for the milestone below), the static and live map (P2),
 x86 semantics (P3: `make test-x86`), the 68020 backend (P4: `make test-m68k`) and the
 first vertical slice (P5: `make test-amiga`, the Amiga replay and the host lockstep to m01)
 and the whole game (P6: host lockstep and the Amiga replay over every pinned milestone,
@@ -9,13 +9,12 @@ gate 6) are in place, and P7's music and prerendered effects play on Paula (`mak
 `make test-amiga-audio`, `make t-amiga-sfx`). Host lockstep to a flight milestone resumes
 from a save at the flight's start (`make t-resume-<milestone>`).
 
-1. P1: the two milestones not yet reached ([DOS reference](dos-reference.md#not-yet-reached)).
-   The rest of P1 is in place: `make dos-reference` passes 19 pinned milestones.
-   Acceptance:
-   - A film-room replay: a flight is ended and its film played back in the film room.
-   - A Star Destroyer battle, or the heaviest combat scene a reachable pilot state allows,
-     chosen by a measured cost. Instructions per frame rank scenes only if the flight does
-     not pace its frames, which is not yet known.
+1. P1: the milestone not yet reached ([DOS reference](dos-reference.md#not-yet-reached)).
+   The rest of P1 is in place: `make dos-reference` passes 20 pinned milestones.
+   Acceptance: a Star Destroyer battle, or the heaviest combat scene a reachable pilot
+   state allows, chosen by a measured cost. Instructions per frame rank scenes only if the
+   flight does not pace its frames, which is not yet known. Every Historical Combat
+   mission of a craft can be opened (m15 flies X-Wing mission 4).
 2. P8, speed ([port plan](port-plan.md#p8-speed-gate-7)), after item 1: the fidelity
    checks it reruns at every step resume from a flight's start
    (`make t-resume-<milestone>`), and its combat window is the heaviest scene of item 1.

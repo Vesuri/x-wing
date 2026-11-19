@@ -34,6 +34,14 @@ DOSBox-X tag `dosbox-x-v2026.08.31` (`4f19017c`) is built by `make dos-emulator`
 - **`dosbox-x-xwing-bypass.patch`:** `XWING_BYPASS=MODULE+HEX:LEN:QUESTION` applies the
   port's copy-protection bypass (`src/runtime/protection.c`) at that call: the same state
   writes, AX = 1, the call's LEN bytes skipped, and a `bypass` event.
+- **`dosbox-x-xwing-key-wait.patch`:** with `XWING_POLLS`, a key whose trigger is a
+  blocking keyboard read at a poll point (INT 21h AH=01h/07h/08h, INT 16h AH=00h/10h) is
+  pressed before that instruction, which waits there, burning cycles, until IRQ1 is taken
+  (`key_down` detail `wait`). Inside the read no poll point would let IRQ1 in. The film
+  prompt of m15 is such a read.
+- **`dosbox-x-xwing-watch.patch`:** `XWING_WATCH=HEX` logs the first 50 reads of that
+  interrupt-vector-table byte (below 400h) as `watch` events with the reading module
+  offset, DS and ES. It found the front end's read of 0000:012D in m15.
 
 A second build of the same tag serves as an oracle and is never used for reference runs:
 `make dos-oracle` (`tools/build_dosbox_x_debug.sh`) builds it unpatched with
@@ -238,10 +246,36 @@ milestone can differ slightly between runs with equal pins, so they are reported
 | m12-training-flight | Left, Right ("Enter Maze"), Enter | Maze flight, `frame` #300 and 50 later |
 | m13-mission-flight | (Left, Right, Enter) ×3: briefing, flight deck, launch | X-Wing Mission 1 flight, `frame` #300 and 100 later |
 | m14-tour-battle | Right ("Enter Tour of Duty"), Enter (skips the crawl), (Left, Right, Enter) ×2 | Tour I mission 1, "Destroy Imperial Convoy", `frame` #2,500 and 100 later |
+| m15-film-replay | (Film room) | The film recorded in X-Wing mission 4 played in the film room, `frame` #300 and 100 later; `TEST.CLP` is pinned |
 | m16-exit-to-dos | Esc, pointer to "Exit to DOS", click | `XWING.EXE+1660`, INT 21h AX=4C03, after mode 3 at `+11F1` |
 
 In the concourse, ready rooms, briefing and flight deck, the arrow keys move the pointer
 between hotspots and Enter selects. "Left, Right" lands on the door that proceeds.
+
+### Film room
+
+m15 records a film and plays it (MEASURED, each step's screen seen in a snapshot):
+1. Historical Combat after its opening animation (`menu` #6,000,000; Esc opens the options
+   dialog instead of skipping it): Right ×4 reach the craft row's right arrow, Down the
+   mission row's, Enter ×3 select mission 4 ("Beat The Odds"); Right reaches the right
+   door ("Enter Combat Briefing").
+2. Briefing, flight deck and launch as m13. The launch cutscene is not skipped by Space and
+   ends by itself; the cockpit shows by `frame` #1,500. C starts the flight recorder, H
+   jumps to hyperspace.
+3. After the exit cutscene the game waits at "Do you want to view your flight recorder
+   film (y/n)?" in INT 21h AH=08h (`XWING.EXE+2EE3`), where neither `menu` nor `frame` runs
+   and, under `--polls`, no hardware interrupt is delivered: Y is pressed at that call
+   (`XWING.EXE+2ee3#1`). The film viewer and its name entry run `frame` and read a key
+   with AH=08h only after AH=0Bh reports one: S, TEST, Enter (`TEST.CLP` is written from
+   `START.RPY` and `INPUT.SPL`), E, each on `frame`. All keys from C on are read through
+   that AH=08h call.
+4. After the hangar cutscene (`menu` #6,000,000), the debriefing: Right ("Exit
+   Debriefing"), Enter. In Historical Combat Right wraps to "Return To Spaceport", Enter;
+   in the concourse Down, Right, Enter open the film room's "Load Mission Film" with TEST
+   selected and the pointer on "Exit Film Room".
+5. Up, Enter load the film: the game saves its directory with `getcwd` (INT 21h AX=4711,
+   AX=0100 returned) and restores it after the load with INT 21h AH=3Bh `C:\XWING` (AX=0000,
+   CF clear). P plays it; the playback runs `frame`.
 
 ### Copy protection
 
@@ -258,16 +292,13 @@ question depends on the clock and on when the key arrives:
 
 ### Not yet reached
 
-- **Film-room replay.** Pressing C in flight turns the camera on: `INPUT.SPL` is appended
-  every few seconds, and `START.RPY`, `SAVEGAME.RPY` and `RPYBUFF.TMP` appear. A film needs
-  a flight that ends, and none has yet:
-  - Esc opens "Inflight Options" (two pages: options and detail) with only "Return to
-    Simulator" and "Exit to DOS".
-  - Alt-E, Alt-Q, Ctrl-E and Ctrl-Q do not return to the frontend.
-  - Left alone, the maze flight stops executing instructions after frame 23,367, about
-    18.2 billion instructions (about 607 emulated seconds) into the game, in two runs.
-- **A Star Destroyer battle.** A new pilot can open only the first mission of each
-  Historical Combat craft and of Tour I. None of them holds a Star Destroyer. Instructions
+- **A Star Destroyer battle.** A new pilot can open every Historical Combat mission of a
+  craft (the mission row's arrows, reached with Down; m15 flies X-Wing mission 4, "Beat The
+  Odds", three TIE groups) but only the first of Tour I. Which mission holds a Star
+  Destroyer, and which scene is heaviest, is not yet measured. Left alone, the maze flight
+  stops executing the menu and frame input sites after frame 23,367, about 18.2 billion
+  instructions (about 607 emulated seconds) into the game, in two runs; not investigated
+  since a flight ending at a key prompt was found to look the same (Film room). Instructions
   per frame over 50–100 frames after the first snapshot (MEASURED): maze about 644,000,
   X-Wing mission 1 about 506,000, Tour I mission 1 about 499,000. Whether the flight paces
   its frames is not known:

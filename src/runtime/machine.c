@@ -27,7 +27,10 @@ static const char environment[] =
 #define TOP_SEG 0x9fff          /* reference: first segment past DOS memory */
 #define PARENT_PSP 0x0701       /* reference: COMMAND.COM */
 
-/* Reference interrupt vectors the game reads (INT 21h AH=35h) or chains to. */
+/* Reference interrupt vectors the game reads (INT 21h AH=35h) or chains to.
+ * 4Bh is read as data: the front end's name lookup (FRONTEND.OVL +0C364)
+ * reads the first byte of a string at 0000:012D when the film room loads a
+ * film (MEASURED: XWING_WATCH at m15-film-replay). */
 #define MOUSE_INT74_SEG 0xf000
 #define MOUSE_INT74_OFF 0xd000
 
@@ -36,7 +39,7 @@ static const struct { uint8_t vector; uint16_t seg, off; } vectors[] = {
     {0x09, 0xf000, 0xe987}, {0x10, 0xc000, 0x00ee}, {0x16, 0xf000, 0xcfa0},
     {0x1c, 0xf000, 0xcbe0}, {0x21, 0xf000, 0xd0e0}, {0x22, 0xf000, 0xdac8},
     {0x23, 0x0701, 0x0128}, {0x24, 0x0701, 0x0110}, {0x2f, 0xf000, 0xd200}, {0x33, 0xc402, 0x0010},
-    {0x67, 0xc401, 0x0004}, {0x74, MOUSE_INT74_SEG, MOUSE_INT74_OFF},
+    {0x4b, 0xf000, 0xd260}, {0x67, 0xc401, 0x0004}, {0x74, MOUSE_INT74_SEG, MOUSE_INT74_OFF},
 };
 
 static void put_bytes(uint32_t a, const void *src, uint32_t n)

@@ -632,6 +632,35 @@ static void get_directory(uint16_t cs, uint16_t ip)
     set_cf(0);
 }
 
+/* AH=3Bh: only to the current directory, C:\XWING (the platform's file root is
+ * fixed there); the film room restores the getcwd path it saved, "C:\XWING".
+ * Reference: AX=0000, CF clear. */
+static void change_dir(uint16_t cs, uint16_t ip)
+{
+    static const char dir[] = "\\XWING";
+    uint32_t a = lin(G_DS, rt_r.dx);
+    if (rd8(a + 1) == ':') {
+        if ((rd8(a) | 0x20) != 'c') {
+            rt_unsupported("directory change to another drive than C:", 0x21, cs, ip);
+        }
+        a += 2;
+    }
+    for (int k = 0; dir[k]; ++k, ++a) {
+        uint8_t c = rd8(a);
+        if ((c == '/' ? '\\' : c >= 'a' && c <= 'z' ? c - 32 : c) != (uint8_t)dir[k]) {
+            rt_unsupported("directory change other than to C:\\XWING", 0x21, cs, ip);
+        }
+    }
+    if (rd8(a) == '\\' || rd8(a) == '/') {
+        ++a;
+    }
+    if (rd8(a)) {
+        rt_unsupported("directory change other than to C:\\XWING", 0x21, cs, ip);
+    }
+    rt_r.ax = 0;
+    set_cf(0);
+}
+
 /* AH=4Ah: DOS 5 shrink/grow of the PSP's block with the next MCB. */
 static void resize(uint16_t cs, uint16_t ip)
 {
@@ -908,6 +937,7 @@ void rt_int21(uint16_t cs, uint16_t ip)
         break;
     case 0x19: SET_AL(rt_r.ax, 2); break;  /* current drive C: */
     case 0x2a: get_date(); break;
+    case 0x3b: change_dir(cs, ip); break;
     case 0x47: get_directory(cs, ip); break;
     case 0x49: release(cs, ip); break;
     case 0x4b:

@@ -1,0 +1,51 @@
+--- a/include/paging.h
++++ b/include/paging.h
+@@ -441,14 +441,14 @@
+ /* Special inlined memory reading/writing */
+ 
+ static INLINE uint8_t mem_readb_inline(const LinearPt address) {
+-	if (xwing_active && address >= 0xa0000u && address < 0xc0000u) XWING_MemoryAccess(false, address, 1);
++	if (xwing_active && ((address >= 0xa0000u && address < 0xc0000u) || address < 0x400u)) XWING_MemoryAccess(false, address, 1);
+ 	const HostPt tlb_addr=get_tlb_read(address);
+ 	if (tlb_addr) return host_readb(tlb_addr+address);
+ 	else return (uint8_t)(get_tlb_readhandler(address))->readb(address);
+ }
+ 
+ static INLINE uint16_t mem_readw_inline(const LinearPt address) {
+-	if (xwing_active && address >= 0xa0000u && address < 0xc0000u) XWING_MemoryAccess(false, address, 2);
++	if (xwing_active && ((address >= 0xa0000u && address < 0xc0000u) || address < 0x400u)) XWING_MemoryAccess(false, address, 2);
+ 	if ((address & 0xfff)<0xfff) {
+ 		const HostPt tlb_addr=get_tlb_read(address);
+ 		if (tlb_addr) return host_readw(tlb_addr+address);
+@@ -457,7 +457,7 @@
+ }
+ 
+ static INLINE uint32_t mem_readd_inline(const LinearPt address) {
+-	if (xwing_active && address >= 0xa0000u && address < 0xc0000u) XWING_MemoryAccess(false, address, 4);
++	if (xwing_active && ((address >= 0xa0000u && address < 0xc0000u) || address < 0x400u)) XWING_MemoryAccess(false, address, 4);
+ 	if ((address & 0xfff)<0xffd) {
+ 		const HostPt tlb_addr=get_tlb_read(address);
+ 		if (tlb_addr) return host_readd(tlb_addr+address);
+--- a/src/misc/xwing_trace.cpp
++++ b/src/misc/xwing_trace.cpp
+@@ -846,6 +846,20 @@
+ 
+ void XWING_MemoryAccess(const bool write, const uint32_t address, const uint8_t width) {
+ 	if (in_interrupt_hook) return;
++	if (!write && address < 0x400u) {
++		/* XWING_WATCH=HEX: the first 50 reads of that interrupt-vector-table byte
++		 * ("watch" events with the reading instruction); paging.h passes reads below
++		 * 400h only for this. */
++		static const long watch = getenv("XWING_WATCH") ? strtol(getenv("XWING_WATCH"), nullptr, 16) : -1;
++		static unsigned seen = 0;
++		if ((long)address <= watch && watch < (long)(address + width) && seen < 50) {
++			++seen;
++			const Location l = CurrentLocation();
++			Event("watch", "%s+0x%05x %05x w%u ds=%04x es=%04x", modules[l.module].name.c_str(),
++			      l.offset, address, width, SegValue(ds), SegValue(es));
++		}
++		return;
++	}
+ 	const bool is_vga = address >= 0xa0000u && address < 0xc0000u;
+ 	const uint32_t para = address >> 4;
+ 	const bool code = write && para < PARAGRAPHS && para_executed[para];

@@ -577,6 +577,7 @@ handler reads: sync for the declared span).
   same-visit group per return of the guest handler to that point (the
   reference takes interrupts only at sync points, `build/gen/poll-points.csv`, IRQ0
   edges only the gate held raised again in order, `dosbox-x-xwing-irq0-backlog.patch`;
+  a key at a blocking read's poll point waits there for its IRQ1, `dosbox-x-xwing-key-wait.patch`;
   references are re-recorded when the sync set changes, irq-plan RC3).
 - IRQ0 footprint (irq-plan I2, `translator/irq.py`, run by `make gen`): the guest
   handler's memory, ports, IF changes, hooks and runtime calls, register

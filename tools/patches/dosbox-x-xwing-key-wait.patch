@@ -1,0 +1,96 @@
+--- a/src/misc/xwing_trace.cpp
++++ b/src/misc/xwing_trace.cpp
+@@ -202,6 +202,14 @@
+ std::map<Location, uint32_t> poll_hits;
+ int irq_vector = -1;
+ uint64_t poll_digest = 0xcbf29ce484222325ull;  /* FNV-1a of the poll file */
++/* A key whose trigger is a blocking keyboard read at a poll point (INT 21h
++ * AH=01h/07h/08h, INT 16h AH=00h/10h) is pressed before that instruction, which
++ * then waits, burning cycles, until IRQ1 is taken there: inside the read no poll
++ * point would ever let it in. key_wait_skip: that instruction's visit is not a
++ * held-trigger visit (a key pressed in XWING_Instruction does not count it). */
++bool key_wait = false, key_wait_skip = false;
++uint32_t key_wait_linear = 0;
++uint64_t key_wait_cycles = 0;
+ struct PendingService { uint32_t ret_linear; uint16_t ss, sp; uint8_t vector; };
+ std::vector<PendingService> services;
+ 
+@@ -759,7 +767,8 @@
+ 	}
+ 	const bool held_target = held_next && held_next->module == here.module &&
+ 	                         held_next->offset == here.offset;
+-	if (held_target) ++held_trigger_hits;
++	if (held_target && !key_wait_skip) ++held_trigger_hits;
++	key_wait_skip = false;
+ 
+ 	/* Snapshots count after the key script, each after the previous one. */
+ 	if (key_index == keys.size() && key_held == KBD_NONE)
+@@ -850,19 +859,65 @@
+ 	if (code) ++code_writes[std::make_tuple(source, address, width, Locate(address))];
+ }
+ 
++namespace {
++
++bool BlockingKeyRead(const uint32_t linear) {
++	if (mem_readb(linear) != 0xcd) return false;
++	const uint8_t vec = mem_readb(linear + 1);
++	if (vec == 0x21) return reg_ah == 0x01 || reg_ah == 0x07 || reg_ah == 0x08;
++	return vec == 0x16 && (reg_ah == 0x00 || reg_ah == 0x10);
++}
++
++/* The next key, if its trigger fires at this blocking read: pressed here,
++ * with the bookkeeping XWING_Instruction would do for this visit. */
++void KeyAtBlockingRead(const uint32_t linear) {
++	if (key_held != KBD_NONE || key_index >= keys.size() || !BlockingKeyRead(linear)) return;
++	auto &t = keys[key_index];
++	if (t.done || SwotlParseJoystick(t.name).kind || MouseAction(t.name)) return;
++	const Location here = Locate(linear);
++	if (!IsPoll(here) || !Hit(t, here)) return;
++	++key_index;
++	t.done = true;
++	KeyModifiers(t.modifiers, true);
++	KEYBOARD_AddKey(t.key, true);
++	key_held = t.key;
++	held_trigger_hits = 0;
++	key_release_at = icount + 1 + key_hold;
++	key_wait = key_wait_skip = true;
++	key_wait_linear = linear;
++	key_wait_cycles = 0;
++	Event("key_down", "%s wait", t.name.c_str());
++}
++
++} // namespace
++
+ bool XWING_IrqPoint(const uint32_t linear) {
+ 	if (!xwing_active || !GETFLAG(IF)) return false;
+ 	XWING_Irq0Check();
+-	if (!PIC_IRQCheck && !xwing_irq0_backlog) return false;
++	if (poll_gate && !key_wait) KeyAtBlockingRead(linear);
++	const bool waiting = key_wait && linear == key_wait_linear;
++	if (waiting && ++key_wait_cycles > 100000000u)
++		E_Exit("XWING: no IRQ1 for the key at the blocking read");
++	if (!PIC_IRQCheck && !xwing_irq0_backlog) {
++		if (waiting) --CPU_Cycles;  /* the core refunds the cycle: burn it */
++		return waiting;
++	}
+ 	const Location here = Locate(linear);
+ 	if (!IsPoll(here)) return false;
+ 	XWING_Irq0Refill();
+-	if (!PIC_IRQCheck) return false;
++	if (!PIC_IRQCheck) {
++		if (waiting) --CPU_Cycles;
++		return waiting;
++	}
+ 	irq_vector = -1;
+ 	xwing_irq_open = true;
+ 	PIC_runIRQs();
+ 	xwing_irq_open = false;
+-	if (irq_vector < 0) return false;
++	if (irq_vector == 9) key_wait = false;
++	if (irq_vector < 0) {
++		if (waiting) --CPU_Cycles;
++		return waiting;
++	}
+ 	const auto it = poll_hits.find(here);
+ 	if (events)
+ 		fprintf(events, "%llu,irq,%s,0x%05x,%02x svc=%llu hits=%u\n", (unsigned long long)icount,

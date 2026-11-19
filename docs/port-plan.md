@@ -291,10 +291,10 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
   [indirect coverage](indirect-coverage.md); none is excluded.
 - Gate: all milestones in lockstep; zero unclassified; `indirect-coverage` reviewed; the
   bypass oracle passes.
-- Passed: all 19 pinned milestones in host lockstep (`tests/host_run.py`, m14 64,700,042
+- Passed: all 20 pinned milestones in host lockstep (`tests/host_run.py`, m15 90,212,532
   service events) and in the Amiga replay on the 68030 model (`tests/amiga_replay.py` in
-  the same modes; m10 with `--exempt`); `make gen`'s coverage report: 0 unclassified of
-  99,836 executed instruction starts, HLE 2 (`copy_protection`), self-modified 343 (FLIGHT,
+  the same modes with `--timeout 14400`, the flights 28800; m10 and m15 with `--exempt`);
+  `make gen`'s coverage report: 0 unclassified of 99,836 executed instruction starts, HLE 2 (`copy_protection`), self-modified 343 (FLIGHT,
   the D16 cell walk); the bypass oracle at m03p with its three sabotages caught, and the
   wrong-answer control past the screen caught at m04.
 
