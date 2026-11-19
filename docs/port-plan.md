@@ -346,8 +346,9 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
   - `tools/package_release.py`, `check_release.py`, `test_whdload.py`,
     `test_release_installer.py`, `install-data`, `tool_icon.py`;
   - `docs/release.md`, `docs/whdload.md`.
-- Adapt: the installer reads the user's five floppies (SHA-256 pinned). It unpacks
-  `XWING.001`–`.005`, a format not yet identified, natively or by documented means.
+- Adapt: the installer reads the user's five floppies (SHA-256 pinned). Done:
+  `tools/install-data` unpacks `XWING.001`–`.005` natively (format: `docs/release.md`,
+  "Original data") into the 284 files of the configured DOS install.
 - Gate:
   - the CPU matrix (030, 030+MMU, 040, 060) with CACR checks;
   - WHDLoad on 8 MB Fast; the version started without WHDLoad measured down to its minimum
