@@ -10,7 +10,10 @@ block per target hunk, so this tool rewrites each block of more than 65535 offse
 consecutive blocks of at most 65535 for the same target, which is the same relocation.
 
 usage: hunk_relocs.py FILE [--check]
+       hunk_relocs.py --release-of FULL STRIPPED
 --check only reports blocks over the limit and exits 1 if any (no rewrite).
+--release-of checks that STRIPPED (elf2hunk -s) has no symbol or debug hunks and that
+every other record, header and relocations included, equals FULL's (make amiga-release).
 """
 import struct
 import sys
@@ -57,7 +60,8 @@ def split(data: bytes) -> tuple[bytes, list[tuple[int, int, int]]]:
             if kind != HUNK_BSS:
                 p += 4 * n
         elif kind == HUNK_DEBUG:
-            p += 4 * word()
+            n = word()
+            p += 4 * n
         elif kind == HUNK_SYMBOL:
             while n := word():
                 p += 4 * n + 4
@@ -82,7 +86,73 @@ def split(data: bytes) -> tuple[bytes, list[tuple[int, int, int]]]:
     return bytes(out), over
 
 
+def records(data: bytes) -> tuple[bytes, list[bytes], int]:
+    """The header, the loadable records and the count of symbol and debug hunks."""
+    p = 0
+
+    def word() -> int:
+        nonlocal p
+        if p + 4 > len(data):
+            raise HunkError(f"truncated at {p:#x}")
+        v = struct.unpack_from(">I", data, p)[0]
+        p += 4
+        return v
+
+    if word() != HUNK_HEADER:
+        raise HunkError("no HUNK_HEADER")
+    while word():
+        pass
+    word()
+    first, last = word(), word()
+    for _ in range(last - first + 1):
+        if word() >> 30 == 3:
+            word()
+    header, out, dropped = data[:p], [], 0
+    while p < len(data):
+        start = p
+        kind = word() & 0x3FFFFFFF
+        # Read each count before adding it: `p += 4 * word()` would load p first.
+        if kind in (HUNK_CODE, HUNK_DATA, HUNK_DEBUG):
+            n = word()
+            p += 4 * n
+        elif kind == HUNK_BSS:
+            word()
+        elif kind == HUNK_SYMBOL:
+            while n := word():
+                p += 4 * n + 4
+        elif kind == HUNK_RELOC32:
+            while count := word():
+                word()
+                p += 4 * count
+        elif kind != HUNK_END:
+            raise HunkError(f"unknown hunk type {kind:#x} at {start:#x}")
+        if kind in (HUNK_SYMBOL, HUNK_DEBUG):
+            dropped += 1
+        else:
+            out.append(data[start:p])
+    return header, out, dropped
+
+
+def release_of(full: str, stripped: str) -> int:
+    fh, frec, _ = records(open(full, "rb").read())
+    sh, srec, dropped = records(open(stripped, "rb").read())
+    if dropped:
+        print(f"{stripped}: {dropped} symbol or debug hunks", file=sys.stderr)
+        return 1
+    if fh != sh or frec != srec:
+        print(f"{stripped}: loadable records differ from {full}", file=sys.stderr)
+        return 1
+    print(f"{stripped}: stripped, {len(srec)} records equal to {full}'s")
+    return 0
+
+
 def main() -> int:
+    if sys.argv[1:2] == ["--release-of"] and len(sys.argv) == 4:
+        try:
+            return release_of(sys.argv[2], sys.argv[3])
+        except HunkError as e:
+            print(e, file=sys.stderr)
+            return 1
     args = [a for a in sys.argv[1:] if a != "--check"]
     if len(args) != 1:
         print("usage: hunk_relocs.py FILE [--check]", file=sys.stderr)

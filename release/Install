@@ -1,0 +1,85 @@
+; X-Wing WHDLoad installation. Commodore Installer V43 or newer.
+; Copied from Secret Weapons of the Luftwaffe's (manifest/references.tsv) and adapted.
+; File-install flow with WHDLoad Install Template / RAY Pokeri conventions.
+; $VER: Install 0.1 (19.11.2026)
+(set @app-name "X-Wing")
+(set #prefix "XWing")
+(if (< @installer-version (* 43 65536))
+  (abort "This installation requires Amiga Installer 43 or newer."))
+(welcome)
+(set #source (pathonly @icon))
+(set @execute-dir #source)
+; Show the instructions before asking for the destination or original data.
+; WHDLoad's template falls back to More on systems without MultiView.
+(set #readme (tackon #source "ReadMe"))
+(if (exists #readme)
+  (if (<> 0 (run ("SYS:Utilities/MultiView \"%s\"" #readme)))
+    (run ("SYS:Utilities/More \"%s\"" #readme))))
+; Same prerequisite check as the WHDLoad install template.
+(if (<> 0 (run "cd SYS:\nWhich WHDLoad >NIL:"))
+  (abort "Install WHDLoad 17 or newer first. It must be accessible via the command path. See https://www.whdload.de/"))
+(set #kick-ready 0)
+(if (and (exists "Devs:Kickstarts/kick40068.A1200") (exists "Devs:Kickstarts/kick40068.A1200.RTB")) (set #kick-ready 1))
+(if (and (exists "Devs:Kickstarts/kick40068.A4000") (exists "Devs:Kickstarts/kick40068.A4000.RTB")) (set #kick-ready 1))
+(if (and (exists "Devs:Kickstarts/kick40063.A600") (exists "Devs:Kickstarts/kick40063.A600.RTB")) (set #kick-ready 1))
+(if (<> (getassign "WHDCOMMON") "")
+  ((if (and (exists "WHDCOMMON:kick40068.A1200") (exists "WHDCOMMON:kick40068.A1200.RTB")) (set #kick-ready 1))
+   (if (and (exists "WHDCOMMON:kick40068.A4000") (exists "WHDCOMMON:kick40068.A4000.RTB")) (set #kick-ready 1))
+   (if (and (exists "WHDCOMMON:kick40063.A600") (exists "WHDCOMMON:kick40063.A600.RTB")) (set #kick-ready 1))))
+(if (= #kick-ready 0)
+  (message "WHDLoad needs a Kickstart 3.1 image and matching .RTB file in Devs:Kickstarts or WHDCOMMON: before playing. See ReadMe for supported image names." (all)))
+(if (getenv "WHDLInstPath")
+  (set @default-dest (getenv "WHDLInstPath")))
+(set #parent
+  (askdir (prompt "Where should X-Wing be installed? An XWing drawer will be created here.")
+    (help "Choose a writable hard disk drawer with at least 16 MB free.")
+    (default @default-dest)))
+(run ("setenv WHDLInstPath \"%s\"\ncopy ENV:WHDLInstPath ENVARC:" #parent))
+(set #dest (tackon #parent #prefix))
+(set #data (tackon #dest "data"))
+(set #helper (tackon #source "XWingInstallData"))
+(set #staging (tackon #dest "InstallStaging"))
+(if (exists #dest)
+  ((set #remove-existing
+     (askbool
+       (prompt ("The drawer \"%s\" already exists. Remove it, including pilots and films, before installing?" #dest))
+       (help "Remove deletes the whole XWing drawer. Keep updates the program and keeps your pilots and films; you can then keep or replace the game files.")
+       (choices "Remove" "Keep") (default 0)))
+   (if #remove-existing
+     (delete #dest (all) (infos) (optional "force") (help @delete-help)))))
+(set #install-data 1)
+(if (and (= (exists (tackon #data "XWING.EXE")) 1) (= (exists (tackon #data "FLIGHT.OVL")) 1))
+  (set #install-data
+    (askchoice
+      (prompt "The X-Wing game files are already installed. Use the existing files or replace them from the disks?")
+      (help "Use existing keeps the installed game files and skips the disk question. Replace extracts all game files again from the X-Wing disks; files the game created, such as pilots and films, are kept.")
+      (choices "Use existing" "Replace") (default 0))))
+(if #install-data
+  (set #disks
+    (askdir (prompt "Select the drawer containing the five X-Wing disk images or files.")
+      (help "Required: disk1.img to disk5.img (images of the five 1.44 MB X-Wing 1.0 PC floppies), or XWING.001 to XWING.005 copied from them together with INSTALL.EXE, DETECT.EXE and READ.ME from disk 1. Other releases are not supported. Game files are not included.")
+      (default #source))))
+(if (= (exists #dest) 0) (makedir #dest (infos) (help @makedir-help)))
+(if (= (exists #data) 0) (makedir #data (help @makedir-help)))
+; Extract into a private staging drawer; data/ changes only after success.
+(if (exists #staging) (delete #staging (all) (optional "force") (help @delete-help)))
+(if #install-data
+  ((working "Extracting and checking the game files from the X-Wing disks...")
+   (if (<> 0 (run ("Stack 16384\n\"%s\" \"%s\" \"%s\"" #helper #disks #staging)))
+     ((if (exists #staging) (delete #staging (all) (optional "force") (help @delete-help)))
+      (abort "The X-Wing disks could not be installed. Check that the drawer holds all five unmodified disk images or XWING files. Existing game files were not changed.")))
+   (copyfiles (source #staging) (dest #data) (all) (help @copyfiles-help))
+   (delete #staging (all) (optional "force") (help @delete-help))))
+(copyfiles (source (tackon #source "XWing")) (dest #data) (help @copyfiles-help))
+(copyfiles (source (tackon #source "XWing.slave")) (dest #dest) (help @copyfiles-help))
+(copyfiles (source (tackon #source "XWing.inf")) (dest #dest) (newname "XWing.info") (help @copyfiles-help))
+(tooltype (dest (tackon #dest "XWing")) (setdefaulttool "WHDLoad")
+  (settooltype "Slave" "XWing.slave") (settooltype "PreLoad" "")
+  (setstack 16384) (noposition))
+(copyfiles (source (tackon #source "ReadMe")) (dest #dest) (infos) (help @copyfiles-help))
+; openwbobject was added after Installer 43; retain the template version gate.
+(if (>= @installer-version (+ (* 44 65536) 10))
+  (openwbobject #dest))
+(set @default-dest #dest)
+(complete 100)
+(exit)

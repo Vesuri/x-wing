@@ -5,6 +5,79 @@ floppies with `XWingInstallData` (`tools/install-data`). The installer writes th
 284 files the original `INSTALL.EXE` installs and configures for AdLib under DOSBox-X
 (`docs/dos-reference.md`).
 
+## Pipeline
+
+The pipeline is copied from Secret Weapons of the Luftwaffe (`manifest/references.tsv`) and
+adapted. Its `docs/release.md` holds the converged rules and where each comes from. The slave
+is described in [whdload.md](whdload.md).
+
+- **Version:**
+  - `VERSION` holds `0.1`.
+  - The literal version and date 19.11.2026 appear in the game's `$VER`
+    (`src/platform/amiga/version.s`), in the slave's `slv_info` and `$VER`, in the helper's
+    `$VER` (`tools/install-data/install_config.h`), in `Install`'s `$VER` and in the ReadMe's
+    History.
+  - Nothing is stamped at build time, so `tools/check_release.py` asserts all of them.
+- **Release image:**
+  - `make amiga-release` builds `build/amiga-release` with `RELEASE=1`. The `XWING_RELEASE`
+    build takes no diagnostic arguments or tool types, and has no listing.
+  - It is stripped with `elf2hunk -s` to `amiga/out/XWing-release.exe`, and its RELOC32
+    blocks are split (`tools/hunk_relocs.py`).
+  - `hunk_relocs.py --release-of` checks that no symbol or debug hunk remains, and that every
+    other record, header included, equals the unstripped `build/amiga-release/out/XWing.exe`.
+  - `make release-repro` makes a second clean build in its own directory and `cmp`s the
+    stripped images.
+- **Package:**
+  - `tools/package_release.py` takes an explicit allowlist: `XWing`, `XWing.slave`,
+    `XWing.inf`, `XWingInstallData`, `Install`, `Install.info`, `ReadMe`, `ReadMe.info` and
+    `LICENSE.LGPL.txt`, under `XWing Install/` with the drawer icon.
+  - It packs them with AmigaXDev's `amigaxdev.release`: LH5, level-0 headers, sorted
+    members and the DOS stamp of 19.11.2026. `tools/_amigaxdev.py` checks the module against
+    `manifest/mac-helpers.sha256`.
+  - It refuses any member whose SHA-256 is an original's: the five volumes in
+    `release/originals.sha256`, and every manifest that pins original material.
+  - It refuses to overwrite an archive.
+- **Audit:** `tools/check_release.py`:
+  - decodes every member with Lhasa, and checks the CRCs, the exact member set and identity
+    with the build outputs;
+  - checks the HUNK and icon magics and the version strings;
+  - checks the ReadMe's sections, including its early-alpha notice;
+  - checks the slave header: flags, 2 MiB Chip, 8.5 MiB ExpMem and Help;
+  - refuses original file names;
+  - scans every member for any 64-byte block, forward or byte-reversed, of the 284 files of
+    the configured DOS install and of the five floppy images: 568,966 blocks.
+  - Sabotage: a block of `FLIGHT.OVL` planted in the image is caught in either direction.
+- **Installer:**
+  - `release/Install` is the Installer 43 script, with SWOTL's flow: ReadMe first, the
+    WHDLoad and Kickstart checks, `WHDLInstPath`, Remove/Keep and Use existing/Replace.
+  - The helper unpacks into `InstallStaging`, and its output is copied into `data/` only
+    after it succeeds.
+  - `tools/test_release_installer.py` drives real Installer 43 in FS-UAE on a 68020, with
+    the Amiga helper. Modes:
+    - `fresh`: images;
+    - `files`: `XWING.001`–`005` with disk 1's files;
+    - `keep` and `replace`: pilots survive;
+    - `remove`;
+    - `bad-disks`: a refused source leaves the install unchanged.
+  - The installed tree must equal the configured DOS install.
+- **Make:**
+  - `make release` refuses a tree with uncommitted changes. It builds the release image,
+    the slaves and the helper, then packages and audits `dist/XWing-$(cat VERSION).lha`.
+  - `make release-check` audits that archive again.
+
+### 0.1 early alpha
+
+Released ahead of P8 with a reduced gate (`docs/design.md`, "Early alpha 0.1"):
+
+- the archive allowlist and the original-bytes scan;
+- matching version strings;
+- a reproducible stripped image;
+- the WHDLoad slave and the start without WHDLoad, both run on the 68030;
+- an installer test;
+- a ReadMe that says the port is an unoptimized early alpha.
+
+The rest of gate 8 stays open (`docs/port-plan.md`, P9).
+
 ## Original data
 
 The floppies' files are pinned in `manifest/dos-disks.sha256` and their tree in

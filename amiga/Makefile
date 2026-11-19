@@ -74,9 +74,12 @@ obj/replay_s.o: $(REPO)/tests/amiga_replay.s | obj
 	$(VASM) $(VASMFLAGS) -o $@ $<
 endif
 
-# Release image: no diagnostic arguments or tool types (amiga_platform.c).
+# Release image: no diagnostic arguments or tool types (amiga_platform.c), and no
+# disassembly listing.
+LISTING = 1
 ifneq ($(RELEASE),)
 CCFLAGS += -DXWING_RELEASE
+LISTING =
 endif
 
 .DEFAULT_GOAL := all
@@ -174,7 +177,7 @@ $(OUT).elf: $(OBJECTS) | out verify-runtime
 		f && /^$$/ { exit } f && /dff096/ { d++ } f && d == 1 && /dff006/ { w = 1 } \
 		END { exit !(d >= 2 && w) }' || \
 		{ echo "Audio::verticalBlank: no VHPOSR wait between the DMACON writes" >&2; rm -f $@; exit 1; }
-	$(OBJDUMP) --disassemble --no-show-raw-ins -S $@ > $(OUT).s 2>/dev/null || true
+	$(if $(LISTING),$(OBJDUMP) --disassemble --no-show-raw-ins -S $@ > $(OUT).s 2>/dev/null || true)
 
 # Kickstart 3.1's LoadSeg reads at most 65535 offsets per RELOC32 block (tools/hunk_relocs.py).
 $(OUT).exe: $(OUT).elf

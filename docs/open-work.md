@@ -7,7 +7,8 @@ first vertical slice (P5: `make test-amiga`, the Amiga replay and the host locks
 and the whole game (P6: host lockstep and the Amiga replay over every pinned milestone,
 gate 6) are in place, and P7's music and prerendered effects play on Paula (`make gates-audio`,
 `make test-amiga-audio`, `make t-amiga-sfx`). Host lockstep to a flight milestone resumes
-from a save at the flight's start (`make t-resume-<milestone>`).
+from a save at the flight's start (`make t-resume-<milestone>`). P9's 0.1 early alpha is packaged
+(`make release`, [release](release.md)) on a reduced gate (owner decision 2026-11-19).
 
 1. P8, speed ([port plan](port-plan.md#p8-speed-gate-7)): the fidelity checks it reruns at
    every step resume from a flight's start (`make t-resume-<milestone>`), and its combat
@@ -31,3 +32,12 @@ from a save at the flight's start (`make t-resume-<milestone>`).
    writes a framebuffer read from video memory and a trap log, and reproduces their pinned
    hashes. The CODE resources are classified and the trap surface inventoried, ready for a
    correspondence table against the DOS routines.
+4. P9's gate 8 ([port plan](port-plan.md#p9-release-gate-8)), after P8. Still open:
+   - the CPU matrix (030 with MMU, 040, 060), with CACR checks;
+   - WHDLoad on 8 MB Fast: the slave reserves 8.5 MiB of ExpMem, and on 8 MiB of Zorro II
+     WHDLoad refuses it with DOS error 103 ([WHDLoad](whdload.md#memory));
+   - Fast RAM in flight, where the measured low-water marks do not reach;
+   - the minimum Fast RAM without WHDLoad;
+   - save, exit and input scenarios;
+   - a real-hardware pass.
+   Acceptance: the P9 gate in the port plan.

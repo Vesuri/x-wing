@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx t-resume-plants t-sab-resume sound-reference sound-fm gates-audio
+.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx t-resume-plants t-sab-resume sound-reference sound-fm gates-audio amiga-release whdload test-whdload install-data test-install-data release release-check release-repro
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -36,6 +36,14 @@ help:
 	@echo 'make sound-fm               the FM re-hoster's Paula WAVs beside them'
 	@echo 'make t-amiga-sfx            the effects in flight: the m12 Amiga replay with capture and player (no host check)'
 	@echo 'make gates-audio            every sound check and its sabotage'
+	@echo 'make amiga-release          the stripped release image -> amiga/out/XWing-release.exe'
+	@echo 'make whdload                assemble the WHDLoad slaves into build/whdload/'
+	@echo 'make test-whdload           the release slave on the 68030: smoke, boot, load, run'
+	@echo 'make install-data           build XWingInstallData (host and Amiga) into build/install-data/'
+	@echo 'make test-install-data      helper vs the DOS install: sources, refusals, cleanup'
+	@echo 'make release                package and audit dist/XWing-$$(cat VERSION).lha (clean tree only)'
+	@echo 'make release-check          audit the existing archive again'
+	@echo 'make release-repro          a second clean release build gives the same stripped image'
 
 verify-input:
 	@shasum -a 256 -c manifest/originals.sha256
@@ -321,3 +329,44 @@ t-amiga-sfx: host
 gates-audio:
 	@$(MAKE) -s -k -j$(JOBS) t-fm t-sab-fm $(FM_UNITS:%=t-fm-%) $(FM_UNITS:%=t-sab-fm-%) \
 		t-fm-effect t-sab-fm-effect t-fm-effect-asm t-sab-fm-effect-asm t-fx-play t-sab-fx-play
+
+# Release (docs/release.md), copied from Secret Weapons of the Luftwaffe's Makefile and
+# adapted. The release image is built in build/amiga-release with RELEASE=1 (no
+# diagnostic arguments, amiga_platform.c) and stripped to amiga/out/XWing-release.exe:
+# WHDLoad's LoadSeg of the symbol hunks never returns.
+amiga-release: gen-fresh
+	mkdir -p build/amiga-release && ln -sf ../../amiga/Makefile build/amiga-release/Makefile
+	@$(ENV) $(MAKE) -C build/amiga-release REPO=../.. RELEASE=1
+	@$(ENV) elf2hunk build/amiga-release/out/XWing.elf amiga/out/XWing-release.exe -s
+	python3 tools/hunk_relocs.py amiga/out/XWing-release.exe
+	python3 tools/hunk_relocs.py --release-of build/amiga-release/out/XWing.exe amiga/out/XWing-release.exe
+whdload:
+	$(MAKE) -C whdload all test smoke boot-test load-test memfree
+# tools/test_whdload.py: Kickstart 3.1 A1200 + RTB, WHDLoad, tmp/dos/configured/XWING.
+# The game needs more than 8 MB Fast RAM under WHDLoad: 16 MB Zorro III on the 68030.
+test-whdload: whdload amiga-release
+	@$(ENV) for m in smoke boot load run; do python3 tools/test_whdload.py --mode $$m --z3 16384 || exit 1; done
+install-data:
+	@$(ENV) $(MAKE) -C tools/install-data all amiga
+# tools/install-data/test_install.py: the floppy images and the configured DOS install.
+test-install-data:
+	@$(ENV) $(MAKE) -C tools/install-data test
+# Release from committed sources only; never a diagnostic build.
+RELEASE_ARCHIVE = dist/XWing-$$(cat VERSION).lha
+release:
+	@git diff --quiet HEAD || { echo "release needs a clean tree: commit or stash first"; exit 1; }
+	$(MAKE) amiga-release whdload install-data
+	mkdir -p dist
+	python3 tools/package_release.py amiga/out/XWing-release.exe dist
+	python3 tools/check_release.py $(RELEASE_ARCHIVE)
+release-check:
+	python3 tools/check_release.py $(RELEASE_ARCHIVE)
+# Reproducible: a second clean build in its own directory gives the same stripped image.
+release-repro: amiga-release
+	mkdir -p build/amiga-release-2 && ln -sf ../../amiga/Makefile build/amiga-release-2/Makefile
+	@$(ENV) $(MAKE) -C build/amiga-release-2 REPO=../.. clean
+	@$(ENV) $(MAKE) -C build/amiga-release-2 REPO=../.. RELEASE=1
+	@$(ENV) elf2hunk build/amiga-release-2/out/XWing.elf build/amiga-release-2/out/XWing-release.exe -s
+	python3 tools/hunk_relocs.py build/amiga-release-2/out/XWing-release.exe
+	cmp amiga/out/XWing-release.exe build/amiga-release-2/out/XWing-release.exe
+	@$(ENV) $(MAKE) -C build/amiga-release-2 REPO=../.. clean

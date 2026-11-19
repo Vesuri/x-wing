@@ -1,0 +1,181 @@
+; WHDLoad/Kickstart 3.1 launcher for the Amiga port. Cross-assembled with vasm.
+; Copied from Secret Weapons of the Luftwaffe's SwotlSlave.s
+; (manifest/references.tsv) and adapted: no Custom options. The executable uses
+; Exec/graphics/DOS; kickfs supplies ordinary file access. The slave runs it
+; through RunCommand, as a Shell does, so the same executable runs from a Shell.
+
+        INCLUDE whdload.i
+        INCLUDE whdmacros.i
+
+; Code, guest RAM and the EMS store need Fast RAM; sizes: docs/whdload.md, Memory.
+CHIPMEMSIZE = $200000
+FASTMEMSIZE = $800000
+NUMDRIVES = 0
+WPDRIVES = 0
+BLACKSCREEN
+INITAGA
+BOOTDOS
+CACHE                           ; _bootdos falls back to CACHECHIP without MMU
+HDINIT
+SEGTRACKER
+NO68020                         ; portable kickemu patches; game still needs 020
+; Do not use kick31.s STACKSIZE: its A600 patch at $2305c overwrites
+; the MOVE.L opcode (the immediate starts at $2305e).
+        IFD TEST
+BOOTEARLY
+DEBUG
+        ENDC
+
+slv_Version = 17
+slv_Flags = WHDLF_NoError|WHDLF_ReqAGA|WHDLF_Req68020
+slv_keyexit = $5f                 ; Help: the game's key table has no Help key
+        INCLUDE whdload/kick31.s
+
+slv_CurrentDir dc.b "data",0
+slv_name dc.b "X-Wing",0
+slv_copy dc.b "1993 LucasArts",0
+slv_info dc.b "Amiga port by Vesuri",10
+        dc.b "Version 0.1 (19.11.2026)",10
+        dc.b "Early alpha",10
+        dc.b "Help quits",0
+slv_config dc.b 0                 ; no Custom options
+        dc.b "$VER: XWing.slave 0.1 (19.11.2026)",0
+_program dc.b "XWing",0
+_args_tail dc.b 10,0
+        EVEN
+
+_bootdos
+        move.l (_resload,pc),a2
+        ; CACHE marks BaseMem noncacheable, which needs WHDLoad's MMU (68040/060,
+        ; 68030 with the MMU option); without it WHDLoad switches every cache off
+        ; (CACR 0). Then keep CACHECHIP's instruction cache (docs/whdload.md).
+        move.l 4.w,a6
+        lea (_getcacr,pc),a5
+        jsr (_LVOSupervisor,a6)
+        and.w #$8001,d0           ; IC (68040/060) or EI (68020/030)
+        bne .cached
+        move.l #WCPUF_Base_WT|WCPUF_Exp_CB|WCPUF_Slave_CB|WCPUF_IC|WCPUF_BC|WCPUF_SS|WCPUF_SB,d0
+        move.l #WCPUF_All,d1
+        jsr (resload_SetCPU,a2)
+.cached
+        IFD BOOTONLY
+        pea TDREASON_OK
+        jmp (resload_Abort,a2)
+        ENDC
+        IFD TEST
+        lea (_bootmark,pc),a0
+        bsr _mark
+        ENDC
+        lea (_dosname,pc),a1
+        move.l 4.w,a6
+        jsr (_LVOOldOpenLibrary,a6)
+        move.l d0,a6
+        tst.l d0
+        beq .oserror
+        lea (_program,pc),a0
+        move.l a0,d1
+        jsr (_LVOLoadSeg,a6)
+        move.l d0,d7
+        beq .readerror
+        IFD TEST
+        lea (_loadmark,pc),a0
+        bsr _mark
+        ENDC
+        jsr (resload_FlushCache,a2)
+        ; Establish PROGDIR as a Shell would. Calling a LoadSeg entry alone
+        ; does not set pr_HomeDir.
+        lea (_current,pc),a0
+        move.l a0,d1
+        moveq #-2,d2              ; ACCESS_READ, lock the actual current drawer
+        jsr (_LVOLock,a6)
+        tst.l d0
+        beq .readerror
+        move.l d0,d1
+        jsr (_LVOSetProgramDir,a6)
+        lea (_oldhome,pc),a0
+        move.l d0,(a0)
+        IFD LOADONLY
+        pea TDREASON_OK
+        jmp (resload_Abort,a2)
+        ENDC
+        ; RunCommand allocates and swaps in the stack and also places the line
+        ; in Input()'s buffer, where ReadArgs reads it (dos.doc RunCommand);
+        ; -1 when it could not run the program.
+        move.l d7,d1
+        move.l #16384,d2
+        lea (_args_tail,pc),a0
+        move.l a0,d3
+        moveq #1,d4
+        jsr (_LVORunCommand,a6)
+        move.l d0,d6
+        move.l (_oldhome,pc),d1
+        jsr (_LVOSetProgramDir,a6)
+        move.l d0,d1
+        jsr (_LVOUnLock,a6)
+        move.l d7,d1
+        jsr (_LVOUnLoadSeg,a6)
+        move.l a6,a1
+        move.l 4.w,a6
+        jsr (_LVOCloseLibrary,a6)
+        tst.l d6
+        bne .gameerror
+        IFD TEST
+        lea (_exitmark,pc),a0
+        bsr _mark
+        ENDC
+        IFD MEMFREE
+        ; Diagnostic only: kickemu's lowest largest free Chip/Fast chunks.
+        lea (_memfreename,pc),a0
+        lea MEMFREE,a1
+        moveq #8,d0
+        move.l (_resload,pc),a2
+        jsr (resload_SaveFile,a2)
+        ENDC
+        pea TDREASON_OK
+        bra .abort
+.readerror
+        jsr (_LVOIoErr,a6)
+        pea (_program,pc)
+        move.l d0,-(sp)
+        pea TDREASON_DOSREAD
+        bra .abort
+.oserror
+        clr.l -(sp)
+        clr.l -(sp)
+        pea TDREASON_OSEMUFAIL
+        bra .abort
+.gameerror
+        pea (_failed,pc)
+        pea TDREASON_FAILMSG
+.abort
+        move.l (_resload,pc),a2
+        jmp (resload_Abort,a2)
+_getcacr
+        movec cacr,d0
+        rte
+_failed dc.b "X-Wing could not start. Check the installed original data files.",0
+        IFD MEMFREE
+_memfreename dc.b "memfree",0
+        ENDC
+_current dc.b 0
+        EVEN
+_oldhome dc.l 0
+        IFD TEST
+_bootearly
+        move.l (_resload,pc),a2
+        lea (_earlymark,pc),a0
+        bra _mark
+_mark
+        movem.l d0-d1/a0-a1,-(sp)
+        lea (_marker,pc),a1
+        moveq #4,d0
+        jsr (resload_SaveFile,a2)
+        movem.l (sp)+,d0-d1/a0-a1
+        rts
+_marker dc.b "PASS"
+_earlymark dc.b "test-early",0
+_bootmark dc.b "test-bootdos",0
+_loadmark dc.b "test-loaded",0
+_exitmark dc.b "test-returned",0
+        EVEN
+        ENDC

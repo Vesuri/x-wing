@@ -1,0 +1,89 @@
+ THIS PACKAGE COMES WITH ABSOLUTELY NO WARRANTY OF ANY KIND, EITHER EXPRESS OR
+ IMPLIED, STATUTORY OR OTHERWISE. THE ENTIRE RISK AS TO USE, RESULTS AND
+ PERFORMANCE OF THE PACKAGE IS ASSUMED BY YOU AND IF THE PACKAGE SHOULD PROVE
+ TO BE DEFECTIVE, YOU ASSUME THE ENTIRE COST OF ALL NECESSARY SERVICING,
+ REPAIR OR OTHER REMEDIATION.
+ UNDER NO CIRCUMSTANCES, CAN THE AUTHOR BE HELD RESPONSIBLE FOR ANY DAMAGE
+ CAUSED IN ANY USUAL, SPECIAL, OR ACCIDENTAL WAY, ALSO IF THE OWNER OR A THIRD
+ PARTY HAS BEEN POINTED AT SUCH POSSIBILITIES OF DAMAGE.
+
+ This install applies to "X-Wing" 1.0, an unofficial Amiga port of the 1993
+ PC game by LucasArts and Totally Games.
+
+ THIS IS AN EARLY ALPHA. The port runs the whole game, but it is not
+ optimized yet: flight is slow even on fast processors, and a path the
+ tests have not reached may stop with an error message. Bug reports are
+ welcome (see Contact).
+
+
+ Requirements:
+ -------------
+ This install requires WHDLoad version 17.0 or better and a PAL or NTSC
+ Amiga with AGA and a 68020 or better; a 68030 or faster is recommended.
+ The installed program uses 2 MB ChipMem and 8.5 MB OtherMem, including
+ its Kickstart image, so it needs more than 8 MB Fast RAM: for example
+ 16 MB. The data cache needs the MMU: WHDLoad uses it on a 68040 or 68060,
+ on a 68030 only with the WHDLoad option MMU (add the tooltype MMU to the
+ icon).
+
+ The game requires an installed A600/A1200/A4000 Kickstart 3.1 image.
+ The kickstart image must be located in the directory "Devs:Kickstarts" and
+ must be named "kick40063.A600", "kick40068.A1200" or "kick40068.A4000".
+ Additionally the file "kick40063.A600.RTB", "kick40068.A1200.RTB" or
+ "kick40068.A4000.RTB" must be installed in the same directory as the kickstart
+ image. It can be found in the archive "util/boot/skick346.lha" on aminet.
+
+
+ Installation:
+ -------------
+ The install does not include the original game files. It installs them from
+ the five 1.44 MB PC floppies of X-Wing 1.0 (LucasArts, 1993). Other
+ releases, such as the Collector's CD-ROM, are not supported. Run the Install
+ icon and select a drawer containing either the disk images
+
+   disk1.img  disk2.img  disk3.img  disk4.img  disk5.img
+
+ or the files XWING.001 to XWING.005 copied from the disks, together with
+ INSTALL.EXE, DETECT.EXE and READ.ME from disk 1. Every file is checked;
+ damaged or other disks are refused. The game is installed as the original
+ installer sets it up for AdLib sound.
+
+ To update, select the same parent drawer and choose Keep. Use existing (the
+ default) keeps the installed game files; Replace installs them again from the
+ disks. Pilots and films are kept either way.
+
+
+ Playing:
+ --------
+ Keyboard and mouse work as in the PC original; keys are at their US
+ keyboard positions. See the original manual for the controls. There is no
+ joystick support yet. Quit from the game's menus. The WHDLoad QuitKey
+ (Help) quits immediately.
+
+
+ History:
+ --------
+ version 0.1 (19.11.2026):
+ - initial early alpha release: the whole game, with music and sound
+   effects, unoptimized
+
+
+ Contact:
+ --------
+ Updates, source code and bug reports for this port:
+ https://github.com/Vesuri/x-wing
+
+ For the full WHDLoad package, other installs and updates refer to:
+	http://www.whdload.de/
+ or	aminet:dev/misc/whdload#?
+ and	aminet:game/patch/
+
+
+ Credits:
+ --------
+ X-Wing (c) 1993 LucasArts, developed by Totally Games and designed by
+ Lawrence Holland and Edward Kilham.
+ Amiga port by Vesa Halttunen (Vesuri), assisted by AI.
+ WHDLoad kickemu by Wepl and the WHDLoad team.
+ XWingInstallData uses the AmigaXDev installer helpers (LGPL 2.1 or later,
+ see LICENSE.LGPL.txt; source at the address above).

@@ -341,16 +341,16 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
 
 ### P9. Release (gate 8)
 
-- Copy:
-  - `whdload/SwotlSlave.s`, which becomes `XWingSlave.s` (kick31 kickemu, `BOOTDOS`,
-    `CACHE` with CACR fallback, `RunCommand` with 16 KiB stack, Help to quit);
+- Copied and adapted for the 0.1 early alpha ([release](release.md), [WHDLoad](whdload.md)):
+  - `whdload/XWingSlave.s` from `SwotlSlave.s` (kick31 kickemu, `BOOTDOS`, `CACHE` with
+    CACR fallback, `RunCommand` with 16 KiB stack, Help to quit);
   - `tools/package_release.py`, `check_release.py`, `test_whdload.py`,
-    `test_release_installer.py`, `install-data`, `tool_icon.py`;
-  - `docs/release.md`, `docs/whdload.md`.
-- Adapt: the installer reads the user's five floppies (SHA-256 pinned). Done:
-  `tools/install-data` unpacks `XWING.001`–`.005` natively (format: `docs/release.md`,
-  "Original data") into the 284 files of the configured DOS install.
-- Gate:
+    `test_release_installer.py`, `release/Install`, `ReadMe` and icons;
+  - `tools/install-data`, which unpacks the user's five floppies natively (format:
+    `docs/release.md`, "Original data") into the 284 files of the configured DOS install.
+  - `tool_icon.py` is not copied: SWOTL's Workbench start check uses it, and X-Wing has no
+    such check yet.
+- Gate (the 0.1 early alpha passed a reduced gate, `docs/design.md`):
   - the CPU matrix (030, 030+MMU, 040, 060) with CACR checks;
   - WHDLoad on 8 MB Fast; the version started without WHDLoad measured down to its minimum
     Fast RAM, which the ReadMe states;
