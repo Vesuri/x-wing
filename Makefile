@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx t-resume-plants t-sab-resume sound-reference sound-fm gates-audio amiga-release whdload test-whdload install-data test-install-data release release-check release-repro
+.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx t-resume-plants t-sab-resume sound-reference sound-fm gates-audio amiga-release whdload test-whdload install-data test-install-data release release-check release-repro publish
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -43,6 +43,7 @@ help:
 	@echo 'make test-install-data      helper vs the DOS install: sources, refusals, cleanup'
 	@echo 'make release                package and audit dist/XWing-$$(cat VERSION).lha (clean tree only)'
 	@echo 'make release-check          audit the existing archive again'
+	@echo 'make publish [PUBLISH=1]    tag the version and publish the archive on GitHub (dry run without PUBLISH=1)'
 	@echo 'make release-repro          a second clean release build gives the same stripped image'
 
 verify-input:
@@ -359,8 +360,18 @@ release:
 	mkdir -p dist
 	python3 tools/package_release.py amiga/out/XWing-release.exe dist
 	python3 tools/check_release.py $(RELEASE_ARCHIVE)
+	cd dist && shasum -a 256 XWing-$$(cat ../VERSION).lha > XWing-$$(cat ../VERSION).lha.sha256
 release-check:
 	python3 tools/check_release.py $(RELEASE_ARCHIVE)
+# Publish the archive as GitHub release <version> (docs/release.md, "Publishing"): a dry
+# run; PUBLISH=1 publishes. The build outputs are remade at HEAD and the archive must equal
+# them, so the tag names a commit that builds it.
+publish:
+	@git diff --quiet HEAD || { echo "publish needs a clean tree: commit or stash first"; exit 1; }
+	$(MAKE) amiga-release whdload install-data
+	python3 tools/check_release.py $(RELEASE_ARCHIVE)
+	cd dist && shasum -a 256 -c XWing-$$(cat ../VERSION).lha.sha256
+	PUBLISH=$(PUBLISH) python3 tools/publish_release.py
 # Reproducible: a second clean build in its own directory gives the same stripped image.
 release-repro: amiga-release
 	mkdir -p build/amiga-release-2 && ln -sf ../../amiga/Makefile build/amiga-release-2/Makefile

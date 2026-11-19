@@ -62,8 +62,24 @@ is described in [whdload.md](whdload.md).
   - The installed tree must equal the configured DOS install.
 - **Make:**
   - `make release` refuses a tree with uncommitted changes. It builds the release image,
-    the slaves and the helper, then packages and audits `dist/XWing-$(cat VERSION).lha`.
+    the slaves and the helper, then packages and audits `dist/XWing-$(cat VERSION).lha`
+    and writes its `.sha256`.
   - `make release-check` audits that archive again.
+
+## Publishing
+
+`make publish` follows the WHDLoad project's `make release PUBLISH=1`
+(`tools/publish_release.py`, adapted from its `common/tools/publish_release.py`).
+
+- **Dry run:** without `PUBLISH=1` it prints the tag, title, files and notes.
+- **Checks:** it needs a clean tree. It remakes the build outputs at HEAD, audits the
+  archive against them and checks the `.sha256`.
+- **Publishing:** with `PUBLISH=1` it also checks the GitHub account (Vesuri) and that HEAD
+  is on `main` on GitHub. It pushes a lightweight tag, the version (`0.1`), on HEAD, and
+  creates the GitHub release `X-Wing <version> (dd.mm.yyyy)`, a prerelease below 1.0.
+- **Notes:** the early-alpha notice, then the version's ReadMe history items.
+- **Assets:** it uploads the archive and its `.sha256`, then downloads the archive again
+  to compare.
 
 ### 0.1 early alpha
 
