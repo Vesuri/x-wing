@@ -433,7 +433,7 @@ handler reads: sync for the declared span).
 - Resume (`tests/host_resume.py`; `make t-resume-<milestone>`, `t-resume-plants`,
   `t-sab-resume`): host lockstep to a flight milestone from a save at the flight's
   start (`POINTS`: FLIGHT.OVL+2856C, the flight's first instruction, before its sound
-  loader and the effect capture). `host_run.py --save` makes it in a boot run where the
+  loader and the effect capture; m12–m15 and the combat film m17). `host_run.py --save` makes it in a boot run where the
   point is reached in main code with no service, interrupt handler, REP slice or
   capture in progress, and keeps it (`tmp/resume/`) only once that run passes its
   milestone. A save holds the guest RAM, state block and EMS store; the runtime's
@@ -568,10 +568,11 @@ handler reads: sync for the declared span).
   09h/89h key make/break in sync builds): Amiga a CIA-B timer per PIT period
   (`plat_timer_rate`) and the CIA-A keyboard read at the vertical blank (`Input.cpp`: raw
   key -> scan code, PC typematic repeat from the vertical blank; diagnostic
-  argument `KEYS=when:key,...` feeds keys, `lmb`/`rmb` and `mx±N`/`my±N`
-  into the same paths at a frame or `pN`, N
-  guest mouse reads after the previous step (host load moves frame
-  timings), and `shot`/`quit` call `amiga_script_mark` for a gdb fixture;
+  argument `KEYS=when:key,...` feeds keys (letters, digits, `enter`, `esc`, `space`,
+  `up`/`down`/`left`/`right`, `$hh` raw codes outside a Shell line), `lmb`/`rmb` and
+  `mx±N`/`my±N` into the same paths at a field, `pN`, N guest mouse reads after the
+  previous step, or `fN`, N published frames (`plat_present` calls) after it (host load
+  moves field timings), and `shot`/`quit` call `amiga_script_mark` for a gdb fixture;
   `XWING_ARGS` in `amiga/debug.sh`); host run the reference's `irq` events, replayed at the
   same visit of the same sync point after the same service event, one of a
   same-visit group per return of the guest handler to that point (the

@@ -12,15 +12,14 @@ from a save at the flight's start (`make t-resume-<milestone>`). P9's 0.1 early 
 
 1. P8, speed ([port plan](port-plan.md#p8-speed-gate-7)): the fidelity checks it reruns at
    every step resume from a flight's start (`make t-resume-<milestone>`), and its combat
-   window is the combat film, m17 (owner decision 2026-11-19); whether its playback costs
-   what a live flight does is measured first, against m13 or m14.
-   First step: copy SWOTL's `tools/cost_meter.py`, `cost_model.json`, `profile_report.py`,
-   `profile_tree.py`, `ab_runs.py`, the `BENCH` fixture method and `docs/perf-method.md`;
-   pin the FS-UAE build; meter the menus, a quiet flight, the combat film and an
-   EMS-heavy scene on the 68030 model.
-   Acceptance of the first step: each window's meter repeats on a matched workload within
-   its measured spread, and a planted slowdown in one generated routine moves its window
-   and its profile row; frame-time targets are then set with the owner.
+   window is the combat film, m17 (owner decision 2026-11-19). The instruments are in place
+   ([perf-method](perf-method.md)): the meter over m06, m12, m13 and m17, its plant caught,
+   the cost model fit on the 68030, and the combat film's frames fixture, 360 ms per frame
+   on the 68030 model.
+   Next: frame-time targets set with the owner; then the first step, priced at the EMS ES
+   guard (`rt_ems_es` and its generated cold sections, 18.4% of m12 and 20.6% of m17).
+   Whether the film's playback costs what the same flight would live is still open: m13's
+   window shows another scene.
 2. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
    `--seed 7` a walk case's x86 store faults at an unmapped address and the oracle then
    reads its recorded writes back, raising UC_ERR_READ_UNMAPPED (the same at P4's commit).

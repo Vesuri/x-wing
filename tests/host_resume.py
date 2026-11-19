@@ -39,7 +39,7 @@ FORMAT = 1
 # 39,962,872 of 40,066,706).
 POINTS = {m: "FLIGHT.OVL+2856c#1" for m in
           ("m12-training-flight", "m13-mission-flight", "m14-tour-battle",
-           "m15-film-replay")}
+           "m15-film-replay", "m17-combat-film")}
 SCRATCH, SCRATCH_BYTES = 0x01000000, 0x00100000   # harness memory past the image's map
 STUBS = SCRATCH + 0xE0000         # the resumed calls' return stubs, 32 bytes each
 SENTINEL = SCRATCH + SCRATCH_BYTES - 16   # return address of runtime calls from the harness

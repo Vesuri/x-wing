@@ -1,0 +1,31 @@
+{
+ "coef": {
+  "insns": 0.6785827899807717,
+  "bytes": 1.044953104837369,
+  "loop_bytes": 0.5926987690463906,
+  "reads": 1.0998148912282757,
+  "writes": 3.4530287927214594,
+  "taken": 7.090732241826492,
+  "loop_taken": 0.0,
+  "muldiv": 25.035576032990413,
+  "long_arith": 4.125024772233841
+ },
+ "r2": 0.8095,
+ "capture": {
+  "fields": 100,
+  "pcs": 56032,
+  "measured": 65416796,
+  "model": 60784460
+ },
+ "long_arithmetic_probe": {
+  "date": "2026-10-21",
+  "forms": "unsigned register mulu.l/divu.l/divul.l; successful arithmetic only",
+  "runs": 3,
+  "executions": 1806458,
+  "cycles": 7451684,
+  "min_case_mean": 4.109375,
+  "max_case_mean": 4.143229166666667,
+  "evidence": "Secret Weapons of the Luftwaffe tmp/cost-probe.N8MwOn (not copied)",
+  "plant": "Secret Weapons of the Luftwaffe tmp/cost-probe.99sWV7: PROBE_ARITHMETIC_FAILURE"
+ }
+}

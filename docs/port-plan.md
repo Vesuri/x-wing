@@ -324,11 +324,14 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
 
 ### P8. Speed (gate 7)
 
-- Measurement machine: the 68030 model; a 68040 run checks the recommended machine.
-  Frame-time targets are set with the owner when the first meter numbers exist.
-- Copy before any step: `tools/cost_meter.py`, `cost_model.json`, `profile_report.py`,
-  `profile_tree.py`, `ab_runs.py`, the `BENCH` fixture method and `docs/perf-method.md`.
-  Pin the FS-UAE build.
+- Measurement machine: the 68030 model, as the cycle-exact preset `a1200-030` without its
+  MMU (the profiler records nothing on the MMU core); a 68040 run checks the recommended
+  machine. Frame-time targets are set with the owner when the first meter numbers exist.
+- Copied and adapted ([perf-method](perf-method.md)): `tools/cost_meter.py` (its run is the
+  host lockstep check), `cost_model.json` (fit on the 68030), `profile_report.py`,
+  `lowering_cost.py`, `profile_tree.py` and `ab_runs.py`; SWOTL's `BENCH` fixture becomes
+  the combat film's frames fixture (`tools/perf_film.py`). The FS-UAE build is pinned
+  (`manifest/perf-tools.sha256`).
 - Windows: menus, a quiet flight, the heaviest combat scene and an EMS-heavy scene.
 - Translator rewrites already in SWOTL (`region`, `reuse`, `compact`, `reglive`, REP fast
   paths, `align`, `outline`) are on from the start; new work is priced first.

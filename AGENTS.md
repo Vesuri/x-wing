@@ -110,6 +110,7 @@ Copied from Secret Weapons of the Luftwaffe, as above.
 | `docs/x86-notes.md` | x86 real-mode facts the decoder, IR and lowering rely on; Unicorn quirks |
 | `docs/release.md` | packaging, the release audits, the installer and the original archive format |
 | `docs/whdload.md` | the WHDLoad slave, its memory and its test |
+| `docs/perf-method.md` | P8: the meter, the frames fixture, the profile tools and the baselines |
 | `docs/open-work.md` | before starting any work |
 
 ## Shared guidance

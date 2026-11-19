@@ -398,6 +398,8 @@ static const char *key_script = 0;
 static ULONG key_up_frame = 0;
 static ULONG key_up_reads = 0;
 static ULONG step_reads = 0;    /* amiga_mouse_reads at the previous step */
+static ULONG step_presents = 0; /* amiga_presents at the previous step */
+extern volatile uint32_t amiga_presents;
 static int key_up = -1;         /* the held raw key or SCRIPT_LMB/RMB */
 
 void __attribute__((noinline)) amiga_script_mark(int quit)
@@ -439,6 +441,10 @@ static int raw_of(const char *name, int n)
     if (named(name, n, "enter")) return 0x44;
     if (named(name, n, "esc")) return 0x45;
     if (named(name, n, "space")) return 0x40;
+    if (named(name, n, "up")) return 0x4C;      /* the cursor keys ($ is the Shell's) */
+    if (named(name, n, "down")) return 0x4D;
+    if (named(name, n, "right")) return 0x4E;
+    if (named(name, n, "left")) return 0x4F;
     if (named(name, n, "lmb")) return SCRIPT_LMB;
     if (named(name, n, "rmb")) return SCRIPT_RMB;
     if (n == 3 && name[0] == '$') {
@@ -493,15 +499,17 @@ static void key_script_step(void)
     }
     ULONG when = 0;
     const char *p = key_script;
-    int reads = *p == 'p';
-    p += reads;
+    int reads = *p == 'p', presents = *p == 'f';
+    p += reads | presents;
     while (*p >= '0' && *p <= '9') {
         when = when * 10 + (ULONG)(*p++ - '0');
     }
-    if (reads ? amiga_mouse_reads - step_reads < when : amiga_frames < when) {
+    if (reads ? amiga_mouse_reads - step_reads < when :
+        presents ? amiga_presents - step_presents < when : amiga_frames < when) {
         return;
     }
     step_reads = amiga_mouse_reads;
+    step_presents = amiga_presents;
     const char *name = *p == ':' ? ++p : p;
     while (*p > ' ' && *p != ',') {
         ++p;
