@@ -16,7 +16,8 @@ from a save at the flight's start (`make t-resume-<milestone>`). P9's 0.1 early 
    ([perf-method](perf-method.md)): the meter over m06, m12, m13 and m17, its plant caught,
    the cost model fit on the 68030, and the combat film's frames fixture, 360 ms per frame
    on the 68030 model.
-   Next: frame-time targets set with the owner; then the first step, priced at the EMS ES
+   Target: the combat film at 100 ms per frame or less on the 68030 model (owner decision
+   2026-11-19, `docs/design.md`). Next: the first step, priced at the EMS ES
    guard (`rt_ems_es` and its generated cold sections, 18.4% of m12 and 20.6% of m17).
    Whether the film's playback costs what the same flight would live is still open: m13's
    window shows another scene.
