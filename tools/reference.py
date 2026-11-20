@@ -50,7 +50,11 @@ state, so the pins are still compared.
 same milestones on the Sound Blaster machine and installation (`--sb` of tools/pc_run.py),
 with the OPL log and the DSP and DMA streams (trace/opl.csv, sound.csv, dma.csv). The game
 then loads ADLIB_W.IMS, which stands for ADLIB.IMS in the column `resident`, and the pins
-are manifest/milestones-sb.sha256. The runs are named sb-<time>-<id>-<milestone>.
+are manifest/milestones-sb.sha256. The runs are named sbms-<time>-<id>-<milestone>. The
+copy-protection question differs from the AdLib machine's (the card's detection moves the
+moment it is chosen; MEASURED: m03-question's question text differs), so the milestones past
+the screen (column `bypass`) run bypassed, as the bypassed host references do (owner decision
+2026-11-08), and those that answer the AdLib machine's question (SB_SKIP) do not run.
 """
 
 from __future__ import annotations
@@ -73,6 +77,8 @@ REPO = Path(__file__).resolve().parent.parent
 TABLE = REPO / 'reference/milestones.csv'
 PINS = REPO / 'manifest/milestones.sha256'
 PINS_SB = REPO / 'manifest/milestones-sb.sha256'  # --sb
+# --sb: milestones that type the correct answer to the AdLib machine's question
+SB_SKIP = {'m03p-protection-passed', 'm03q-protection-passed-late'}
 SITES = {'menu': 'FRONTEND.OVL+1808e', 'frame': 'FLIGHT.OVL+1b7d2'}
 PENDING_MAX = 4
 POLLS = REPO / 'build/gen/poll-points.csv'
@@ -220,7 +226,13 @@ def main() -> int:
         ap.error('--bypass records host references only: add --polls')
     with TABLE.open() as f:
         rows = {r['name']: r for r in csv.DictReader(f)}
-    names = args.only or [n for n in rows if rows[n]['bypass'] or not args.bypass]
+    names = args.only or [n for n in rows if (rows[n]['bypass'] or not args.bypass) and
+                          not (args.sb and n in SB_SKIP)]
+    if args.sb and set(names) & SB_SKIP:
+        ap.error(f"--sb: {' '.join(sorted(set(names) & SB_SKIP))} answer the AdLib machine's question")
+
+    def bypassed(n: str) -> bool:   # --sb: every milestone past the screen runs bypassed
+        return args.bypass or (args.sb and bool(rows[n]['bypass']))
     if args.bypass:
         before = [n for n in names if not rows[n]['bypass']]
         if before:
@@ -230,7 +242,7 @@ def main() -> int:
         prefix = 'sb' + prefix
     base = args.name or prefix + time.strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
     with ThreadPoolExecutor(args.jobs) as ex:
-        results = dict(zip(names, ex.map(lambda n: run(base, rows, n, args.polls, args.bypass, args.opl, args.sb), names)))
+        results = dict(zip(names, ex.map(lambda n: run(base, rows, n, args.polls, bypassed(n), args.opl, args.sb), names)))
     pins = {}
     pin_file = PINS_SB if args.sb else PINS
     if pin_file.exists():
@@ -244,7 +256,7 @@ def main() -> int:
         ref = rows[name]['frame']
         other = ref.lstrip('!=').partition('@')[0]
         # a bypassed run never shows the screen a milestone's frame is compared with
-        if ref and actual and not (args.bypass and not rows.get(other, {}).get('bypass')):
+        if ref and actual and not (bypassed(name) and not rows.get(other, {}).get('bypass')):
             other, _, rect = ref.lstrip('!=').partition('@')
             mask = tuple(int(v) for v in rect.split()) if rect else None
             if other not in results or not results[other][1]:

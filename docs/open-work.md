@@ -14,12 +14,13 @@ from a save at the flight's start (`make t-resume-<milestone>`). P9's 0.1 early 
    Blaster the game loads `ADLIB_W.IMS` (MEASURED: the installer's "SoundBlaster" writes `adlib_w` to `LANDRU.CFG`), whose
    embedded Creative CT-VOICE code drives the DSP; WC2's DSP, DMA and IRQ 7 model is the
    copy source (WC2 `d8c9860`, `dfd3db4`), fitted to WC2's own commands. Steps:
-   - Sound Blaster references (the machine, the configuration and the tracer's streams are
-     in place: [DOS reference](dos-reference.md#sound-blaster-p10)): the pinned milestones,
-     the speech and digitised-effect scenes and the exit. The intro's speech already shows
-     the driver's commands: reset, E0h, E1h, E2h, E4h, E8h, F2h and C6h while it detects the
-     card, then 40h, 14h, D1h and D3h (speaker off, which WC2 met at its exit) around every
-     clip (MEASURED);
+   - Sound Blaster references: the machine, its configuration, the tracer's streams and the
+     pinned milestones are in place ([DOS reference](dos-reference.md#sound-blaster-p10)).
+     The driver detects the card with reset, E0h, E1h, E2h, E4h, E8h, F2h and C6h, then
+     plays every clip as one 8-bit single-cycle DMA block: 40h, 14h, D1h, D3h (speaker off,
+     which WC2 met at its exit). Rates: A5h and 4Ah/4Ch in the intro, 83h elsewhere. Only
+     these runs read `SPEECH.LFD`; the AdLib runs read `SFX.LFD` as often (MEASURED), so the
+     clips are speech (INFERRED). Left: the speech scenes beyond the milestones and the exit;
    - `ADLIB_W.IMS` in the static map and the translator;
    - the DSP, DMA and IRQ 7 model at the commands the references show, its host lockstep
      and block oracle, and its sabotages;

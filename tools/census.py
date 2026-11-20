@@ -38,8 +38,8 @@ from translator.decode import DecodeError, decode  # noqa: E402
 
 SWEEP = M.REPO / 'tmp/sweep'
 CACHE = M.REPO / 'tmp/census'
-FILES = [M.ROOT, 'FRONTEND.OVL', 'FLIGHT.OVL', 'ADLIB.IMS']
-DRIVER = 'ADLIB.IMS'
+DRIVERS = ('ADLIB.IMS', 'ADLIB_W.IMS')  # the music drivers in scope (tools/sweep.py)
+FILES = [M.ROOT, 'FRONTEND.OVL', 'FLIGHT.OVL', *DRIVERS]
 OPCODES_186 = {0x60: 'pusha', 0x61: 'popa', 0x62: 'bound', 0x68: 'push imm16', 0x69: 'imul imm16',
                0x6A: 'push imm8', 0x6B: 'imul imm8', 0x6C: 'insb', 0x6D: 'insw', 0x6E: 'outsb',
                0x6F: 'outsw', 0xC0: 'shift r/m8, imm8', 0xC1: 'shift r/m16, imm8', 0xC8: 'enter',
@@ -232,18 +232,18 @@ def driver(traces) -> None:
     calls = defaultdict(set)
     back = defaultdict(set)
     for fm, fo, tm, to in M.edges(traces):
-        if tm == DRIVER and fm not in (DRIVER, '-') and (tm, to) not in hw:
-            calls[to].add(f'{fm}+{fo:05X}')
-        if fm == DRIVER and tm not in (DRIVER, '-'):
-            back[fo].add(tm)
+        if tm in DRIVERS and fm not in (*DRIVERS, '-') and (tm, to) not in hw:
+            calls[tm, to].add(f'{fm}+{fo:05X}')
+        if fm in DRIVERS and tm not in (*DRIVERS, '-'):
+            back[fm, fo].add(tm)
     print('| Driver entry | Callers (distinct sites) |\n|---|---|')
-    for to, sites in sorted(calls.items()):
+    for (tm, to), sites in sorted(calls.items()):
         mods = Counter(s.split('+')[0] for s in sites)
-        print(f'| {DRIVER}+{to:05X} | {len(sites)}: ' +
+        print(f'| {tm}+{to:05X} | {len(sites)}: ' +
               ', '.join(f'{m} {n}' for m, n in sorted(mods.items())) + ' |')
     print('\n| Driver site | Transfers out to |\n|---|---|')
-    for fo, mods in sorted(back.items()):
-        print(f'| {DRIVER}+{fo:05X} | {" ".join(sorted(mods))} |')
+    for (fm, fo), mods in sorted(back.items()):
+        print(f'| {fm}+{fo:05X} | {" ".join(sorted(mods))} |')
     print()
 
 

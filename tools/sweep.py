@@ -6,8 +6,8 @@ manifest/references.tsv) and adapted to X-Wing's overlay manager (tools/xwing_mo
 docs/overlay-manager.md).
 
 Units: the root (link range 0..end of image, without the overlay area), each of the 26
-overlay segments (its code bytes in its file, at its link segment) and `ADLIB.IMS` (its
-own link space). Seeds: the MZ entry, every thunk, every traced instruction start
+overlay segments (its code bytes in its file, at its link segment) and each music driver
+in scope, `ADLIB.IMS` and `ADLIB_W.IMS` (its own link space). Seeds: the MZ entry, every thunk, every traced instruction start
 (union of the trace corpus), traced indirect targets. Follows fall-through, near and far
 direct jumps and calls; stops at returns, indirect jumps and the calls listed in
 annotations/noreturn.csv; never sweeps linearly. A far
@@ -40,8 +40,10 @@ import xwing_model as M
 
 OUT = M.REPO / 'tmp/sweep'
 UNKNOWN, START, BODY, TABLE = 0, 1, 2, 5
-DRIVER = 'ADLIB.IMS'
-FILES = [M.ROOT, 'FRONTEND.OVL', 'FLIGHT.OVL', DRIVER]
+# the music drivers in scope, each in its own link space; one is loaded per run (the
+# AdLib references load ADLIB.IMS, P10's Sound Blaster references ADLIB_W.IMS)
+DRIVERS = ('ADLIB.IMS', 'ADLIB_W.IMS')
+FILES = [M.ROOT, 'FRONTEND.OVL', 'FLIGHT.OVL', *DRIVERS]
 
 
 @dataclass
@@ -81,8 +83,9 @@ def units(mods: dict[str, M.Module]) -> dict[str, Unit]:
         size = len(mods[s.file].data)
         out[names[s.index]] = Unit(names[s.index], s.file, s.code, min(s.end, size),
                                    s.link_seg * 16, chain)
-    if DRIVER in mods:
-        out[DRIVER] = Unit(DRIVER, DRIVER, 0, len(mods[DRIVER].data), 0)
+    for d in DRIVERS:
+        if d in mods:
+            out[d] = Unit(d, d, 0, len(mods[d].data), 0)
     return out
 
 
@@ -183,13 +186,13 @@ class Sweep:
     def resolve(self, u: Unit, linear: int) -> list[str]:
         """Units a far target from u can be in: u, its parents, the root (one), or the
         overlay-area candidates when the root refers into the overlay area."""
-        if u.file == DRIVER:
+        if u.file in DRIVERS:
             return [u.name] if u.has_link(linear) else []
         for n in [u.name] + u.parents + [M.ROOT]:
             if self.us[n].has_link(linear):
                 return [n]
         if u.name == M.ROOT:
-            return [n for n, v in self.us.items() if v.file != DRIVER and v.has_link(linear)]
+            return [n for n, v in self.us.items() if v.file not in DRIVERS and v.has_link(linear)]
         return []
 
     def far_target(self, u: Unit, at: int, seg: int, off: int, index: int | None = None) -> None:

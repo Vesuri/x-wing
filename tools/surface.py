@@ -22,7 +22,7 @@ from capstone import x86
 
 import xwing_model as M
 
-SWEPT = [M.ROOT, "FRONTEND.OVL", "FLIGHT.OVL", "ADLIB.IMS"]
+SWEPT = [M.ROOT, "FRONTEND.OVL", "FLIGHT.OVL", "ADLIB.IMS", "ADLIB_W.IMS"]
 
 
 def static_sites(mods):

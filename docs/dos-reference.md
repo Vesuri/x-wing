@@ -132,11 +132,22 @@ every reference run passes, also removes the Sound Blaster; the patch
 - `trace/sound.csv`: every guest access to the DSP (220h-22Fh but the OPL at 228h/229h) and
   the DMA controller (00h-0Fh, page registers 81h-83h and 87h), with the emulated ms and the
   code location;
-- `trace/dma.csv`: the bytes a device reads by DMA, one row per run of consecutive addresses
-  on a channel, ended by the terminal count (`tc`), a jump (`break`) or the trace's end
-  (`open`), with the bytes' FNV-1a 64 hash.
+- `trace/dma.csv`: the DMA traffic with the bytes' FNV-1a 64 hash. A device's reads (`dir`
+  `read`) make one row per run of consecutive addresses on a channel, ended by the terminal
+  count (`tc`), a jump (`break`) or the trace's end (`open`); each block it writes into
+  memory (`write`, the DSP's E2h identification byte) is a row of its own, and the written
+  bytes' last writer is the pseudo-module `DMA` at the channel (`writes.csv`), so the image
+  proofs account for them.
 
 The OPL log (`--opl`) also takes the card's OPL ports 228h/229h.
+
+`tools/reference.py --sb` records the milestones on this machine as `sbms-<time>-<id>-*`,
+pinned in `manifest/milestones-sb.sha256`; two passes match the pins (MEASURED). The
+copy-protection question differs from the AdLib machine's, so the milestones past the screen
+run bypassed (the column `bypass`, as the bypassed host references) and the two that answer
+the AdLib machine's question (`m03p`, `m03q`) do not run. The map takes both sets with
+`make map MAP_ARGS="--runs latest+sb"` (`latest-sb` alone); `ADLIB_W.IMS` is swept with
+`ADLIB.IMS`.
 
 ## Reference runs
 

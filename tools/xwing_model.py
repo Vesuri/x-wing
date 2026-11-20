@@ -174,11 +174,18 @@ def events(trace: Path, kinds: tuple[str, ...] = ()):
 
 
 def runs(pattern: str = 'latest') -> list[Path]:
-    """Traces of the runs matching a glob. 'latest' is the newest milestone set of
+    """Traces of the runs matching a glob. 'latest' is the newest AdLib milestone set of
     tools/reference.py: the base name of the most recent `*-m00-entry` run, host
-    references (`host-*`, `--polls`: m00 and m01 only) excluded."""
-    if pattern == 'latest':
-        entries = sorted((p for p in RUNS.glob('*-m00-entry') if not p.name.startswith('host-')),
+    references (`host-*`, `--polls`: m00 and m01 only) and P10's Sound Blaster sets
+    (`sb*`, `--sb`) excluded. 'latest-sb' is the newest Sound Blaster set (`sb*`), 'latest+sb'
+    both."""
+    if pattern == 'latest+sb':  # both: the corpus of the modules both machines run
+        return runs('latest') + runs('latest-sb')
+    if pattern in ('latest', 'latest-sb'):
+        sb = pattern == 'latest-sb'
+        entries = sorted((p for p in RUNS.glob('*-m00-entry')
+                          if (p.name.startswith('sb') if sb else
+                              not p.name.startswith(('host-', 'sb')))),
                          key=lambda p: p.stat().st_mtime)
         if not entries:
             return []
