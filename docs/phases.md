@@ -8,7 +8,7 @@ generated-code coverage, not pictures. Later changes rerun only the affected gat
 (`AGENTS.md`, Validation scope). Completed phases need no blanket revalidation for an
 isolated subsystem change. The [port plan](port-plan.md) steps carry the work for each
 gate. P0 (repo rules) comes before gate 1, and P7 (AdLib sound) and P10 (Sound Blaster PCM)
-have their own gates in the plan.
+have their own gates in the plan. P10 is worked ahead of gates 7 and 8 (owner decision 2026-11-20, `docs/design.md`).
 
 | # | Step | Phase | Exit | From SWOTL |
 |---|---|---|---|---|

@@ -25,6 +25,7 @@
 | Gate 5's Amiga half | The Amiga replay is part of gate 5 (owner decision 2026-11-06): live, m01's state depends on when the CIA ticks land, so a diagnostic image replays the reference's interrupts, REP slices, VGA status reads and clocks on the 68030 model and the strict compare runs on its capture; the production image's live run to the m01 label is a smoke test |
 | P8 frame-time target | The combat film (m17) at 100 ms per frame or less on the 68030 model (the cycle-exact `a1200-030` preset without its MMU), measured by the frames fixture ([perf-method](perf-method.md)) (owner decision 2026-11-19). Baseline: 360 ms |
 | Early alpha 0.1 | Released ahead of P8 as an unoptimized early alpha, version 0.1 (19.11.2026) (owner decision 2026-11-19), with a reduced gate: the archive allowlist and original-bytes scan, matching version strings, a reproducible stripped image, the WHDLoad slave and the start without WHDLoad run on the 68030, an installer test, and a ReadMe saying it is an unoptimized early alpha ([release](release.md)). The full gate 8 stays open |
+| P10 ahead of P8 and P9 | Sound Blaster PCM (P10) is worked and committed now, before P8's and P9's gates pass (owner decision 2026-11-20). P8 resumes after it; P10's own gate and every AdLib gate stay as they are |
 | Chipset and release requirements | Not decided; 256-colour mode 13h implies AGA, as in Secret Weapons of the Luftwaffe |
 
 ## Faithfulness boundary
