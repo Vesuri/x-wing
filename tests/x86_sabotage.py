@@ -150,7 +150,7 @@ def plant(k: int) -> int:
 
 def main() -> int:
     missed = []
-    with ProcessPoolExecutor(min(len(SABOTAGE), os.cpu_count() or 1)) as pool:
+    with ProcessPoolExecutor(min(len(SABOTAGE), max(1, (os.cpu_count() or 2) // 2))) as pool:
         for (name, _t, _f, corpus), caught in zip(SABOTAGE, pool.map(plant, range(len(SABOTAGE)))):
             print(f"{name:28} {corpus:9} mismatches {caught}", flush=True)
             if not caught:

@@ -92,7 +92,8 @@ ghidra:
 
 # Gate 3 (copied from Secret Weapons of the Luftwaffe's Makefile): each check logs to
 # tmp/test/<name>.log and prints one status line; the differential runs in shards.
-JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc)
+# half the cores (AGENTS.md): other projects share the machine
+JOBS ?= $(shell n=$$(sysctl -n hw.ncpu 2>/dev/null || nproc); echo $$(( n > 1 ? n / 2 : 1 )))
 RUN = @mkdir -p tmp/test; if $(ENV) $(2) > tmp/test/$(1).log 2>&1; then echo "ok    $(1)"; \
 	else echo "FAIL  $(1) (tmp/test/$(1).log)"; tail -n 15 tmp/test/$(1).log; exit 1; fi
 SHARDS = forms.0/4 forms.1/4 forms.2/4 forms.3/4 space.0/1 boundary.0/1 blocks.0/1

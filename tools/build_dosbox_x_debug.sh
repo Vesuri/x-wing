@@ -21,5 +21,6 @@ fi
 [ -f configure ] || ./autogen.sh
 [ -f Makefile ] || ./configure --enable-debug=heavy --enable-sdl2 --disable-sdl2test \
 	--disable-sdl --disable-sdltest --prefix="$DBG/local"
-make -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
+n=$(sysctl -n hw.ncpu 2>/dev/null || nproc)
+make -j"$(( n > 1 ? n / 2 : 1 ))"   # half the cores (AGENTS.md)
 echo "BUILD PASS: $DBG/src/dosbox-x"

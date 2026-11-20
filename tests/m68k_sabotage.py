@@ -965,7 +965,7 @@ def main() -> int:
     missed = []
     replayed = cases = 0
     clean = program_digest()
-    with ProcessPoolExecutor(min(len(SABOTAGE), os.cpu_count() or 1)) as pool:
+    with ProcessPoolExecutor(min(len(SABOTAGE), max(1, (os.cpu_count() or 2) // 2))) as pool:
         futures = {k: pool.submit(plant, k, clean) for k in sorted(range(len(SABOTAGE)), key=slow_first)}
         for k, (name, _fn, corpus) in enumerate(SABOTAGE):
             bad, total, r, n = futures[k].result()
