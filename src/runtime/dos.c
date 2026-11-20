@@ -546,15 +546,16 @@ static void release(uint16_t cs, uint16_t ip)
 /* AX=4B03h: load the overlay DS:DX at the segment and relocation factor of
  * the parameter block ES:BX, as DOSBox-X's DOS_Execute: the MZ load image
  * read to segment:0, each relocation word plus the factor; AX = DX = 0. The
- * only overlay is the music driver, translated at driver_segment: another
- * file or segment is a stop. */
+ * only overlay is the music driver the build translated (driver_name: ADLIB.IMS,
+ * or ADLIB_W.IMS for the Sound Blaster setup), at driver_segment: another file or
+ * segment is a stop. */
 static void load_overlay(uint16_t cs, uint16_t ip)
 {
     char path[80];
     path_of(lin(G_DS, rt_r.dx), path, sizeof path);
     uint32_t block = lin(G_ES, rt_r.bx);
     uint16_t seg = rd16(block), reloc = rd16(block + 2);
-    const char *name = path, *want = "ADLIB.IMS";
+    const char *name = path, *want = driver_name;
     for (const char *c = path; *c; ++c) {
         name = *c == '/' ? c + 1 : name;
     }
@@ -563,10 +564,10 @@ static void load_overlay(uint16_t cs, uint16_t ip)
         ++k;
     }
     if (name[k] || want[k]) {
-        rt_unsupported("overlay load of another file than ADLIB.IMS", 0x21, cs, ip);
+        rt_unsupported("overlay load of another file than the translated driver", 0x21, cs, ip);
     }
     if (seg != driver_segment || reloc != driver_segment) {
-        rt_stop("ADLIB.IMS loaded at another segment than driver_segment (seg, reloc)", seg, reloc);
+        rt_stop("the driver loaded at another segment than driver_segment (seg, reloc)", seg, reloc);
     }
     int32_t f = plat_open(path, 0);
     if (f < 0) {
@@ -575,24 +576,24 @@ static void load_overlay(uint16_t cs, uint16_t ip)
     }
     uint8_t h[0x1c];
     if (plat_read(f, h, sizeof h) != sizeof h) {
-        rt_stop("ADLIB.IMS short header", 0, 0);
+        rt_stop("driver: short header", 0, 0);
     }
 #define HW(o) ((uint16_t)(h[o] | h[(o) + 1] << 8))
     if (HW(0) != 0x5a4d) {
-        rt_stop("ADLIB.IMS is not MZ", HW(0), 0);
+        rt_stop("driver: not MZ", HW(0), 0);
     }
     uint32_t size = HW(4) * 512u - (HW(2) ? 512u - HW(2) : 0) - HW(8) * 16u;
     plat_seek(f, HW(8) * 16, 0);
     uint8_t *image = rt_span_w(lin(seg, 0), size);
     if (plat_read(f, image, size) != (int32_t)size) {
-        rt_stop("ADLIB.IMS short read", size, 0);
+        rt_stop("driver: short read", size, 0);
     }
     rt_span_order(image, size);
     plat_seek(f, HW(0x18), 0);
     for (uint16_t n = 0; n < HW(6); ++n) {
         uint8_t r[4];
         if (plat_read(f, r, 4) != 4) {
-            rt_stop("ADLIB.IMS short relocation", n, 0);
+            rt_stop("driver: short relocation", n, 0);
         }
         uint32_t a = lin(seg + (r[2] | r[3] << 8), r[0] | r[1] << 8);
         wr16(a, rd16(a) + reloc);

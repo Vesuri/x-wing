@@ -141,7 +141,8 @@ struct rt_dispatch_row {
 extern const uint32_t dispatch_count;
 extern const struct rt_dispatch_row dispatch_table[];
 extern const uint32_t load_segment;
-extern const uint32_t driver_segment;  /* ADLIB.IMS (dos.c AX=4B03h) */
+extern const uint32_t driver_segment;  /* the music driver (dos.c AX=4B03h) */
+extern const char driver_name[];       /* its file: ADLIB.IMS or ADLIB_W.IMS (translator image.DRIVER) */
 extern const uint16_t irq0_async_handler[2];  /* CS, IP: the proved INT 08h handler */
 extern const uint32_t overlay_table;   /* descriptors, root image offset (machine.c) */
 

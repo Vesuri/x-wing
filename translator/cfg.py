@@ -34,7 +34,7 @@ from . import image
 from .decode import DecodeError, Far, Insn, Rel, decode
 
 M = image.M
-DRIVER = "ADLIB.IMS"
+DRIVER = image.DRIVER
 
 
 class CfgError(Exception):

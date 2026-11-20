@@ -64,19 +64,22 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-from . import image
+from . import driver, image
 from .decode import Far, Imm, Mem, Reg
 from .ir import FLAG_KINDS, T, mask
 from .lower import CC_READS, DRVSEG, LOADSEG
 from .sem import lift
 
 M = image.M
-DRIVER = "ADLIB.IMS"                 # translator/cfg.py DRIVER: relocated at DRVSEG
+DRIVER = image.DRIVER                # the build's music driver, relocated at DRVSEG; the
+                                     # driver addresses below are ADLIB.IMS's, each read from
+                                     # DRIVER's instruction at the cited offset (driver.value)
+D = driver.value
 PORTS = {0x388: "OPL index (rt_out8)", 0x389: "OPL data (rt_out8)", 0x20: "PIC EOI",
          0x3C8: "DAC write index (rt_dac_out)", 0x3C9: "DAC data (rt_dac_out)"}
 BIOS_TICK = ("BDA", 0x6C, 0x70)      # rt_bios_int08: tick dword, midnight byte (0040:006C)
 BIOS_ENTRY = 0xFFEA5                 # indirect.csv target of the chain (F000:FEA5)
-GAME_DS_SLOT = (DRIVER, 0x0000, 0x911)  # ADLIB.IMS install +0915/+09C5: mov cs:[0911h],ds
+GAME_DS_SLOT = (DRIVER, 0x0000, D(0x915, 0x911))  # ADLIB.IMS install +0915/+09C5: mov cs:[0911h],ds
 SIGNATURES = 64                      # signatures per context and instruction before joining
 WIDEN = 6                            # joins that change a joined state before widening
 REGS = ("ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "cs", "ds", "es", "ss", "flagsx")
@@ -141,10 +144,10 @@ def declared_sync() -> dict[tuple[str, int], list[tuple[str, int, int, str]]]:
 # array). Every handler store through one stores a word of the same class.
 SEGMENT_WORDS = {
     ("A0000", GAME_DS_SLOT[2]): "G",   # the driver's DS (ADLIB.IMS install +0915/+09C5)
-    ("G", 0x6E4): "S",                 # the song table far pointer's segment (ADLIB.IMS +007E4 les)
+    ("G", D(0x7E4, 0x6E4)): "S",       # the song table far pointer's segment (ADLIB.IMS +007E4 les)
     ("S", 0x0002): "S",                # the segments of that table's far pointers (+007EB)
-    ("G", 0x0E38): "S",                # the current event's huge song pointer (+025EC, +02658)
-    ("G", 0x6D8): "3A07",              # the API caller's DS (+00022, +001F3), loaded around the
+    ("G", D(0x25EC, 0x0E38)): "S",     # the current event's huge song pointer (+025EC, +02658)
+    ("G", D(0x22, 0x6D8)): "3A07",     # the API caller's DS (+00022, +001F3), loaded around the
                                        # far callback (+006AA) (MEASURED: 4229h in flight, DGROUP)
     ("3A07", 0xD828): "03DF",          # the segment of the flight's pointer to the driver entry
                                        # pointer (FLIGHT.OVL +02EB4; les bx,[D826h] in its music
@@ -167,17 +170,17 @@ def para_name(mod: str, para: int) -> str:
 
 # Class aliases for the segment-word table: G is the driver's DS, its
 # load paragraph 04D0 (ADLIB +00BEF mov ax,04D0h; MEASURED: G = DRVSEG + 04D0h)
-GAME_DS_PARA = 0x04D0
-CLASS_ALIAS = {"A04D0": "G"}
+GAME_DS_PARA = D(0xBEF, 0x04D0)
+CLASS_ALIAS = {f"A{GAME_DS_PARA:04X}": "G"}
 
 # Segment loads: (module, offset) -> class of the segment word the instruction loads,
 # where the word's displacement does not type it (an indexed record)
 SEGMENT_LOADS = {
-    (DRIVER, 0x01DCD): "S",  # the segment of a track record's huge song pointer (rec+2):
-    (DRIVER, 0x025E6): "S",  # loaded into ES and dereferenced as song bytes there or after
-    (DRIVER, 0x02D7E): "S",  # the 1000h carry (DERIVED: the code); G words at displacement 2
-    (DRIVER, 0x031AE): "S",  # of other records hold counts and pointers, hence per site
-    (DRIVER, 0x02C65): "3A07",  # a queued request's DS (+02C4A record at EC0h+16k, +0C), the
+    (DRIVER, driver.carry(0x01DCD)): "S",  # the segment of a track record's huge song pointer (rec+2):
+    (DRIVER, driver.carry(0x025E6)): "S",  # loaded into ES and dereferenced as song bytes there or after
+    (DRIVER, driver.carry(0x02D7E)): "S",  # the 1000h carry (DERIVED: the code); G words at displacement 2
+    (DRIVER, driver.carry(0x031AE)): "S",  # of other records hold counts and pointers, hence per site
+    (DRIVER, driver.carry(0x02C65)): "3A07",  # a queued request's DS (+02C4A record at EC0h+16k, +0C), the
                                # tick's +001EA stores it to G:06D8 (INFERRED: the API caller's
                                # DS, DGROUP as G:06D8 measures)
 }
@@ -185,7 +188,7 @@ SEGMENT_LOADS = {
 # Dead reads: (module, offset) -> the value given to a read of a word the handler
 # never wrote whose value reaches no use (the analysis does not refine on branches)
 DEAD_READS = {
-    (DRIVER, 0x119A): ("c", 0),   # mov di,[bp-2] before any write: DI is returned only
+    (DRIVER, driver.carry(0x119A)): ("c", 0),   # mov di,[bp-2] before any write: DI is returned only
                                   # when exactly one record matched (+011B5 je, DX = 0),
                                   # and that match wrote DI (+011AB) (DERIVED: the code)
 }
@@ -194,15 +197,15 @@ DEAD_READS = {
 # code writes (only indexed loads read them). A handler load at a known offset gives
 # the image's word; a call through one keeps that target of its irq-hooks.csv row.
 CONST_TABLES = {
-    ("G", 0x003C, 0x0061): "the API function table (19 near pointers) the driver entry "
+    ("G", D(0x5A, 0x3C), D(0x5A, 0x3C) + 0x25): "the API function table (19 near pointers) the driver entry "
                            "(+0005A) and its far dispatcher (+00114) index by a request's "
                            "low byte (DERIVED: the code; no store addresses it, Proof "
                            "check_const; MEASURED: the image's words in flight, ms-p2c m12)",
-    ("G", 0x00A0, 0x00D3): "the voice request functions (26 near pointers) the voice "
+    ("G", D(0xD98, 0xA0), D(0xD98, 0xA0) + 0x33): "the voice request functions (26 near pointers) the voice "
                            "function +00D84 indexes by the request code (+00D98)",
-    ("G", 0x00D4, 0x00ED): "the voice requests' argument kinds (26 bytes, +00DA8) that "
+    ("G", D(0xDA8, 0xD4), D(0xDA8, 0xD4) + 0x19): "the voice requests' argument kinds (26 bytes, +00DA8) that "
                            "select the case of its switch",
-    ("A0000", 0x0DBE, 0x0DC9): "that switch's six cases (jmp cs:[bx+0DBEh] at +00DB9) "
+    ("A0000", D(0xDB9, 0xDBE), D(0xDB9, 0xDBE) + 0x0B): "that switch's six cases (jmp cs:[bx+0DBEh] at +00DB9) "
                                "(all three: DERIVED: the code; MEASURED: the image's bytes in "
                                "flight and at m01, ms-p2c m01, m12, m14)",
 }
@@ -361,7 +364,8 @@ class Handler:
     def __init__(self, prog, entry=None):
         self.prog = prog
         self._preds = None
-        rows = [r for r in image.rows("entries.csv") if r["reason"].startswith("INT 08h handler")]
+        rows = [r for r in image.rows("entries.csv") if r["reason"].startswith("INT 08h handler")
+                and r["module"] in image.SCOPE]
         if entry is None:
             if len(rows) != 1:
                 raise Violation("entries.csv: one INT 08h handler row expected")

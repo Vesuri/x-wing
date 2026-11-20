@@ -41,7 +41,7 @@ from .flags import ALL, plan, transfer
 from .lower import DRVSEG, GREG, LOADSEG, MIRROR, Ctx, LowerError, hx
 
 M = image.M
-TAG = {"XWING.EXE": "R", "FRONTEND.OVL": "FE", "FLIGHT.OVL": "FLT", "ADLIB.IMS": "AD"}
+TAG = {"XWING.EXE": "R", "FRONTEND.OVL": "FE", "FLIGHT.OVL": "FLT", "ADLIB.IMS": "AD", "ADLIB_W.IMS": "AW"}
 DRIVER = cfg.DRIVER
 RET, UNKNOWN, SMC = "ret", "unknown", "smc"
 TERMINAL = {"jmp", "jmpf", "ret", "retf", "iret", "hlt"}
@@ -882,7 +882,7 @@ class Program:
         if self.diagnostic_reps:
             lines.append("\txref\trt_replay_rep")
         lines += ["\txref\t" + s for s in sorted({s for _, s in self.hle.values()})]
-        lines += ["\txdef\tdispatch_table", "\txdef\tdispatch_count", "\txdef\tload_segment", "\txdef\tdriver_segment", "\txdef\tirq0_async_handler", "\txdef\tpointer_guest",
+        lines += ["\txdef\tdispatch_table", "\txdef\tdispatch_count", "\txdef\tload_segment", "\txdef\tdriver_segment", "\txdef\tdriver_name", "\txdef\tirq0_async_handler", "\txdef\tpointer_guest",
                   "\txdef\toverlay_table", "\txdef\tsmc_expose", "\txdef\tsmc_lo",
                   "\txdef\tsmc_hi", "\txdef\tsmc_seg_limit", "\txdef\tsmc_seg_lo"]
         if len(self.cells) == 1:
@@ -896,7 +896,8 @@ class Program:
         code, data = self.smc_text()
         lines += code
         rows = self.dispatch_rows()
-        lines += ["\tcnop\t0,4", "load_segment:\tdc.l\tLOADSEG", "driver_segment:\tdc.l\tDRVSEG\t; AX=4B03h must load ADLIB.IMS here (dos.c)",
+        lines += ["\tcnop\t0,4", "load_segment:\tdc.l\tLOADSEG", "driver_segment:\tdc.l\tDRVSEG\t; AX=4B03h must load driver_name here (dos.c)",
+                  f'driver_name:\tdc.b\t"{DRIVER}",0\t; the one music driver translated (image.DRIVER)', "\tcnop\t0,4",
                   "irq0_async_handler:\tdc.w\t" + self.async_handler() + "\t; the proved INT 08h handler (machine.c)",
                   f"overlay_table:\tdc.l\t{hx(M.OVL_TABLE)}\t; descriptors, id 1 first (root offset)",
                   "pointer_guest:" + ("\tdc.w\t" + ",".join(hx(o) for o in pointer_guest())

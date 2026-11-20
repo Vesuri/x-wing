@@ -52,7 +52,7 @@ M = image.M
 
 
 def inputs_digest(module: str) -> str:
-    h = hashlib.sha256()
+    h = hashlib.sha256(f"driver {image.DRIVER}\0".encode())   # the build's music driver
     files = sorted((image.REPO / "translator").glob("*.py")) + [image.REPO / "tools/xwing_model.py"]
     files += sorted(image.ANNOTATIONS.glob("*.csv"))
     if module not in (SUPPORT, PROGRAM):

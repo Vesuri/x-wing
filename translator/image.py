@@ -2,12 +2,15 @@
 
 Copied from Secret Weapons of the Luftwaffe's translator/image.py (commit pinned in
 manifest/references.tsv) and adapted: X-Wing's model is tools/xwing_model.py and the
-translated scope is the root, the two overlay files and the AdLib driver.
+translated scope is the root, the two overlay files and one music driver, DRIVER: the
+AdLib setup's ADLIB.IMS, or with XWING_DRIVER=ADLIB_W.IMS the Sound Blaster setup's (P10;
+translator/driver.py).
 """
 
 from __future__ import annotations
 
 import csv
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -17,7 +20,13 @@ sys.path.insert(0, str(REPO / "tools"))
 import xwing_model as M  # noqa: E402
 
 ANNOTATIONS = REPO / "annotations"
-SCOPE = (M.ROOT, "FRONTEND.OVL", "FLIGHT.OVL", "ADLIB.IMS")
+DRIVERS = ("ADLIB.IMS", "ADLIB_W.IMS")   # the drivers a build may translate
+DRIVER = os.environ.get("XWING_DRIVER") or DRIVERS[0]
+if DRIVER not in DRIVERS:
+    raise SystemExit(f"XWING_DRIVER={DRIVER}: not one of {' '.join(DRIVERS)}")
+SCOPE = (M.ROOT, "FRONTEND.OVL", "FLIGHT.OVL", DRIVER)
+# Map outputs (tools/sweep.py), which hold rows of every driver: no carrying over
+MAPPED = ("indirect.csv", "code-pointers.csv")
 
 
 def load(ref: Path = M.REF) -> dict[str, M.Module]:
@@ -25,8 +34,34 @@ def load(ref: Path = M.REF) -> dict[str, M.Module]:
 
 
 def rows(name: str) -> list[dict]:
+    """An annotation file's rows for this build: a row whose `driver` column names a
+    driver applies to that driver's build only; in a build of another driver than
+    ADLIB.IMS, a hand-written row of ADLIB.IMS code applies to the same instruction of
+    DRIVER unless the file has a DRIVER row at the same offset (translator/driver.py carry)."""
     with (ANNOTATIONS / name).open() as f:
-        return list(csv.DictReader(f))
+        out = [r for r in csv.DictReader(f) if r.get("driver") in (None, "", DRIVER)]
+    if name in MAPPED:      # targets in the driver the build does not translate are dropped
+        other = tuple(f"{d}+" for d in DRIVERS if d != DRIVER)
+        for r in out:
+            for col in ("switch_targets", "traced_targets"):
+                if r.get(col):
+                    r[col] = " ".join(x for x in r[col].split() if not x.startswith(other))
+        return out
+    if DRIVER == DRIVERS[0] or not out or "module" not in out[0]:
+        return out
+    from . import driver
+    key = "offset" if "offset" in out[0] else "first"
+    own = {r[key] for r in out if r["module"] == DRIVER}
+    keep = []
+    for r in out:
+        if r["module"] == DRIVERS[0]:
+            if r[key] in own:
+                continue
+            for col in ("offset",) if key == "offset" else ("first", "last"):
+                driver.carry(int(r[col], 16))
+            r["module"] = DRIVER
+        keep.append(r)
+    return keep
 
 
 def smc_regions() -> dict[str, list[tuple[int, int]]]:

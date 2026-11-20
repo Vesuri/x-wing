@@ -21,7 +21,11 @@ from a save at the flight's start (`make t-resume-<milestone>`). P9's 0.1 early 
      which WC2 met at its exit). Rates: A5h and 4Ah/4Ch in the intro, 83h elsewhere. Only
      these runs read `SPEECH.LFD`; the AdLib runs read `SFX.LFD` as often (MEASURED), so the
      clips are speech (INFERRED). Left: the speech scenes beyond the milestones and the exit;
-   - `ADLIB_W.IMS` in the static map and the translator;
+   - `ADLIB_W.IMS` in the translator: the map takes both drivers, and a build translates
+     one (`XWING_DRIVER=ADLIB_W.IMS`, translator/driver.py; the AdLib build is the
+     default and unchanged). Left: the IRQ0 proof of that build, whose tick reaches
+     CT-VOICE's far entry (+05AE4: pushf, a call through its table at CS:0085h, popf) and
+     reports a recursion at +03086; then the build's gates;
    - the DSP, DMA and IRQ 7 model at the commands the references show, its host lockstep
      and block oracle, and its sabotages;
    - the blocks played on Paula (new: WC2 times them silently).
