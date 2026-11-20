@@ -119,6 +119,12 @@ The card is a Sound Blaster 2.0, not an SB16: its OPL2 is the one the port model
 Commander 2's DSP model answers as a 2.0, and `ADLIB_W.IMS`'s embedded CT-VOICE code
 (1989-1990) predates the SB16.
 
+The machine sets no `BLASTER=` in the DOS environment: no program of the game reads it (the
+string is in none of `XWING.EXE`, `FRONTEND.OVL`, `FLIGHT.OVL` and `ADLIB_W.IMS`), and with it
+the environment grows and every load segment moves up two paragraphs (load segment 0824h,
+MEASURED). Without it the load segment is the AdLib references' 0822h and `ADLIB_W.IMS` loads
+at 522Ah, where `ADLIB.IMS` does; the installer writes the same files either way.
+
 `tools/pc_run.py --sb` runs on that machine and installation. DOSBox-X's `-silent`, which
 every reference run passes, also removes the Sound Blaster; the patch
 `dosbox-x-xwing-sb.patch` keeps the card when `XWING_SB` is set and every other device

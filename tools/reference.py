@@ -45,6 +45,12 @@ hostb-<time>-<id>-<milestone>.
 `--opl` adds the AdLib register log with emulated ms (`--opl` of tools/pc_run.py,
 trace/opl.csv), the sound references of P7 (tools/fm_check.cpp). The log changes no guest
 state, so the pins are still compared.
+
+`--sb` records P10's Sound Blaster references (docs/dos-reference.md, Sound Blaster): the
+same milestones on the Sound Blaster machine and installation (`--sb` of tools/pc_run.py),
+with the OPL log and the DSP and DMA streams (trace/opl.csv, sound.csv, dma.csv). The game
+then loads ADLIB_W.IMS, which stands for ADLIB.IMS in the column `resident`, and the pins
+are manifest/milestones-sb.sha256. The runs are named sb-<time>-<id>-<milestone>.
 """
 
 from __future__ import annotations
@@ -66,6 +72,7 @@ import xwing_model as M
 REPO = Path(__file__).resolve().parent.parent
 TABLE = REPO / 'reference/milestones.csv'
 PINS = REPO / 'manifest/milestones.sha256'
+PINS_SB = REPO / 'manifest/milestones-sb.sha256'  # --sb
 SITES = {'menu': 'FRONTEND.OVL+1808e', 'frame': 'FLIGHT.OVL+1b7d2'}
 PENDING_MAX = 4
 POLLS = REPO / 'build/gen/poll-points.csv'
@@ -133,7 +140,7 @@ def bypass_events(trace: Path) -> int:
 
 
 def run(base: str, rows: dict[str, dict], name: str, polls: bool = False,
-        bypass: bool = False, opl: bool = False) -> tuple[list[str], dict[str, str], Path]:
+        bypass: bool = False, opl: bool = False, sb: bool = False) -> tuple[list[str], dict[str, str], Path]:
     m = rows[name]
     triggers = [site(t) for t in m['snapshots'].split()]
     names = [f'{name}-{i}' for i in range(len(triggers))]
@@ -146,8 +153,10 @@ def run(base: str, rows: dict[str, dict], name: str, polls: bool = False,
         cmd += ['--polls', str(POLLS), '--retrace', '--rep-chunks']
     if bypass:
         cmd += ['--bypass', bypass_spec()]
-    if opl:
+    if opl or sb:
         cmd += ['--opl']
+    if sb:
+        cmd += ['--sb']
     for path in seeds.files(name):
         cmd += ['--seed', str(path)]
     trace = REPO / 'ref/dosbox/runs' / run_name / 'trace'
@@ -158,7 +167,10 @@ def run(base: str, rows: dict[str, dict], name: str, polls: bool = False,
     problems = []
     last = snaps[-1]
     resident = {r[2] for r in M.residency(last / 'residency.csv')}
-    missing = set(m['resident'].split()) - resident
+    want = set(m['resident'].split())
+    if sb:  # the game loads the Sound Blaster driver in place of the AdLib one
+        want = {'ADLIB_W.IMS' if r == 'ADLIB.IMS' else r for r in want}
+    missing = want - resident
     if missing:
         problems.append(f"not resident: {' '.join(sorted(missing))}")
     regs = dict(kv.split('=') for kv in (last / 'regs.txt').read_text().split())
@@ -201,6 +213,8 @@ def main() -> int:
     ap.add_argument('--bypass', action='store_true',
                     help="with --polls: bypassed host references, the milestones past the screen")
     ap.add_argument('--opl', action='store_true', help='also log the AdLib writes (trace/opl.csv)')
+    ap.add_argument('--sb', action='store_true',
+                    help='P10: the Sound Blaster machine; pins in manifest/milestones-sb.sha256')
     args = ap.parse_args()
     if args.bypass and not args.polls:
         ap.error('--bypass records host references only: add --polls')
@@ -212,12 +226,15 @@ def main() -> int:
         if before:
             ap.error(f"not past the protection screen (column bypass): {' '.join(before)}")
     prefix = ('hostb-' if args.bypass else 'host-') if args.polls else 'ms-'
+    if args.sb:
+        prefix = 'sb' + prefix
     base = args.name or prefix + time.strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
     with ThreadPoolExecutor(args.jobs) as ex:
-        results = dict(zip(names, ex.map(lambda n: run(base, rows, n, args.polls, args.bypass, args.opl), names)))
+        results = dict(zip(names, ex.map(lambda n: run(base, rows, n, args.polls, args.bypass, args.opl, args.sb), names)))
     pins = {}
-    if PINS.exists():
-        for line in PINS.read_text().splitlines():
+    pin_file = PINS_SB if args.sb else PINS
+    if pin_file.exists():
+        for line in pin_file.read_text().splitlines():
             digest, key = line.split(None, 1)
             pins[key] = digest
     failed = False

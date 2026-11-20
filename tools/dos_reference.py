@@ -42,7 +42,8 @@ ADLIB_MACHINE = MACHINE + ['sblaster sbtype=none', 'sblaster oplmode=opl2']
 # P10's Sound Blaster reference machine (reference/dosbox-x-sb.conf): a Sound Blaster 2.0
 # at 220h, IRQ 7, DMA 1, its OPL2 the AdLib reference's.
 SB_MACHINE = MACHINE + ['sblaster sbtype=sb2', 'sblaster sbbase=220', 'sblaster irq=7',
-                        'sblaster dma=1', 'sblaster oplmode=opl2']
+                        'sblaster dma=1', 'sblaster oplmode=opl2',
+                        'sblaster blaster environment variable=false']
 # A 386DX-class machine of 1993 for play: 8,000 cycles/ms, 4 MB, Sound Blaster Pro 2.
 PLAY_MACHINE = ['cpu core=normal', 'cpu cputype=386', 'cpu cycles=fixed 8000', 'dosbox memsize=4',
                 'dosbox quit warning=false', 'sdl output=surface', 'sblaster sbtype=sbpro2']
