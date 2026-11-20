@@ -36,6 +36,8 @@ re-hoster plays the music on Paula and the effects play prerendered (P7). Read `
 - Never kill emulators or debuggers by process name (`pkill mame`, `pkill fs-uae`,
   `pkill gdb`); other projects run them. Kill only this project's recorded PIDs through
   the shared `FSUAE_COMMON` helper. Never edit a running shell launcher.
+- Run tests, meters, fixtures and emulator runs under `nice -n 10` (renice a running one with
+  `renice 10 -p PID`); other projects share the machine. Results are emulated, never wall time.
 - No personal paths or paths into other projects in tracked files. Name other projects
   by name. `~/.local` and `~/.local/share/amiga` are the allowed conventions.
 - Pin inputs by SHA-256 or commit in `manifest/` and verify them before use. Leave the
