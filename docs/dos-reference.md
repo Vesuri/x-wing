@@ -104,6 +104,34 @@ Leaving the installer writes `LANDRU.CFG` (`adlib`, `FAST`, `ems`, `diff`) and
 `OPTIONS.CFG`, pinned in `manifest/dos-configured.sha256`. The tree is kept in
 `tmp/dos/configured/XWING`.
 
+### Sound Blaster (P10)
+
+`make dos-configure-sb` runs the installer on the Sound Blaster machine
+(`reference/dosbox-x-sb.conf`: a Sound Blaster 2.0 at 220h, IRQ 7, DMA 1, its OPL2 the AdLib
+machine's) with `tools/dos/configure-sb.script`: "Set Sound Board Configuration", then
+"SoundBlaster", the fifth entry, described as "AdLib synthesized music and sound effects,
+with digitized speech". The installer asks nothing more. It writes `LANDRU.CFG` with
+`adlib_w` in place of `adlib` (MEASURED), so the game loads `ADLIB_W.IMS`, and the files are
+pinned in `manifest/dos-configured-sb.sha256`; the tree is kept in
+`tmp/dos/configured-sb/XWING`.
+
+The card is a Sound Blaster 2.0, not an SB16: its OPL2 is the one the port models, Wing
+Commander 2's DSP model answers as a 2.0, and `ADLIB_W.IMS`'s embedded CT-VOICE code
+(1989-1990) predates the SB16.
+
+`tools/pc_run.py --sb` runs on that machine and installation. DOSBox-X's `-silent`, which
+every reference run passes, also removes the Sound Blaster; the patch
+`dosbox-x-xwing-sb.patch` keeps the card when `XWING_SB` is set and every other device
+`-silent` turns off (PC speaker, GUS, Innova, MIDI) off. With `XWING_SB` the tracer writes:
+- `trace/sound.csv`: every guest access to the DSP (220h-22Fh but the OPL at 228h/229h) and
+  the DMA controller (00h-0Fh, page registers 81h-83h and 87h), with the emulated ms and the
+  code location;
+- `trace/dma.csv`: the bytes a device reads by DMA, one row per run of consecutive addresses
+  on a channel, ended by the terminal count (`tc`), a jump (`break`) or the trace's end
+  (`open`), with the bytes' FNV-1a 64 hash.
+
+The OPL log (`--opl`) also takes the card's OPL ports 228h/229h.
+
 ## Reference runs
 
 `tools/pc_run.py NAME [options]` (`make dos-run RUN=NAME ARGS=...`) does one run:

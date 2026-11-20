@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx t-resume-plants t-sab-resume sound-reference sound-fm gates-audio amiga-release whdload test-whdload install-data test-install-data release release-check release-repro publish
+.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-configure-sb dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx t-resume-plants t-sab-resume sound-reference sound-fm gates-audio amiga-release whdload test-whdload install-data test-install-data release release-check release-repro publish
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -12,6 +12,7 @@ help:
 	@echo 'make dos-disks              extract the five DOS floppy images into tmp/dos/disks'
 	@echo 'make dos-install            run the original installer into tmp/dos/installed'
 	@echo 'make dos-configure          select AdLib in the installer; tmp/dos/configured/XWING'
+	@echo 'make dos-configure-sb       select SoundBlaster; tmp/dos/configured-sb/XWING (P10)'
 	@echo 'make dos-reference          run and check every milestone (reference/milestones.csv)'
 	@echo 'make dos-run RUN=n ARGS=..  one traced run (tools/pc_run.py) in ref/dosbox/runs/n'
 	@echo 'make dos-play               play on a period 386, copy protection answered'
@@ -69,6 +70,9 @@ dos-install: dos-disks
 
 dos-configure:
 	@$(ENV) python3 tools/dos_reference.py configure
+
+dos-configure-sb:
+	@$(ENV) python3 tools/dos_reference.py configure-sb
 
 dos-reference:
 	@$(ENV) python3 tools/reference.py

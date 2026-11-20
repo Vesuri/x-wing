@@ -1,0 +1,28 @@
+# P10: original INSTALL.EXE from C:\XWING on the Sound Blaster machine
+# (reference/dosbox-x-sb.conf): "Set Sound Board Configuration" -> "SoundBlaster" ("AdLib
+# synthesized music and sound effects, with digitized speech"), then Exit, declining the
+# READ.ME. Leaving the installer writes LANDRU.CFG and OPTIONS.CFG. Steps are documented in
+# src/misc/xwing_script.cpp of the patched DOSBox-X.
+text MAIN MENU
+delay 1000
+key down
+delay 500
+key enter
+text SOUND CARD MENU
+delay 1000
+# No Sound, AdLib and compatibles, Roland, General MIDI (GMIDI), then SoundBlaster
+key down down down down
+delay 500
+key enter
+text Sound Card Setting:        SoundBlaster
+delay 1000
+# Exit is the fifth main-menu item
+key down down down down
+delay 500
+key enter
+text Do you wish to read it now?
+delay 500
+key n
+notext Do you wish to read it now?
+delay 3000
+done

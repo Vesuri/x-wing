@@ -1,0 +1,161 @@
+diff --git a/include/xwing_trace.h b/include/xwing_trace.h
+index 6e089c4..bca319f 100644
+--- a/include/xwing_trace.h
++++ b/include/xwing_trace.h
+@@ -30,6 +30,10 @@ void XWING_RepChunk(uint32_t linear, uint16_t cx, uint16_t si, uint16_t di, bool
+ void XWING_MemoryAccess(bool write, uint32_t address, uint8_t width);
+ void XWING_Interrupt(unsigned num, unsigned type, uint32_t oldeip);
+ void XWING_Port(bool write, uint8_t width, unsigned port, uint32_t value);
++/* XWING_SB: the bytes a device reads from a DMA channel, and its terminal count
++ * (dma.cpp DmaChannel::Read, dma.h ReachedTC). */
++void XWING_DmaRead(uint8_t channel, uint32_t linear, const uint8_t *data, unsigned bytes);
++void XWING_DmaTc(uint8_t channel);
+ void XWING_DosOpen(const char *name, bool ok, uint16_t handle, uint8_t mode);
+ void XWING_DosClose(uint16_t handle);
+ void XWING_DosRead(uint16_t handle, uint32_t buffer, uint32_t file_pos,
+diff --git a/include/dma.h b/include/dma.h
+index 7350b1a..299cc82 100644
+--- a/include/dma.h
++++ b/include/dma.h
+@@ -18,6 +18,7 @@
+ 
+ 
+ #ifndef DOSBOX_DMA_H
++#include "xwing_trace.h"
+ #define DOSBOX_DMA_H
+ 
+ enum DMAEvent {
+@@ -131,6 +132,7 @@ class DmaChannel {
+ 		}
+ 		void ReachedTC(void) {
+ 			tcount=true;
++			XWING_DmaTc(channum);
+ 			DoCallBack(DMA_REACHED_TC);
+ 		}
+ 		void SetPage(uint8_t val) {
+diff --git a/src/hardware/dma.cpp b/src/hardware/dma.cpp
+index 3b847ba..ded18f0 100644
+--- a/src/hardware/dma.cpp
++++ b/src/hardware/dma.cpp
+@@ -485,6 +485,8 @@ Bitu DmaChannel::Read(Bitu want, uint8_t * buffer) {
+         if (increment) {
+             assert((curraddr & (~addrmask)) == ((curraddr + ((uint32_t)cando - 1u)) & (~addrmask)));//check our work, must not cross a 4KB boundary
+             DMA_BlockRead4KB<DMA_INCREMENT>(pagebase,curraddr,buffer,cando,DMA16,DMA16_ADDRMASK);
++            XWING_DmaRead(channum, pagebase + ((curraddr << DMA16) & DMA16_ADDRMASK), buffer,
++                          (unsigned)(cando << DMA16));
+             curraddr += (uint32_t)cando;
+         }
+         else {
+diff --git a/src/hardware/sblaster.cpp b/src/hardware/sblaster.cpp
+index 7cd77db..596c01c 100644
+--- a/src/hardware/sblaster.cpp
++++ b/src/hardware/sblaster.cpp
+@@ -3919,7 +3919,9 @@ class SBLASTER: public Module_base {
+ 			sb[ci].ess_extended_mode = false;
+ 			sb[ci].subtype = SBST_NONE;
+ 			const char * sbtype=config->Get_string("sbtype");
+-			if (control->opt_silent) type = SBT_NONE;
++			/* XWING_SB: the card stays with -silent, which keeps every other device the AdLib
++			 * reference has off (the PC speaker, GUS, Innova, MIDI) off */
++			if (control->opt_silent && !getenv("XWING_SB")) type = SBT_NONE;
+ 			else if (!strcasecmp(sbtype,"sb1.0")) { type=SBT_1; sb[ci].subtype=SBST_100; }
+ 			else if (!strcasecmp(sbtype,"sb1.5")) { type=SBT_1; sb[ci].subtype=SBST_105; }
+ 			else if (!strcasecmp(sbtype,"sb1")) { type=SBT_1; sb[ci].subtype=SBST_105; } /* DOSBox SVN compat same as sb1.5 */
+diff --git a/src/misc/xwing_trace.cpp b/src/misc/xwing_trace.cpp
+index 4c9d833..0c312da 100644
+--- a/src/misc/xwing_trace.cpp
++++ b/src/misc/xwing_trace.cpp
+@@ -164,6 +164,23 @@ void FlushRetrace() {
+  * 389h) with the emulated time in ms. */
+ FILE *opl = nullptr;
+ uint8_t opl_index = 0;
++/* XWING_SB=1 (adapted from Wing Commander 2's sound.csv): every guest access to the
++ * Sound Blaster's DSP (22x but the OPL at 228h/229h) and the DMA controller (00h-0Fh,
++ * the page registers 81h-83h, 87h) with the emulated ms and the code location
++ * (sound.csv), and the bytes devices read by DMA (dma.csv): one row per run of
++ * consecutive addresses on a channel, ended by its terminal count (end tc), a jump
++ * (break) or the trace's end (open), with the bytes' FNV-1a 64. */
++FILE *sound = nullptr, *dma_log = nullptr;
++struct DmaRun { bool open = false; double ms0 = 0; uint32_t linear0 = 0, next = 0; uint64_t bytes = 0, fnv = 0; };
++DmaRun dma_runs[8];
++void FlushDma(const uint8_t ch, const char *end) {
++	DmaRun &r = dma_runs[ch & 7];
++	if (!r.open) return;
++	if (dma_log)
++		fprintf(dma_log, "%.6f,%.6f,%u,0x%05x,%llu,%016llx,%s\n", r.ms0, (double)PIC_FullIndex(), ch,
++		        r.linear0, (unsigned long long)r.bytes, (unsigned long long)r.fnv, end);
++	r.open = false;
++}
+ /* Call probes (XWING_PROBES=MODULE+HEX:N=name,...): at each entry, the emulated
+  * ms and the N stack words above a far return address (probe.csv). */
+ struct Probe {
+@@ -425,6 +442,11 @@ void WriteOutputs() {
+ 	events = nullptr;
+ 	if (opl) fclose(opl);
+ 	opl = nullptr;
++	for (uint8_t ch = 0; ch < 8; ++ch) FlushDma(ch, "open");
++	if (sound) fclose(sound);
++	sound = nullptr;
++	if (dma_log) fclose(dma_log);
++	dma_log = nullptr;
+ 	if (probe_log) fclose(probe_log);
+ 	probe_log = nullptr;
+ 	LOG_MSG("XWING: wrote trace to %s (%llu instructions)", out_dir.c_str(),
+@@ -588,6 +610,13 @@ void Configure() {
+ 		opl = fopen(Path("opl.csv").c_str(), "w");
+ 		if (opl) fputs("ms,reg,value\n", opl);
+ 	}
++	if (const char *v = getenv("XWING_SB"); v && *v && strcmp(v, "0") != 0) {
++		sound = fopen(Path("sound.csv").c_str(), "w");
++		if (sound) fputs("ms,direction,port,value,module,offset\n", sound);
++		dma_log = fopen(Path("dma.csv").c_str(), "w");
++		if (dma_log) fputs("ms0,ms1,channel,linear,bytes,fnv,end\n", dma_log);
++		if (!sound || !dma_log) E_Exit("XWING: cannot write sound.csv or dma.csv");
++	}
+ 	for (const auto &spec : Split(getenv("XWING_PROBES"), ',')) {
+ 		const auto plus = spec.find('+'), colon = spec.find(':'), eq = spec.find('=');
+ 		if (plus == std::string::npos || colon == std::string::npos || eq == std::string::npos)
+@@ -991,14 +1020,41 @@ void XWING_Port(const bool write, const uint8_t width, const unsigned port, cons
+         }
+         ++retrace_run.count;
+     }
++	if (sound && ((port >= 0x220 && port <= 0x22f && port != 0x228 && port != 0x229) ||
++	              port <= 0x0f || (port >= 0x81 && port <= 0x83) || port == 0x87)) {
++		const auto at = CurrentLocation();
++		fprintf(sound, "%.6f,%s,0x%03x,0x%02x,%s,0x%05x\n", (double)PIC_FullIndex(),
++		        write ? "out" : "in", port, (unsigned)(value & 0xff), modules[at.module].name.c_str(),
++		        at.offset);
++	}
+ 	if (opl && write && width == 1) {
+-		if (port == 0x388) opl_index = (uint8_t)value;
+-		else if (port == 0x389)
++		if (port == 0x388 || port == 0x228) opl_index = (uint8_t)value;
++		else if (port == 0x389 || port == 0x229)
+ 			fprintf(opl, "%.6f,0x%02x,0x%02x\n", (double)PIC_FullIndex(), opl_index,
+ 			        (unsigned)(value & 0xff));
+ 	}
+ }
+ 
++void XWING_DmaRead(const uint8_t channel, const uint32_t linear, const uint8_t *data, const unsigned bytes) {
++	if (!xwing_active || !dma_log || !bytes) return;
++	DmaRun &r = dma_runs[channel & 7];
++	if (r.open && linear != r.next) FlushDma(channel, "break");
++	if (!r.open) {
++		r.open = true;
++		r.ms0 = (double)PIC_FullIndex();
++		r.linear0 = linear;
++		r.bytes = 0;
++		r.fnv = 0xcbf29ce484222325ull;
++	}
++	for (unsigned i = 0; i < bytes; ++i) r.fnv = (r.fnv ^ data[i]) * 0x100000001b3ull;
++	r.bytes += bytes;
++	r.next = linear + bytes;
++}
++
++void XWING_DmaTc(const uint8_t channel) {
++	if (xwing_active) FlushDma(channel, "tc");
++}
++
+ void XWING_DosOpen(const char *name, const bool ok, const uint16_t handle, const uint8_t mode) {
+ 	if (!xwing_active) return;
+ 	const auto base = BaseName(name);

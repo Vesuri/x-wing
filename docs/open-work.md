@@ -11,13 +11,15 @@ from a save at the flight's start (`make t-resume-<milestone>`). P9's 0.1 early 
 (`make release`, [release](release.md)) on a reduced gate (owner decision 2026-11-19).
 
 1. P10, Sound Blaster PCM ([port plan](port-plan.md#p10-sound-blaster-pcm)). With a Sound
-   Blaster the game loads `ADLIB_W.IMS` (INFERRED from the setup labels' order), whose
+   Blaster the game loads `ADLIB_W.IMS` (MEASURED: the installer's "SoundBlaster" writes `adlib_w` to `LANDRU.CFG`), whose
    embedded Creative CT-VOICE code drives the DSP; WC2's DSP, DMA and IRQ 7 model is the
    copy source (WC2 `d8c9860`, `dfd3db4`), fitted to WC2's own commands. Steps:
-   - the tracer's time-ordered DSP and DMA stream (WC2's `sound.csv`);
-   - Sound Blaster references: an SB16 at 220h, IRQ 7, DMA 1, the setup's "Sound Blaster",
-     the pinned milestones, the speech and digitised-effect scenes and the exit (WC2 met
-     DSP D3h, speaker off, at its exit);
+   - Sound Blaster references (the machine, the configuration and the tracer's streams are
+     in place: [DOS reference](dos-reference.md#sound-blaster-p10)): the pinned milestones,
+     the speech and digitised-effect scenes and the exit. The intro's speech already shows
+     the driver's commands: reset, E0h, E1h, E2h, E4h, E8h, F2h and C6h while it detects the
+     card, then 40h, 14h, D1h and D3h (speaker off, which WC2 met at its exit) around every
+     clip (MEASURED);
    - `ADLIB_W.IMS` in the static map and the translator;
    - the DSP, DMA and IRQ 7 model at the commands the references show, its host lockstep
      and block oracle, and its sabotages;

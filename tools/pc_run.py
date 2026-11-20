@@ -30,6 +30,7 @@ import seeds
 from extract_original_data import ROOT
 
 CONF = ROOT / 'reference/dosbox-x.conf'
+CONF_SB = ROOT / 'reference/dosbox-x-sb.conf'  # P10: --sb
 LAUNCH = ['c:', 'cd \\xwing', 'xwing']
 
 EXIT_SUCCESS, EXIT_LIMIT, EXIT_FAULT, EXIT_EMULATOR = 0, 2, 3, 4
@@ -77,6 +78,10 @@ def main() -> int:
                         help='record every VGA input status (3DAh) read by module code (trace/retrace.csv)')
     parser.add_argument('--rep-chunks', action='store_true',
                         help='record the decoder slices of every REP at a poll point (trace/rep.csv)')
+    parser.add_argument('--sb', action='store_true',
+                        help='P10: the Sound Blaster machine (reference/dosbox-x-sb.conf) and '
+                             'installation (tmp/dos/configured-sb), with its DSP and DMA '
+                             'streams (trace/sound.csv, trace/dma.csv)')
     parser.add_argument('--opl', action='store_true',
                         help='log every AdLib register write with emulated ms (trace/opl.csv)')
     parser.add_argument('--probes', default='',
@@ -92,7 +97,7 @@ def main() -> int:
 
     verify_emulator()
     run = new_run('pc', args.name)
-    fresh_game(run, configured=True)
+    fresh_game(run, configured='sb' if args.sb else True)
     seeds.place(args.seed, run / 'c/XWING')
     (run / 'trace').mkdir()
     env = dict(os.environ, SDL_VIDEODRIVER='dummy', SDL_AUDIODRIVER='dummy',
@@ -100,7 +105,7 @@ def main() -> int:
                XWING_FIXED_FILE_CLOCK='1', XWING_BIOS_TICKS=str(args.bios_ticks),
                XWING_SNAPSHOTS=args.snapshots, XWING_EXIT_AFTER=args.exit_after,
                XWING_KEYS=args.keys)
-    for var in ('XWING_JOYSTICK', 'XWING_RETRACE', 'XWING_SERVICES', 'XWING_OPL', 'XWING_PROBES', 'XWING_POLLS',
+    for var in ('XWING_JOYSTICK', 'XWING_RETRACE', 'XWING_SERVICES', 'XWING_OPL', 'XWING_SB', 'XWING_PROBES', 'XWING_POLLS',
                 'XWING_KEY_HOLD', 'XWING_REP_CHUNKS', 'XWING_SCRIPT', 'XWING_BYPASS'):
         env.pop(var, None)
     if args.joystick:
@@ -113,6 +118,8 @@ def main() -> int:
         env['XWING_SERVICES'] = '1'
     if args.opl:
         env['XWING_OPL'] = '1'
+    if args.sb:
+        env['XWING_SB'] = '1'
     if args.probes:
         env['XWING_PROBES'] = args.probes
     if args.polls:
@@ -121,7 +128,7 @@ def main() -> int:
         env['XWING_BYPASS'] = args.bypass
     if args.key_hold is not None:
         env['XWING_KEY_HOLD'] = str(args.key_hold)
-    command = [str(DOSBOX), '-conf', str(CONF), '-nogui', '-nomenu', '-silent', '-fastlaunch',
+    command = [str(DOSBOX), '-conf', str(CONF_SB if args.sb else CONF), '-nogui', '-nomenu', '-silent', '-fastlaunch',
                '-time-limit', str(args.time_limit),
                '-set', f'log logfile={run / "dosbox-x.log"}',
                '-set', f'dosbox captures={run / "capture"}']

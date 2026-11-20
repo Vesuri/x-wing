@@ -28,6 +28,8 @@ ARCHIVE_NAME = 'tmp/originals/000110_x-wing.7z'
 DISKS = ROOT / 'tmp/dos/disks'
 INSTALLED = ROOT / 'tmp/dos/installed'
 CONFIGURED = ROOT / 'tmp/dos/configured'
+# P10: the installation configured for "SoundBlaster" (tools/dos/configure-sb.script)
+CONFIGURED_SB = ROOT / 'tmp/dos/configured-sb'
 RUNS = ROOT / 'ref/dosbox/runs'
 IMAGES = [f'disk{n}.img' for n in range(1, 6)]
 # A 386 at a fixed 30,000 cycles/ms; the installer rates it FAST. Turbo removes the
@@ -37,6 +39,10 @@ MACHINE = ['cpu core=normal', 'cpu cputype=386', 'cpu cycles=fixed 30000', 'dosb
 # The reference machine with AdLib only (reference/dosbox-x.conf), on which the installer
 # detects AdLib and the game selects ADLIB.IMS.
 ADLIB_MACHINE = MACHINE + ['sblaster sbtype=none', 'sblaster oplmode=opl2']
+# P10's Sound Blaster reference machine (reference/dosbox-x-sb.conf): a Sound Blaster 2.0
+# at 220h, IRQ 7, DMA 1, its OPL2 the AdLib reference's.
+SB_MACHINE = MACHINE + ['sblaster sbtype=sb2', 'sblaster sbbase=220', 'sblaster irq=7',
+                        'sblaster dma=1', 'sblaster oplmode=opl2']
 # A 386DX-class machine of 1993 for play: 8,000 cycles/ms, 4 MB, Sound Blaster Pro 2.
 PLAY_MACHINE = ['cpu core=normal', 'cpu cputype=386', 'cpu cycles=fixed 8000', 'dosbox memsize=4',
                 'dosbox quit warning=false', 'sdl output=surface', 'sblaster sbtype=sbpro2']
@@ -77,10 +83,12 @@ def extract_disks():
 
 
 def verify_installed(directory, configured=False):
+    """configured: False (installed only), True (AdLib) or 'sb' (Sound Blaster)."""
     actual = hashes(directory)
     expected = pins(ROOT / 'manifest/dos-installed.sha256')
     if configured:
-        expected.update(pins(ROOT / 'manifest/dos-configured.sha256'))
+        expected.update(pins(ROOT / ('manifest/dos-configured-sb.sha256' if configured == 'sb'
+                                     else 'manifest/dos-configured.sha256')))
     if actual != expected:
         changed = sorted(k for k in actual.keys() | expected.keys() if actual.get(k) != expected.get(k))
         what = 'CONFIGURED' if configured else 'INSTALLED'
@@ -166,12 +174,14 @@ def install_game(name, print_manifest):
           f'{len(result)} files verified in', INSTALLED.relative_to(ROOT))
 
 
-def configure_game(name, print_manifest):
+def configure_game(name, print_manifest, sound='adlib'):
+    """sound: 'adlib' (the AdLib reference) or 'sb' (P10's Sound Blaster reference)."""
+    sb = sound == 'sb'
     verify_emulator()
     run = new_run('configure', name)
     fresh_game(run)
-    dosbox(run, ROOT / 'tools/dos/configure.script', GAME[:2] + ['install'], 120_000, 300,
-           machine=ADLIB_MACHINE)
+    dosbox(run, ROOT / ('tools/dos/configure-sb.script' if sb else 'tools/dos/configure.script'),
+           GAME[:2] + ['install'], 120_000, 300, machine=SB_MACHINE if sb else ADLIB_MACHINE)
     output = run / 'c/XWING'
     if print_manifest:
         installed = pins(ROOT / 'manifest/dos-installed.sha256')
@@ -179,17 +189,20 @@ def configure_game(name, print_manifest):
             if installed.get(name) != digest:
                 print(digest + '  ' + name)
         return
-    result = verify_installed(output, configured=True)
+    kind = 'sb' if sb else True
+    result = verify_installed(output, configured=kind)
+    target = CONFIGURED_SB if sb else CONFIGURED
     staged = Path(tempfile.mkdtemp(prefix='configured-', dir=ROOT / 'tmp'))
     shutil.copytree(output, staged / 'XWING', copy_function=shutil.copy2)
-    keep_output(staged, CONFIGURED)
-    verify_installed(CONFIGURED / 'XWING', configured=True)
-    print(f'CONFIGURE PASS: AdLib selected; {len(result)} files verified in',
-          CONFIGURED.relative_to(ROOT))
+    keep_output(staged, target)
+    verify_installed(target / 'XWING', configured=kind)
+    print(f'CONFIGURE PASS: {"SoundBlaster" if sb else "AdLib"} selected; {len(result)} files verified in',
+          target.relative_to(ROOT))
 
 
 def fresh_game(run, configured=False):
-    source = (CONFIGURED if configured else INSTALLED) / 'XWING'
+    """configured: False, True (AdLib) or 'sb' (Sound Blaster), as verify_installed."""
+    source = (CONFIGURED_SB if configured == 'sb' else CONFIGURED if configured else INSTALLED) / 'XWING'
     verify_installed(source, configured)
     shutil.copytree(source, run / 'c/XWING', copy_function=shutil.copy2)
 
@@ -205,7 +218,7 @@ def play(name):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    parser.add_argument('command', choices=['disks', 'install', 'configure', 'play'])
+    parser.add_argument('command', choices=['disks', 'install', 'configure', 'configure-sb', 'play'])
     parser.add_argument('--name', help='run directory name under ref/dosbox/runs')
     parser.add_argument('--print-manifest', action='store_true',
                         help='print the output hashes instead of verifying them')
@@ -216,6 +229,8 @@ def main():
         install_game(args.name, args.print_manifest)
     elif args.command == 'configure':
         configure_game(args.name, args.print_manifest)
+    elif args.command == 'configure-sb':
+        configure_game(args.name, args.print_manifest, 'sb')
     else:
         play(args.name)
 
