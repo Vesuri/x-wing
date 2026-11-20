@@ -65,6 +65,8 @@ static inline void rt_wrote(uint32_t a, uint32_t n)
  * that meets the frame reports itself first. */
 void rt_ems_touch(uint32_t a, uint32_t n);
 void rt_ems_segments(void);
+void rt_ems_cache_hold(void);       /* around IRQ0's handler (ems.c) */
+void rt_ems_cache_restore(void);
 extern uint32_t rt_ems_ds_exits;   /* listed code left with DS at the frame (ems.c) */
 extern uint16_t rt_ems_mapped[4];
 extern uint8_t rt_ems_live[4];

@@ -94,6 +94,8 @@ G_DS	equ	1
 	xref	rt_ems_ds_c
 	xref	rt_ems_ds_left
 	xref	rt_ems_fast
+	xref	rt_ems_cache_es
+	xref	rt_ems_cache_ds
 	xref	rt_ems_segments
 
 	section	.text,code
@@ -530,7 +532,26 @@ port_out:
 ; unmapped: the frame), or 1 (the C path, which copies it in). Whole windows,
 ; wraps, accesses that meet the frame from below or span pages that differ take
 ; the C path; an access above the frame runs plain.
-EMS_GUARD	macro			; \1 segment slot, \2 base register, \3 C path
+EMS_GUARD	macro			; \1 segment slot, \2 base register, \3 C path, \4 cache
+	; The cache (ems.c rt_ems_cache_es/ds): the same segment, an access within the
+	; offsets of the frame page the last displaced access lay in: its base. d6 and d7
+	; are the caller's to restore (lower.py ems_guard).
+	movea.w	\1(a6),\2		; a segment of D001h or above: never the empty 0
+	cmpa.w	\4,\2
+	bne.s	.miss\@
+	tst.l	d6			; the whole window: never cached
+	beq.s	.miss\@
+	and.l	#$ffff,d7
+	cmp.w	\4+2,d7
+	bcs.s	.miss\@
+	add.l	d7,d6			; the access's end
+	cmp.l	\4+4,d6
+	bhi.s	.miss2\@
+	movea.l	\4+8,\2
+	rts
+.miss2\@:
+	sub.l	d7,d6
+.miss\@:
 	tst.l	d6			; the whole window
 	beq	.slow\@
 	movem.l	d0-d1/a0,-(a7)
@@ -570,8 +591,46 @@ EMS_GUARD	macro			; \1 segment slot, \2 base register, \3 C path
 	bra	.test\@
 .one\@:
 	lsl.w	#2,d0
+	addq.b	#1,rt_irq_mask		; no refresh between the table and the cache
 	lea	rt_ems_fast,a0
-	move.l	(a0,d0.w),d0
+	move.l	(a0,d0.w),d1
+	btst	#0,d1
+	bne	.unmask\@
+	; fill the cache: the offsets of frame page k (d0 = 4k) within the segment
+	lsl.l	#8,d0
+	lsl.l	#4,d0			; 4000h * k
+	add.l	#$e0000,d0		; the page's first byte
+	moveq	#0,d6
+	move.w	\1(a6),d6
+	lsl.l	#4,d6
+	sub.l	d6,d0			; its offset in the segment (negative: below it)
+	move.l	d0,d6
+	add.l	#$4000,d6		; the page's end
+	cmp.l	#$10000,d6
+	bls.s	.end\@
+	move.l	#$10000,d6
+.end\@:
+	move.l	d6,\4+4
+	tst.l	d0
+	bpl.s	.low\@
+	moveq	#0,d0
+.low\@:
+	move.w	d0,\4+2
+	move.l	d1,d6			; the displacement
+	movem.l	(a7)+,d0-d1/a0
+	moveq	#0,d7
+	move.w	\1(a6),d7
+	lsl.l	#4,d7
+	lea	-$7fff(a6),\2
+	suba.l	d7,\2
+	adda.l	d6,\2
+	move.l	\2,\4+8
+	move.w	\1(a6),\4		; valid from here
+	subq.b	#1,rt_irq_mask
+	rts
+.unmask\@:
+	subq.b	#1,rt_irq_mask
+	bra	.slow2\@
 .test\@:
 	btst	#0,d0
 	bne	.slow2\@
@@ -604,9 +663,9 @@ EMS_GUARD	macro			; \1 segment slot, \2 base register, \3 C path
 	rts
 	endm
 rt_ems_es:
-	EMS_GUARD	G_ES,a1,rt_ems_es_c
+	EMS_GUARD	G_ES,a1,rt_ems_es_c,rt_ems_cache_es
 rt_ems_ds:
-	EMS_GUARD	G_DS,a3,rt_ems_ds_c
+	EMS_GUARD	G_DS,a3,rt_ems_ds_c,rt_ems_cache_ds
 ; Listed code left with DS at D001h or above (lower.py ems_exit): its frame
 ; pages copied in, a3 the plain DS base. Every other register kept.
 rt_ems_ds_leave:

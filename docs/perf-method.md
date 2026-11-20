@@ -82,3 +82,13 @@ Playback against live flight (open-work 1): per frame the film's window costs ab
 m13's (12.57M against 5.92M model cycles without poll tests), but the two windows show
 different scenes, so this does not settle whether playback costs what the same flight
 would live.
+
+## Steps
+
+Each step is one commit with its before and after figures; the meter runs are lockstep
+checks, the frames figures come from `tools/ab_runs.py film` with three interleaved runs per
+arm. MEASURED.
+
+| Step | Change | Meter | Frames fixture (m17) |
+|---|---|---|---|
+| 2 | The EMS guard's one-entry cache per segment register (`rt_entry.s` `EMS_GUARD`, `ems.c`): the last segment, the offsets of its frame page and the base. Emptied by every change of the fast table; held over IRQ0's handler, which production delivers at any instruction. Controls: `ems_guard_problems` in every lockstep run; sabotages `ems-cache` and `ems-cache-irq` | m17 643,269,278 → 577,337,240 (−10.25%); m12 527,206,672 → 479,515,474 (−9.05%); generated code unchanged | run medians 360, 360, 360 → 320, 320, 320 ms; means 355.1 → 313.3 ms; `rt_ems_es` 13.1% → 4.9% of the profile |

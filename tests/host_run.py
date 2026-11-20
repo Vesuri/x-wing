@@ -298,6 +298,8 @@ SABOTAGE = {
     "keyon": "rt_out8 counts no AdLib key-on edge (its addq dropped)",
     "resident": "the descriptors' resident bit ignored (machine.c resident: every row resident)",
     "song-requests": "the monitor counts no driver request (song buffer reloads become races)",
+    "ems-cache": "the EMS guard caches never emptied (ems.c rt_ems_cache_clear returns at once)",
+    "ems-cache-irq": "IRQ0's handler leaves its EMS guard caches (ems.c rt_ems_cache_restore returns at once)",
 }
 
 
@@ -401,6 +403,10 @@ class Host:
         e.write(self.syms["rt_present_due"], b"\1")  # a vertical blank is always due
         if sabotage == "vram":
             e.write(self.syms["rt_vram_mark"], b"\x4e\x75")  # rts
+        if sabotage == "ems-cache":
+            e.write(self.syms["rt_ems_cache_clear"], b"\x4e\x75")  # rts
+        if sabotage == "ems-cache-irq":
+            e.write(self.syms["rt_ems_cache_restore"], b"\x4e\x75")  # rts
         if sabotage in ("irq-stack", "irq-state", "irq-sentinel"):
             a = self.syms["rt_irq_async"]
             code = e.read(a, self.syms["rt_irq_async_back"] + 0x40 - a)
@@ -2059,7 +2065,7 @@ def resident_problems(sabotage: str | None = None) -> list[str]:
     return problems
 
 
-def ems_guard_problems(elf: Path) -> list[str]:
+def ems_guard_problems(elf: Path, sabotage: str | None = None) -> list[str]:
     """The EMS guard's routing on the run's own image (rt_entry.s EMS_GUARD,
     ems.c guard), where the m68k differential stubs it: frame pages mapped by
     the real INT 67h, then rt_ems_es and rt_ems_ds with ES or DS E030h. A range
@@ -2072,7 +2078,7 @@ def ems_guard_problems(elf: Path) -> list[str]:
     for name, slot in (("rt_ems_es", 4), ("rt_ems_ds", 0)):   # G_ES, G_DS in the state block
         for d7, d6, order, want_live in ((0x3C00, 0x140, (0, 1), (0, 0)), (0x3C00, 0x140, (1, 0), (1, 1)),
                                          (0x0100, 0x140, (1, 0), (0, 0))):
-            h = Host(image.M.REF, elf=elf)
+            h = Host(image.M.REF, elf=elf, sabotage=sabotage)
             ret = h.syms["plat_exit"]  # stop address, never executed
             h.e.write(h.syms["rt_guest"], TOP.to_bytes(4, "big"))
             rr = h.syms["rt_r"]        # runtime.h struct rt_regs: ax, cx, dx, bx
@@ -2105,6 +2111,39 @@ def ems_guard_problems(elf: Path) -> list[str]:
             if not ok or live != want_live or a != want_a:
                 problems.append(f"EMS guard {name} d7={d7:04x} d6={d6:x} pages {order}: frame pages live {live}, "
                                 f"want {want_live}; base {a:x}, want {want_a:x} (pc={h.r('pc'):x})")
+            if d7 != 0x0100:
+                continue
+            # The guard's one-entry cache (EMS_GUARD, ems.c rt_ems_cache_es/ds): another
+            # access within the same frame page hits it (the same base); a remap of the
+            # page empties it, so the next access has the new page's base.
+            for remap, (cd7, cd6) in ((False, (0x3B00, 0x100)), (True, (0x0100, 0x140))):
+                if remap:
+                    ok = int67(0x4400, bx=order[1], dx=handle)[0]
+                ok = ok and call(name, cd6, cd7)
+                a = h.r({"rt_ems_es": "a1", "rt_ems_ds": "a3"}[name])
+                live = tuple(h.mem(h.syms["rt_ems_live"], 2))
+                store = EMS_STORE + (EMS_STORE_PAGES - int.from_bytes(h.mem(h.syms["rt_ems_mapped"], 2),
+                                                                      "big")) * EMS_PAGE
+                want_a = plain if live[0] else plain + store - frame0
+                if not ok or a != want_a:
+                    problems.append(f"EMS guard cache {name} d7={cd7:04x} d6={cd6:x} "
+                                    f"{'after a remap' if remap else 'hit'}: base {a:x}, want {want_a:x} "
+                                    f"(pc={h.r('pc'):x})")
+            # IRQ0's handler, delivered at any instruction in production, may fill the
+            # caches with its own segment; rt_irq0_leave puts the interrupted code's back.
+            caches = h.syms["rt_ems_cache_es"], h.syms["rt_ems_cache_ds"]
+            held = [h.mem(c, 12) for c in caches]
+            # IVT 08h (guest 20h..23h: IP, CS) the proved handler; guest bytes run down from
+            # TOP, so CS then IP big-endian end at guest 20h, as irq0_async_handler holds them
+            h.e.write(TOP - 0x23, h.mem(h.syms["irq0_async_handler"], 4))
+            ok = call("rt_irq0_enter") and h.mem(h.syms["rt_irq0_running"], 1) == b"\1"
+            h.e.write(STATE + slot, (0xE430).to_bytes(2, "big"))
+            ok = ok and call(name, 0x40, 0x0100) and call("rt_irq0_leave")
+            h.e.write(STATE + slot, (0xE030).to_bytes(2, "big"))
+            back = [h.mem(c, 12) for c in caches]
+            if not ok or back != held or not any(held):
+                problems.append(f"EMS guard cache {name} around IRQ0's handler: {[b.hex() for b in back]}, "
+                                f"want {[b.hex() for b in held]} (pc={h.r('pc'):x})")
     return problems
 
 
@@ -2353,7 +2392,7 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
         if saved else (0, 0)
     script["irqs"], script["releases"] = reference_inputs(trace, exact_releases=True, start=start)
     summary = dict(kv.split("=", 1) for kv in (trace / "summary.txt").read_text().split())
-    problems = rearm_problems() + resident_problems(sabotage) + ems_guard_problems(h.elf)
+    problems = rearm_problems() + resident_problems(sabotage) + ems_guard_problems(h.elf, sabotage)
     if int(summary.get("polls", "0"), 16) != fnv(POLLS.read_bytes()):
         problems.append("reference recorded with other poll points: rerun tools/reference.py --polls")
     h.services_source = ServiceSource(trace, start[0])

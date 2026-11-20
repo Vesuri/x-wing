@@ -37,6 +37,41 @@ static uint8_t used[RT_EMS_PAGES];
 uint16_t rt_ems_mapped[EMS_PHYS];     /* store page + 1, 0: none */
 uint8_t rt_ems_live[EMS_PHYS];        /* the frame page holds the mapped page's bytes */
 int32_t rt_ems_fast[EMS_PHYS];        /* rt_entry.s rt_ems_es: displacement, or 1 (refresh) */
+/* rt_entry.s EMS_GUARD's one-entry caches (ES, DS): the segment (0: empty), the
+ * lowest offset and the end of the offsets within the frame page the last
+ * displaced access lay in, and the base register's value for them. Emptied by every
+ * change of rt_ems_fast (refresh). */
+uint32_t rt_ems_cache_es[3], rt_ems_cache_ds[3];
+
+/* Separate and not inlined: host_run.py's sabotage "ems-cache" returns at once. */
+void __attribute__((noinline)) rt_ems_cache_clear(void)
+{
+    rt_ems_cache_es[0] = 0;
+    rt_ems_cache_ds[0] = 0;
+}
+
+/* IRQ0's handler (machine.c rt_irq0_enter, rt_irq0_leave) may fill the caches
+ * between an interrupted guard's reads of them (production delivers it at the
+ * CIA tick); it maps no EMS page (rt_int67 stops), so the caches it found are
+ * still right when it leaves, and are put back. Separate and not inlined:
+ * host_run.py's sabotage "ems-cache-irq" returns at once from the restore. */
+static uint32_t cache_held[6];
+
+void rt_ems_cache_hold(void)
+{
+    for (int i = 0; i < 3; ++i) {
+        cache_held[i] = rt_ems_cache_es[i];
+        cache_held[3 + i] = rt_ems_cache_ds[i];
+    }
+}
+
+void __attribute__((noinline)) rt_ems_cache_restore(void)
+{
+    for (int i = 0; i < 3; ++i) {
+        rt_ems_cache_es[i] = cache_held[i];
+        rt_ems_cache_ds[i] = cache_held[3 + i];
+    }
+}
 #define mapped rt_ems_mapped
 #define live rt_ems_live
 
@@ -168,6 +203,7 @@ static void reconcile(void)
  * page with no live copy), or takes the C path (1: a live alias copies it in). */
 static void refresh(void)
 {
+    rt_ems_cache_clear();
     for (uint8_t k = 0; k < EMS_PHYS; ++k) {
         uint8_t at[EMS_PHYS];
         rt_ems_fast[k] = live[k] || !mapped[k] ? 0

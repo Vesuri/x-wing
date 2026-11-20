@@ -400,6 +400,7 @@ uint8_t rt_irq_saved[RT_STATE_BYTES + sizeof(struct rt_regs)];
 
 void rt_irq0_enter(void)
 {
+    rt_ems_cache_hold();
     deliver(8, RT_IRQ_SS, RT_IRQ_SP);
     G_IRQ = 0;
     rt_irq0_running = 1;
@@ -472,7 +473,9 @@ int rt_irq0_take(void)
 void rt_irq0_leave(void)
 {
     /* the interrupted DS and SS are back with their pages live or guarded: the
-     * handler maps no EMS page (rt_int67 stops), so nothing is copied in */
+     * handler maps no EMS page (rt_int67 stops), so nothing is copied in,
+     * and the EMS guard's caches are the interrupted code's again */
+    rt_ems_cache_restore();
     rt_irq0_running = 0;
     *(volatile uint8_t *)&G_IRQ = G_IF && rt_irq_pending;
 }

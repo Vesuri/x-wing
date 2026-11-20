@@ -17,8 +17,9 @@ from a save at the flight's start (`make t-resume-<milestone>`). P9's 0.1 early 
    the cost model fit on the 68030, and the combat film's frames fixture, 360 ms per frame
    on the 68030 model.
    Target: the combat film at 100 ms per frame or less on the 68030 model (owner decision
-   2026-11-19, `docs/design.md`). Next: the first step, priced at the EMS ES
-   guard (`rt_ems_es` and its generated cold sections, 18.4% of m12 and 20.6% of m17).
+   2026-11-19, `docs/design.md`). Step 2, the EMS guard's cache, brought the film to 320 ms
+   ([perf-method](perf-method.md#steps)). Next: re-profile the film and price the next step;
+   the 68040 check.
    Whether the film's playback costs what the same flight would live is still open: m13's
    window shows another scene.
 2. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
