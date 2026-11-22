@@ -294,6 +294,14 @@ volatile uint8_t rt_irq_ring[RT_IRQ_RING];
 volatile uint8_t rt_irq_tail;
 volatile uint8_t rt_irq_pending;
 static uint8_t irq_head;
+volatile uint8_t rt_irq7_tail;      /* runtime.h: IRQ 7 posts */
+static uint8_t irq7_head;           /* IRQ 7 takes */
+
+/* Something posted, in the ring or IRQ 7. */
+static int irq_posted(void)
+{
+    return irq_head != rt_irq_tail || irq7_head != rt_irq7_tail;
+}
 
 #define BIOS_TICKS 0x46c
 #define BIOS_MIDNIGHT 0x470
@@ -337,7 +345,7 @@ static void irq_settle(void)
     volatile uint8_t *irq = &G_IRQ;
     *irq = 0;
     rt_irq_pending = 0;
-    if (irq_head != rt_irq_tail) {
+    if (irq_posted()) {
         rt_irq_pending = 1;
         *irq = G_IF && !rt_irq0_running;
     }
@@ -362,8 +370,13 @@ uint32_t rt_irq_c(uint32_t d6, uint32_t ip)
     if (rt_present_due == 1) {
         rt_video_refresh();
     }
-    while (G_IF && !rt_irq0_running && irq_head != rt_irq_tail) {
-        uint8_t irq = rt_irq_ring[irq_head++ % RT_IRQ_RING];
+    while (G_IF && !rt_irq0_running && irq_posted()) {
+        uint8_t irq = 0x0f;         /* IRQ 7 after the ring (runtime.h) */
+        if (irq_head != rt_irq_tail) {
+            irq = rt_irq_ring[irq_head++ % RT_IRQ_RING];
+        } else {
+            ++irq7_head;
+        }
         uint8_t vector = irq & 0x7f;
         if (vector == 0x0f) {       /* IRQ 7: DSP F2h, or a block ended (platform.h plat_sb_block) */
             if (rt_pic_masked(7)) {
@@ -465,8 +478,8 @@ int rt_irq0_bios_tick(void)
         bios_tick();
         ++rt_irq0_bios;
     }
-    rt_irq_pending = irq_head != rt_irq_tail;
-    if (rt_irq_pending) {
+    rt_irq_pending = irq_posted();
+    if (irq_head != rt_irq_tail) {
         return 0;
     }
     bios_tick();
@@ -485,8 +498,23 @@ int rt_irq0_take(void)
         return 0;
     }
     ++irq_head;
-    rt_irq_pending = irq_head != rt_irq_tail;
+    rt_irq_pending = irq_posted();
     return 1;
+}
+
+void rt_irq_post(uint8_t vector)
+{
+    if ((uint8_t)(rt_irq_tail - irq_head) >= RT_IRQ_RING) {
+        if (!irq_stop_what) {       /* raised by rt_irq_c at the next poll */
+            irq_stop_what = "hardware interrupt posted to a full ring (vector, head)";
+            irq_stop_a = vector;
+            irq_stop_b = irq_head;
+        }
+    } else {
+        rt_irq_ring[rt_irq_tail % RT_IRQ_RING] = vector;
+        ++rt_irq_tail;
+    }
+    RT_RAISE_IRQ();
 }
 
 /* After the restore: re-arm from what is posted (runtime.h). */
@@ -683,6 +711,12 @@ int rt_machine_fields(rt_field_fn *f, void *ctx, int saving)
     }
     if (saving && (rt_irq0_running || rt_irq_mask || rt_irq_interrupting)) {
         return RT_UNSAVED_HANDLER;
+    }
+    if (saving && irq7_head != rt_irq7_tail) {
+        return RT_UNSAVED_IRQ7;
+    }
+    if (!saving) {
+        irq7_head = rt_irq7_tail;   /* none pending in a save */
     }
     f(ctx, "machine.r", &rt_r, sizeof rt_r);
     f(ctx, "machine.entry_cs", &rt_entry_cs, sizeof rt_entry_cs);

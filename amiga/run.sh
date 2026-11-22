@@ -3,6 +3,8 @@
 #   ./run.sh [path-to-kickstart-rom]
 # Run a different binary with $XWING_EXE, arguments with $XWING_ARGS; extra fs-uae args via $EXTRA_ARGS (they win);
 # AMIGA_CPU picks the CPU (68030: the minimum target model); DEBUG=1 adds the gdb stub.
+# Speech (P10): build with `XWING_DRIVER=ADLIB_W.IMS make amiga`; this script then boots
+# the Sound Blaster setup.
 set -euo pipefail
 cd "$(dirname "$0")"
 . ./env.sh
@@ -12,7 +14,14 @@ ROM="${1:-$KICKSTART}"
 EXE="${XWING_EXE:-out/XWing.exe}"
 # The game directory as installed and configured (docs/dos-reference.md): the
 # guest's C:\XWING, the current directory of the run.
-GAME=../tmp/dos/configured/XWING
+# The Sound Blaster build (XWING_DRIVER=ADLIB_W.IMS, P10) runs on the Sound Blaster
+# setup, whose configuration selects its driver; the AdLib build on the AdLib setup.
+# XWING_GAME_DIR overrides. The SB build is told by its SB-only DSP timer message.
+if LC_ALL=C grep -aq "X-Wing no second CIA-B timer for the DSP" "$EXE" 2>/dev/null; then
+  GAME="${XWING_GAME_DIR:-../tmp/dos/configured-sb/XWING}"
+else
+  GAME="${XWING_GAME_DIR:-../tmp/dos/configured/XWING}"
+fi
 [ -f "$ROM" ] || { echo "Kickstart ROM not found: $ROM"; exit 1; }
 [ -f "$EXE" ] || { echo "not found: $EXE  (build first: make)"; exit 1; }
 [ -f "$GAME/XWING.EXE" ] || { echo "game directory not found: $GAME  (make dos-reference)"; exit 1; }

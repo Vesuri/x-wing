@@ -11,7 +11,7 @@ from a save at the flight's start (`make t-resume-<milestone>`). P9's 0.1 early 
 (`make release`, [release](release.md)) on a reduced gate (owner decision 2026-11-19).
 P10's gate holds: the Sound Blaster build (`XWING_DRIVER=ADLIB_W.IMS`) matches the Sound
 Blaster references' DSP commands and blocks in host lockstep over every pinned milestone,
-with the AdLib gates unchanged, and plays its speech on Paula (`make test-amiga-speech`;
+with the AdLib gates unchanged, and plays the intro's speech on Paula on the 68030 (`make test-amiga-speech`;
 [translator design](translator-design.md), Speech).
 
 1. P10, Sound Blaster PCM ([port plan](port-plan.md#p10-sound-blaster-pcm)), the rest:

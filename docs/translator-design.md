@@ -789,7 +789,9 @@ drives the card. The AdLib build's generated code is unchanged by it.
   clip over DMA channel 1, the speaker (D1h, D3h) around it, pause and continue (D0h, D4h).
   CT-VOICE stops a clip by pausing it and starts the next with a new 14h; the paused
   block's IRQ 7 never comes (MEASURED: m02i, blocks 9 to 12), so a 14h over a paused
-  block replaces it, and one over a playing block stops.
+  block replaces it, as one over a playing block does (DERIVED: the reference DOSBox-X's
+  `sblaster.cpp` restarts the count with the new length and drops the old end; reached on
+  the 68030, where the intro's lines overlap).
   Status reads answer as the model stands; `plat_dsp_status` reports the device's timing.
   A block's end posts IRQ 7 (vector 0Fh); `machine.c` stops on an IRQ 7 the PIC masks, or
   with neither a block nor F2h pending. The IVT holds the reference BIOS's vectors 0Ah,
@@ -814,7 +816,16 @@ drives the card. The AdLib build's generated code is unchanged by it.
   timing check's loops (`+0521A`, `+0521E`), without which the Amiga image spins at the
   install (MEASURED), the detection's wait for F2h's IRQ 7 (`+050A9`) and CT-VOICE's
   interrupt test (`+055AC`), whose one-byte block's IRQ 7 must arrive within 2000h passes
-  or the driver installs no tick (MEASURED).
+  or the driver installs no tick (MEASURED). Those alone leave a voice's end late:
+  CT-VOICE's status word, which the IRQ 7 handler writes, is read where production does
+  not poll, and the intro's first voice's IRQ 7 was taken 1,414 fields after its post
+  (MEASURED). So this build's production image compiles in every generated poll point,
+  the reference's own delivery points (`amiga/Makefile`: `XWING_SYNC` for the generated
+  code alone, which gates only the poll checks); its runtime stays the production one.
+  IRQ 7 is posted outside the ring (`runtime.h` `rt_irq7_tail`): a pending one holds no
+  CIA tick, and a poll point takes it after the posted ring, IRQ0 and IRQ1 being the
+  PIC's higher priorities. In the ring, 33 ticks posted behind it overwrote it (MEASURED);
+  a post to a full ring is now a stop at the next poll point (`rt_irq_post`).
 - Checks: host lockstep against the Sound Blaster references (`tools/reference.py --polls
   --sb`, then `XWING_DRIVER=ADLIB_W.IMS python3 tests/host_run.py`): every DSP status
   read against `trace/dsp-status.csv`, its value differing only by the device's timing
@@ -843,13 +854,17 @@ drives the card. The AdLib build's generated code is unchanged by it.
   on, from the next field; a pause holds it, a continue restarts at the sample reached.
   The card's terminal count is timed apart from the voice (`amiga_platform.c`): the
   other CIA-B timer counts length / rate in E-clocks from the 14h, one-shot in 16-bit
-  slices, held while a D0h pause lasts and dropped when a new block replaces a paused
-  one, and posts IRQ 7 at zero (interrupts disabled around the post; the main program
+  slices, held while a D0h pause lasts and dropped when a new block replaces the one
+  before it, and posts IRQ 7 at zero (interrupts disabled around the post; the main program
   runs in user mode, where SR is privileged); without that timer a block stops.
   `make t-sb-play` (in `make gates-audio`) runs the player on synthetic blocks: the
   restart, period, speaker, end field (within a field of length / rate), chunks, pad,
   pause, continue, PAL and NTSC; `t-sab-sb-play` plants nine faults. `make
   test-amiga-speech` runs the production image of this build on the Sound Blaster setup
-  on the 68030 model to m01's label, where the blocks started must be the reference's,
-  then 500 fields, in which one must end (MEASURED: 1 started, 1 ended, 9 Paula
-  restarts); no label within 15,000 fields fails.
+  on the 68030 model through the intro to m02i's label, where real blocks must have
+  started (more than CT-VOICE's one-byte test), then 500 fields, in which more must end;
+  any stop fails, and so does no label within 60,000 fields (MEASURED: 45 started by the
+  label, 46 started and 40 ended at its end, 8,560 Paula restarts). The count is not the
+  reference's 44: on the 68030 the intro runs about 3.5 times slower than on DOS, its
+  lines on the PIT clock run ahead of its pictures, and some differ and overlap. `amiga/run.sh`
+  boots the Sound Blaster setup when the image is this build.

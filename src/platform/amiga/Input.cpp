@@ -58,9 +58,7 @@ static void post(uint16_t scan)
     rt_key_ring[rt_key_tail % RT_KEY_RING] = scan;
     ++rt_key_tail;
 #ifdef XWING_SYNC
-    rt_irq_ring[rt_irq_tail % RT_IRQ_RING] = (scan & 0x80) ? 0x89 : 0x09;
-    ++rt_irq_tail;
-    RT_RAISE_IRQ();
+    rt_irq_post((scan & 0x80) ? 0x89 : 0x09);
 #endif
     Enable();
 }

@@ -197,6 +197,17 @@ extern volatile uint8_t rt_irq_ring[RT_IRQ_RING];
 extern volatile uint8_t rt_irq_tail;
 extern volatile uint8_t rt_irq_pending;
 #define RT_RAISE_IRQ() (rt_irq_pending = 1, *(volatile uint8_t *)&G_IRQ = 1)
+/* The platform's post (machine.c): the vector appended at rt_irq_tail, then
+ * RT_RAISE_IRQ; a full ring is a stop at the next poll point, never an
+ * overwrite. At interrupt level, or with interrupts disabled. */
+void rt_irq_post(uint8_t vector);
+/* IRQ 7 (the DSP: platform.h plat_sb_block, plat_sb_irq), posted outside the
+ * ring by counting rt_irq7_tail, then RT_RAISE_IRQ: a pending IRQ 7 holds no
+ * CIA tick (rt_irq0_ready, rt_irq0_take look at the ring only), and a poll
+ * point takes it after the posted ring, IRQ0 and IRQ1 being the PIC's higher
+ * priorities (MEASURED: in the ring, 33 ticks posted behind it in five fields
+ * overwrote it, the intro's first speech block). */
+extern volatile uint8_t rt_irq7_tail;
 void rt_bios_int08(void);
 /* Async IRQ0 (Secret Weapons of the Luftwaffe's docs/irq-plan.md I6): the platform's tick interrupt calls
  * rt_irq_interrupt (rt_entry.s) when rt_irq0_ready, else posts vector 08h;
@@ -284,6 +295,7 @@ typedef void rt_field_fn(void *ctx, const char *name, volatile void *field, uint
 #define RT_UNSAVED_STOP 2       /* a stop raised at interrupt level is pending */
 #define RT_UNSAVED_HANDLER 3    /* an IRQ0 handler or a runtime service runs */
 #define RT_UNSAVED_CAPTURE 4    /* an effect capture runs */
+#define RT_UNSAVED_IRQ7 5       /* an IRQ 7 is posted, not yet taken */
 int rt_machine_fields(rt_field_fn *f, void *ctx, int saving);
 int rt_dos_fields(rt_field_fn *f, void *ctx, int saving);
 int rt_ems_fields(rt_field_fn *f, void *ctx, int saving);

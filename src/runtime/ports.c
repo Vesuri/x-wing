@@ -148,11 +148,13 @@ static void dma_advance(uint32_t length)
 static void dsp_dma_block(uint32_t length)
 {
     dma_ready(0x49, length);
-    /* CT-VOICE's stop pauses the block (D0h) and the next clip's 14h replaces
-     * it, its IRQ 7 never raised (MEASURED: m02i, blocks 9 to 12) */
-    if (rt_sb_playing && !rt_sb_paused) {
-        rt_stop("DSP block while one plays (length)", length, 0);
-    }
+    /* A 14h replaces the block before it, paused or playing: its IRQ 7 is
+     * never raised, one already posted is still taken. CT-VOICE's stop pauses
+     * the block (D0h) and the next clip's 14h replaces it (MEASURED: m02i,
+     * blocks 9 to 12); over a playing block, the reference's DOSBox-X restarts
+     * the count with the new length and drops the old end (DERIVED: its
+     * sblaster.cpp, 14h through DSP_PrepareDMA_Old to DSP_DoDMATransfer;
+     * reached on the 68030, where the intro's lines overlap). */
     rt_sb_paused = 0;
     if (dsp_time_constant == 0) {
         rt_stop("DSP block without a time constant", length, 0);

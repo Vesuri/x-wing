@@ -326,9 +326,7 @@ static ULONG cia_tick(void)
         }
     }
 #endif
-    rt_irq_ring[rt_irq_tail % RT_IRQ_RING] = 8;
-    ++rt_irq_tail;
-    RT_RAISE_IRQ();
+    rt_irq_post(8);
     return 0;
 }
 
@@ -670,16 +668,14 @@ uint8_t plat_dsp_status(uint32_t port, uint32_t value)
 #endif
 }
 
-/* Vector 0Fh (IRQ 7) posted from the main program or the field task: all
- * interrupts masked around the post, which the CIA tick and the keyboard
- * make at interrupt level. Disable(), not SR: the main program runs in user
+/* IRQ 7 posted from the main program (F2h) or the DSP timer, outside the
+ * ring (runtime.h rt_irq7_tail): all interrupts masked around the post. Disable(), not SR: the main program runs in user
  * mode, where a move to or from SR is a privilege violation (MEASURED: the
  * detection's F2h stopped the Amiga image in Exec's alert). */
 void amiga_post_irq7(void)
 {
     Disable();
-    rt_irq_ring[rt_irq_tail % RT_IRQ_RING] = 0x0f;
-    ++rt_irq_tail;
+    ++rt_irq7_tail;                 /* outside the ring (runtime.h) */
     RT_RAISE_IRQ();
     Enable();
 }

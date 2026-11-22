@@ -62,8 +62,16 @@ endif
 # the speech player's Chip blocks (Audio.cpp, sb_play.c).
 # Both builds share obj/: the objects the flag changes depend on the
 # driver's stamp, which a switch replaces.
+# Its production image compiles in every generated poll point (XWING_SYNC in the
+# generated code gates only the poll checks, translator/emit.py poll): IRQ 7
+# reaches CT-VOICE's handler at the reference's own delivery points, not only at
+# irq-polls.csv's (MEASURED: with those alone, the intro's first voice's IRQ 7
+# was taken 1414 fields after its post). The runtime stays the production one.
 ifeq ($(XWING_DRIVER),ADLIB_W.IMS)
 CCFLAGS += -DXWING_SB
+ifeq ($(SYNC)$(REPLAY),)
+VASMGEN += -DXWING_SYNC=1
+endif
 DRIVER_STAMP = obj/driver-sb.stamp
 else
 DRIVER_STAMP = obj/driver-adlib.stamp
@@ -178,7 +186,7 @@ obj/rt_%.o: $(RUNTIME)/%.c | obj
 obj/rt_entry.o: $(RUNTIME)/rt_entry.s | obj
 	$(VASM) $(VASMFLAGS) -I"$(RUNTIME)" -o $@ $<
 
-obj/program.o: $(GEN)/program.s $(wildcard $(GEN)/*.s) | obj
+obj/program.o: $(GEN)/program.s $(wildcard $(GEN)/*.s) $(DRIVER_STAMP) | obj
 	$(VASM) $(VASMGEN) -I"$(GEN)" -o $@ $<
 
 obj/version.o: $(AMIGA_SRC)/version.s | obj

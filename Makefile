@@ -271,11 +271,14 @@ test-amiga-audio: amiga
 	grep -Eq '^XWING_AUDIO fields=[0-9]+ irq0=[0-9]+ keyons=[1-9][0-9]* renders=[1-9][0-9]* restarts=[1-9][0-9]*$$' \
 		$(AMIGA_CAPTURE)/audio.log
 # Speech on Paula (P10): the Sound Blaster build's production image on the Sound Blaster
-# setup past the label (amiga/speech.gdb.in); the blocks started by the label must be
-# the reference's (SPEECH_BLOCKS, MEASURED: m01's host lockstep) and some must end.
-SPEECH_BLOCKS ?= 1
-SPEECH_LIMIT ?= 15000
+# setup to the intro's end (amiga/speech.gdb.in), where real blocks must have started
+# (more than CT-VOICE's one-byte interrupt test), then AUDIO_FIELDS more, in which more
+# must end; any stop fails. Not the reference's count: on the 68030 the intro's pictures run
+# behind its clock and its lines differ (MEASURED: 45 started by the label, the reference 44).
+SPEECH_MILESTONE ?= m02i-intro-played
+SPEECH_LIMIT ?= 60000
 test-amiga-speech: export XWING_DRIVER = ADLIB_W.IMS
+test-amiga-speech: AMIGA_MILESTONE = $(SPEECH_MILESTONE)
 test-amiga-speech: amiga
 	@mkdir -p $(AMIGA_CAPTURE)
 	sed -e "s|@LABEL@|$$(python3 tests/host_run.py --label --milestone $(AMIGA_MILESTONE))|" \
@@ -283,8 +286,8 @@ test-amiga-speech: amiga
 		amiga/speech.gdb.in > $(AMIGA_CAPTURE)/speech.gdb
 	$(ENV) cd amiga && AMIGA_CPU=$(AMIGA_CPU) XWING_GAME_DIR=../tmp/dos/configured-sb/XWING \
 		./debug.sh "" "../$(AMIGA_CAPTURE)/speech.gdb" 2>&1 | tee ../$(AMIGA_CAPTURE)/speech.log
-	grep -Eq '^XWING_SPEECH_LABEL started=$(SPEECH_BLOCKS)$$' $(AMIGA_CAPTURE)/speech.log
-	grep -Eq '^XWING_SPEECH fields=[0-9]+ started=[0-9]+ ended=[1-9][0-9]* restarts=[1-9][0-9]*$$' \
+	grep -Eq '^XWING_SPEECH_LABEL started=([2-9]|[1-9][0-9]+)$$' $(AMIGA_CAPTURE)/speech.log
+	grep -Eq '^XWING_SPEECH fields=[0-9]+ started=[0-9]+ ended=([2-9]|[1-9][0-9]+) restarts=[1-9][0-9]*$$' \
 		$(AMIGA_CAPTURE)/speech.log
 
 # AdLib FM on Paula (P7), copied from Secret Weapons of the Luftwaffe's Makefile: the
