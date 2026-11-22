@@ -1356,13 +1356,20 @@ def carry_cases(h):
     (INC after) and CF dead (CLC after)."""
     edges = (0, 1, 0x7FFF, 0x8000, 0xFFFF)
     forms = {"11d8": "r", "19d8": "r", "10d8": "r", "18d8": "r", "1107": "m", "1907": "m",
-             "1307": "m", "1b07": "m", "83d001": "i", "83d8ff": "i", "153412": "i", "1d0080": "i"}
+             "1307": "m", "1b07": "m", "83d001": "i", "83d8ff": "i", "153412": "i", "1d0080": "i",
+             # a direct address and an immediate: one 68k RMW (lower.carry_in_place), and the
+             # immediates it leaves to the general path (all ones, largest positive)
+             "8316000100": "d", "831e000100": "d", "831e000105": "d", "8316000101": "d",
+             "811e0001fe7f": "d", "81160001ff7f": "d", "831e0001ff": "d", "801e000103": "d",
+             "801600017f": "d"}
     for form, kind in forms.items():
         for ax in edges:
             for other in edges if kind != "i" else (0,):
+                if kind == "d" and ax != edges[0]:
+                    continue        # AX unused: the edges are the operand's
                 for cf in (0, 1):
                     for tail in ("", "41", "f8"):
-                        bx = other if kind == "r" else 0x0400
+                        bx = other if kind == "r" else 0x0100 if kind == "d" else 0x0400
                         h.case(bytes.fromhex(form + tail), f"b:carry{form}{tail and '-' + tail}",
                                n=1 + bool(tail), block=bool(tail),
                                overrides={"regs": {"ax": ax, "bx": bx, "ds": 0x5000, "cs": 0x2000},

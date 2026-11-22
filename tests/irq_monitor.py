@@ -14,9 +14,12 @@ Checks every guest memory access of a host run against I2's footprint
   frame down by the proved depth (K);
 - in main code, an access that meets the footprint (a read of a handler-written
   byte, a write of a handler-accessed byte) comes from a sync instruction whose
-  row covers the address, runs with guest IF clear, or from a runtime service
+  row covers the address, runs with guest IF clear or in an STI's shadow (the proof's
+  shadow rows: no delivery before the instruction after it), or from a runtime service
   (recorded: the services that must mask the tick, I6); any other generated or
   runtime access fails;
+- a handler read of an irq-bounds.csv variable (irq.py bounds: the proof takes its
+  value from the row) finds a value within the row's bound;
 - song data: per byte, the handler's reads; a generated main write of a byte the
   handler read before and reads again after, with no main-code driver request (an
   entry at ADLIB.IMS +0000, the API) between the earlier read and the write nor
@@ -26,6 +29,10 @@ Checks every guest memory access of a host run against I2's footprint
 X-Wing's songs are huge objects the driver walks by far pointers (irq.py
 SEGMENT_WORDS, SEGMENT_LOADS); their extent is not in a table the monitor could read,
 so S is bounded by the fixed classes, video memory and the EMS frame, not by a song window.
+A handler read at a site that reads through a song pointer (the footprint's class S rows)
+is a song read wherever it lands, inside a fixed class too: ADLIB_W.IMS's CT-VOICE reads its
+voice buffers that way (G:AB2Ch.. at m02i), so a buffer the game reloads is checked as a song
+buffer is, against the requests around it.
 Records the sync sites hit, IF-clear accesses, services and song bytes in
 tmp/test/irq-monitor-<run>.json.
 """
@@ -51,10 +58,21 @@ LIMIT = 20
 # Runtime code that runs as an interrupt handler, not main code: the BIOS tick
 # (IRQ0 while IVT 08h is the BIOS's, and the end of the driver's chain)
 INTERRUPT_SIDE = {"bios_tick"}
+# The runtime's vector fetch when it delivers an interrupt (machine.c guest_vector,
+# deliver): reads of the IVT, which a handler may write (ADLIB_W.IMS's playback
+# start installs IVT 0Fh from the tick), as the CPU's own fetch would
+VECTOR_FETCH = {"guest_vector", "deliver"}
+# The DSP model's DMA write (ports.c: E2h's identification byte, its only guest
+# memory store), a device's write like DOSBox-X's DMA controller's; ADLIB_W.IMS's
+# handler reads the word it lands in (CS:0091h) under its irq-bounds.csv bound,
+# which handler_access checks at every read
+DEVICE_WRITE = {"rt_port_out"}
 PRIVATE_STACK = (0xB000, 0x8000 - 6)   # runtime.h RT_IRQ_SS:RT_IRQ_SP, frame pushed
 # translator/irq.py CONST_TABLES: the proof takes their words from the driver image,
 # so no write may reach them (linear: G = DRVSEG + 04D0h, A0000 = DRVSEG)
 from translator.irq import CONST_BASE, CONST_TABLES  # noqa: E402
+from translator.irq import bounds  # noqa: E402
+BOUNDS = [(c, var, w, lo, hi) for (c, var, w), (lo, hi) in bounds().items()]
 CONST_SPANS = [(DRVSEG * 16 + CONST_BASE[c] + lo, DRVSEG * 16 + CONST_BASE[c] + hi, f"{c}:{lo:04X}")
                for c, lo, hi in CONST_TABLES]
 
@@ -78,11 +96,21 @@ class Monitor:
         self.size = size
         self.mem, self.sync = [], defaultdict(list)
         self.depth = None
+        # the handler's reads through song pointers (class S): songs and voices
+        self.song_sites: set = set()
+        self.song_site_at: dict[int, bool] = {}
+        self.shadow: set = set()          # main instructions only an STI's shadow reaches
         for r in csv.DictReader(footprint.open()):
             if r["kind"] == "mem":
                 self.mem.append((r["class"], int(r["first"], 16), int(r["last"], 16), r["access"]))
+                if r["class"] == "S" and r["access"] == "r":
+                    self.song_sites.update((m, int(o, 16)) for m, o in
+                                           (w.split("+") for w in r["where"].split()))
             elif r["kind"] == "stack":
                 self.depth = -int(r["first"], 16)
+            elif r["kind"] == "shadow":
+                mod, off = r["where"].split("+")
+                self.shadow.add((mod, int(off, 16)))
             elif r["kind"] == "sync" and r["class"] != "port":
                 mod, off = r["where"].split("+")
                 self.sync[(mod, int(off, 16))].append(
@@ -125,7 +153,7 @@ class Monitor:
             return int(cls, 16) + self.loadseg
         if re.fullmatch(r"A[0-9A-F]{4}", cls):
             return int(cls[1:], 16) + DRVSEG
-        return {"BDA": 0x40, "G": self.g}.get(cls)
+        return {"BDA": 0x40, "G": self.g, "IVT": 0}.get(cls)
 
     def word(self, lin: int) -> int:
         return int.from_bytes(self.h.gmem(lin, 2), "little")
@@ -228,13 +256,36 @@ class Monitor:
         else:
             self.main_access(write, lin, size)
 
+    def song_site(self) -> bool:
+        """The handler's read is at a site that reads through a song pointer (the
+        footprint's class S): a song or voice byte, wherever it lies."""
+        pc = self.h.r("pc")
+        hit = self.song_site_at.get(pc)
+        if hit is None:
+            hit = self.song_site_at[pc] = self.h.code[0] <= pc < self.h.code[1] and \
+                self.node(pc) in self.song_sites
+        return hit
+
     def handler_access(self, write: bool, lin: int, size: int):
         need = WRITE_OK if write else READ_OK
+        song_site = not write and self.song_site()
+        if not write:
+            for cls, var, w, lo, hi in BOUNDS:
+                p = self.para(cls)
+                if p is not None and lin <= p * 16 + var < lin + size:
+                    at = p * 16 + var
+                    v = self.word(at) if w == 16 else self.h.gmem(at, 1)[0]
+                    if not lo <= v <= hi:
+                        pc = self.h.r("pc")
+                        where = self.site(self.node(pc)) if self.h.code[0] <= pc < self.h.code[1] \
+                            else self.symbol(pc)
+                        self.fail(f"handler read of {cls}:{var:04X} = {v:x} outside its irq-bounds.csv "
+                                  f"{lo:x}..{hi:x} at {where} (tick {self.tick})")
         for a in range(lin, lin + size):
-            if self.k[0] <= a <= self.k[1] or self.mask[a] & need:
+            song_mem = a < SONG_LIMIT or EMS_FRAME[0] <= a < EMS_FRAME[1]
+            if self.k[0] <= a <= self.k[1] or self.mask[a] & need and not (song_site and song_mem):
                 continue
-            if not write and (a < SONG_LIMIT or EMS_FRAME[0] <= a < EMS_FRAME[1]) \
-                    and not self.mask[a] & ACCESSED:
+            if not write and song_mem and (song_site or not self.mask[a] & ACCESSED):
                 r = self.song_reads.setdefault(a, [self.tick, self.tick, "S", self.epoch])
                 w = self.song_pending.pop(a, None)
                 if w and (race := song_race(a, r, w, self.tick, self.epoch)):
@@ -281,13 +332,16 @@ class Monitor:
                         self.song_pending.setdefault(a, (self.tick, self.epoch, r[3], who))
         if not hit:
             return
-        if self.h.in_service or (not generated and who in INTERRUPT_SIDE):
+        if self.h.in_service or (not generated and (who in INTERRUPT_SIDE or
+                                                   who in VECTOR_FETCH and not write and
+                                                   lin + size <= 0x400 or
+                                                   who in DEVICE_WRITE and write)):
             self.services[f"{who} {self.cls_of(lin)}"] += 1
         elif not generated:
             self.fail(f"runtime {'write' if write else 'read'} of {lin:05X} meets the footprint "
                       f"at {who}")
-        elif self.h.state(11, 1) == 0:
-            self.masked[who] += 1
+        elif self.h.state(11, 1) == 0 or self.node(pc) in self.shadow:
+            self.masked[who] += 1     # IF clear, or the instruction in an STI's shadow
         elif self.covered(self.node(pc), lin, size):
             self.found[who] += 1
         else:
@@ -295,7 +349,7 @@ class Monitor:
                       f"{who}, not a sync access for it")
             cls, off = (self.cls_of(lin).split(":") + [None])[:2]
             off = int(off, 16) if off else lin
-            u = self.uncovered.setdefault(who, [cls, off, off + size - 1, set()])
+            u = self.uncovered.setdefault((who, cls), [cls, off, off + size - 1, set()])
             u[1], u[2] = min(u[1], off), max(u[2], off + size - 1)
             u[3].add("w" if write else "r")
 
@@ -319,8 +373,8 @@ class Monitor:
         song = sorted(self.song_reads)
         record = dict(ticks=self.tick, handler_entries=dict(self.entries), g=self.g and f"{self.g:04X}",
                       sync_sites=dict(sorted(self.found.items())),
-                      uncovered={w: [c, f"{lo:04X}", f"{hi:04X}", "".join(sorted(a))]
-                                 for w, (c, lo, hi, a) in sorted(self.uncovered.items())},
+                      uncovered={f"{w} {c}": [c, f"{lo:04X}", f"{hi:04X}", "".join(sorted(a))]
+                                 for (w, _), (c, lo, hi, a) in sorted(self.uncovered.items())},
                       if_clear=dict(sorted(self.masked.items())),
                       services=dict(sorted(self.services.items())),
                       song_bytes=len(song), song_span=song and [f"{song[0]:05X}", f"{song[-1]:05X}"],
@@ -331,7 +385,7 @@ class Monitor:
         print(f"irq monitor: {self.tick} ticks, {len(self.found)} sync sites hit, "
               f"{sum(self.masked.values())} IF-clear and {sum(self.services.values())} service accesses, "
               f"{len(song)} song bytes read, {len(problems)} problems")
-        for w, (c, lo, hi, a) in sorted(self.uncovered.items()):
+        for (w, _), (c, lo, hi, a) in sorted(self.uncovered.items()):
             problems.append(f"irq monitor: uncovered main site {w}: {c} {lo:04X}..{hi:04X} "
                             f"{''.join(sorted(a))}")
         return problems

@@ -72,10 +72,32 @@ index 7cd77db..596c01c 100644
  			else if (!strcasecmp(sbtype,"sb1.5")) { type=SBT_1; sb[ci].subtype=SBST_105; }
  			else if (!strcasecmp(sbtype,"sb1")) { type=SBT_1; sb[ci].subtype=SBST_105; } /* DOSBox SVN compat same as sb1.5 */
 diff --git a/src/misc/xwing_trace.cpp b/src/misc/xwing_trace.cpp
-index 4c9d833..c916333 100644
+index 4c9d833..ef2c340 100644
 --- a/src/misc/xwing_trace.cpp
 +++ b/src/misc/xwing_trace.cpp
-@@ -164,6 +164,25 @@ void FlushRetrace() {
+@@ -153,6 +153,21 @@ struct RetraceRun {
+     uint64_t service = 0, count = 0;
+     uint32_t value = 0;
+ } retrace_run;
++/* XWING_SB with the retrace log: the Sound Blaster's status reads (22Ch write status,
++ * 22Eh data status, the OPL's 228h timer status), whose values DOSBox-X times, as runs of
++ * one port and value in one service-event interval (dsp-status.csv; the host run replays them). */
++FILE *dsp_status = nullptr;
++struct DspRun {
++    uint64_t service = 0, count = 0;
++    uint32_t port = 0, value = 0;
++} dsp_run;
++void FlushDspStatus() {
++    if (!dsp_status || !dsp_run.count) return;
++    if (fprintf(dsp_status, "%llu,0x%03x,%u,%llu\n", (unsigned long long)dsp_run.service, (unsigned)dsp_run.port,
++                (unsigned)dsp_run.value, (unsigned long long)dsp_run.count) < 0)
++        E_Exit("XWING: cannot write dsp-status.csv");
++    dsp_run.count = 0;
++}
+ void FlushRetrace() {
+     if (!retrace_ports || !retrace_run.count) return;
+     if (fprintf(retrace_ports, "%llu,%u,%llu\n", (unsigned long long)retrace_run.service,
+@@ -164,6 +179,25 @@ void FlushRetrace() {
   * 389h) with the emulated time in ms. */
  FILE *opl = nullptr;
  uint8_t opl_index = 0;
@@ -101,7 +123,16 @@ index 4c9d833..c916333 100644
  /* Call probes (XWING_PROBES=MODULE+HEX:N=name,...): at each entry, the emulated
   * ms and the N stack words above a far return address (probe.csv). */
  struct Probe {
-@@ -425,6 +444,11 @@ void WriteOutputs() {
+@@ -419,12 +453,20 @@ void WriteOutputs() {
+     FlushRetrace();
+     if (retrace_ports && fclose(retrace_ports)) E_Exit("XWING: cannot flush retrace.csv");
+     retrace_ports = nullptr;
++    FlushDspStatus();
++    if (dsp_status && fclose(dsp_status)) E_Exit("XWING: cannot flush dsp-status.csv");
++    dsp_status = nullptr;
+ 	if (rep_chunks) fclose(rep_chunks);
+ 	rep_chunks = nullptr;
+ 	if (events && pclose(events)) LOG_MSG("XWING: events.csv.gz pipe failed");
  	events = nullptr;
  	if (opl) fclose(opl);
  	opl = nullptr;
@@ -113,7 +144,19 @@ index 4c9d833..c916333 100644
  	if (probe_log) fclose(probe_log);
  	probe_log = nullptr;
  	LOG_MSG("XWING: wrote trace to %s (%llu instructions)", out_dir.c_str(),
-@@ -588,6 +612,13 @@ void Configure() {
+@@ -542,6 +584,11 @@ void Configure() {
+         retrace_ports = fopen(Path("retrace.csv").c_str(), "w");
+         if (!retrace_ports) E_Exit("XWING: cannot open retrace.csv");
+         fputs("service,value,repeat\n", retrace_ports);
++        if (getenv("XWING_SB")) {
++            dsp_status = fopen(Path("dsp-status.csv").c_str(), "w");
++            if (!dsp_status) E_Exit("XWING: cannot open dsp-status.csv");
++            fputs("service,port,value,repeat\n", dsp_status);
++        }
+     }
+ 	for (const auto &spec : Split(getenv("XWING_KEYS"), ',')) {
+ 		Trigger t;
+@@ -588,6 +635,13 @@ void Configure() {
  		opl = fopen(Path("opl.csv").c_str(), "w");
  		if (opl) fputs("ms,reg,value\n", opl);
  	}
@@ -127,7 +170,24 @@ index 4c9d833..c916333 100644
  	for (const auto &spec : Split(getenv("XWING_PROBES"), ',')) {
  		const auto plus = spec.find('+'), colon = spec.find(':'), eq = spec.find('=');
  		if (plus == std::string::npos || colon == std::string::npos || eq == std::string::npos)
-@@ -991,14 +1022,54 @@ void XWING_Port(const bool write, const uint8_t width, const unsigned port, cons
+@@ -982,6 +1036,16 @@ void XWING_Port(const bool write, const uint8_t width, const unsigned port, cons
+         }
+         ++joystick_run.count;
+     }
++    if (dsp_status && !write && (port == 0x22c || port == 0x22e || port == 0x228) && CurrentLocation().module) {
++        if (dsp_run.count && (dsp_run.service != service_events || dsp_run.port != port || dsp_run.value != value))
++            FlushDspStatus();
++        if (!dsp_run.count) {
++            dsp_run.service = service_events;
++            dsp_run.port = port;
++            dsp_run.value = value;
++        }
++        ++dsp_run.count;
++    }
+     if (retrace_ports && !write && port == 0x3da && CurrentLocation().module) {
+         if (retrace_run.count && (retrace_run.service != service_events || retrace_run.value != value))
+             FlushRetrace();
+@@ -991,14 +1055,54 @@ void XWING_Port(const bool write, const uint8_t width, const unsigned port, cons
          }
          ++retrace_run.count;
      }

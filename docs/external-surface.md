@@ -106,7 +106,16 @@ Input is polled.
 | Game port | 4,194,368 | 32 | 201h: root `+0106E..010AB`; the read loop times out at 65,536 per call without a joystick |
 | AdLib | 0 | 366,820 | 388h/389h: `ADLIB.IMS+04BE1..04C11` only |
 | VGA | 23,579,354 | 1,804,399 | 3C8h/3C9h palette: `FRONTEND+17917..` and root `+013A9..`; 3DAh retrace: `FRONTEND+17908/1790D` |
-| DMA, keyboard controller, Sound Blaster (22xh), MPU-401 (330h) | 0 | 0 | never touched |
+| DMA, keyboard controller, Sound Blaster (22xh), MPU-401 (330h) | 0 | 0 | never touched (the AdLib machine) |
+
+On the Sound Blaster machine (P10, [DOS reference](dos-reference.md#sound-blaster-p10))
+`ADLIB_W.IMS` also drives the card: its DSP (226h reset, 22Ah data, 22Ch command and write
+status, 22Eh data status and IRQ 7 acknowledge), its OPL2's timer at 228h/229h (the
+detection's timer-1 test, `+05180`; the music writes 388h/389h), DMA channel 1 (02h/03h,
+0Ah-0Ch, page 83h), the PIC's mask for IRQ 7, and IVT 0Ah, 0Bh, 0Dh and 0Fh, which its
+detection reads directly (`+04FEF`) and hooks while it asks the card for an interrupt.
+`src/runtime/ports.c` models them at the commands and values the references show; the
+translator's view of the driver is in [translator design](translator-design.md#sound-d10).
 
 There are also six untraced static sites. Five are in the root at `+012B9..012D0` (PIT
 40h/43h); the sixth is root `+0103E` (`in dx`).

@@ -55,6 +55,21 @@ void plat_palette(const uint8_t *dac);
 /* VGA input status 1 (port 3DAh) now: bit 3 vertical retrace, bit 0 display
  * disabled (the host replays the reference's reads, trace/retrace.csv). */
 uint8_t plat_vga_status(void);
+
+/* Sound Blaster DSP status read (port 22Ch write status, 22Eh data status):
+ * `value` is the DSP model's answer (ports.c); the platform may report the
+ * device still busy (22Ch bit 7 set) or its data not yet there (22Eh bit 7
+ * clear), as the reference DSP's timing does, and the OPL's timer 1 still
+ * counting (228h flags C0h clear). Returns the byte read. */
+uint8_t plat_dsp_status(uint32_t port, uint32_t value);
+/* Sound Blaster block: `length` 8-bit unsigned mono samples at guest linear
+ * `linear` (guest RAM order, runtime.h rd8) played at `rate` Hz; when the last
+ * has played the platform posts vector 0Fh (IRQ 7, rt_irq_ring). */
+void plat_sb_block(uint32_t linear, uint32_t length, uint32_t rate);
+/* DSP D0h (1) and D4h (0): the playing block paused and continued. */
+void plat_sb_pause(uint32_t paused);
+/* DSP F2h: the platform posts vector 0Fh (IRQ 7). */
+void plat_sb_irq(void);
 /* Effect capture (runtime.h rt_sfx_*): whether to capture effect id; the
  * capture is complete (called once after the last id, the guest state restored). */
 int plat_sfx_wanted(uint8_t id);

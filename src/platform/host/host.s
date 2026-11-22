@@ -23,6 +23,10 @@
 	xdef	plat_palette
 	xdef	plat_service
 	xdef	plat_vga_status
+	xdef	plat_dsp_status
+	xdef	plat_sb_block
+	xdef	plat_sb_pause
+	xdef	plat_sb_irq
 	xdef	plat_log
 	xdef	plat_console
 	xdef	plat_exit
@@ -76,6 +80,14 @@ plat_palette:	nop
 plat_service:	nop
 	rts
 plat_vga_status:	nop
+	rts
+plat_dsp_status:	nop
+	rts
+plat_sb_block:	nop
+	rts
+plat_sb_pause:	nop
+	rts
+plat_sb_irq:	nop
 	rts
 plat_log:	nop
 	rts

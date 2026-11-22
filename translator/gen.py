@@ -166,6 +166,13 @@ def write(out: Path, file: str, module: str, body: bytes) -> None:
 def generate(out: Path, program: emit.Program | None = None) -> tuple[dict[str, cfg.Unit], Counter, dict[str, Counter]]:
     units = program.units if program is not None else cfg.build()
     out.mkdir(parents=True, exist_ok=True)
+    # the other driver's build left its module files here (one build directory): moved
+    # aside, as a replaced output is (AGENTS.md), so the check sees this build's alone
+    for d in image.DRIVERS:
+        for f in (out / f"{d}.ir", out / f"{d}.s"):
+            if d != image.DRIVER and f.exists():
+                (out / ".replaced").mkdir(exist_ok=True)
+                f.replace(out / ".replaced" / f.name)
     proof = None
     if program is None:
         # I2/I8: the footprint proof on the program with loop heads only gives the
@@ -221,7 +228,11 @@ AUDITED = ("spill", "full-flag materialization", "PF store", "AF store", "dispat
 
 def audit(total: Counter, per: dict[str, Counter]) -> int:
     with AUDIT.open() as f:
-        expected = {r["counter"]: (int(r["expected"]), r["reason"]) for r in csv.DictReader(f)}
+        rows = list(csv.DictReader(f))
+    # a row naming the build's driver replaces the shared row of its counter
+    expected = {r["counter"]: (int(r["expected"]), r["reason"]) for r in rows if not r["driver"]}
+    expected.update({r["counter"]: (int(r["expected"]), r["reason"]) for r in rows
+                     if r["driver"] == image.DRIVER})
     cols = ("guest instructions", "68k lines", "CCR fused", "flag store", "flag merge",
             "flag load", "return check", "dispatcher exit", "stop_unknown site")
     print(f"{'module':13}" + "".join(f"{c.split()[0][:10]:>11}" for c in cols))

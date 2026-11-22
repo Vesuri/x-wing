@@ -11,21 +11,28 @@ Segment classes: the link paragraphs relocated constants name (four hex digits i
 the root's link space, `A` and four in the driver's, at DRVSEG), `G` (the driver's
 DS: the word at ADLIB.IMS 0000:0911 its install stores), `S` (song data: segments of
 the song pointers SEGMENT_WORDS and SEGMENT_LOADS name, huge pointers with their 1000h
-carries), `BDA` (the BIOS tick the BIOS chain runs, rt_bios_int08), `K` (the
-interrupted stack), `NULL` (a null far pointer's segment, never dereferenced).
+carries), `BDA` (the BIOS tick the BIOS chain runs, rt_bios_int08), `IVT` (the vector
+table, paragraph 0: the segment 0 constants IVT_SEGMENTS name, CT-VOICE's vector
+install and restore in the Sound Blaster build), `K` (the interrupted stack), `NULL`
+(a null far pointer's segment, never dereferenced).
 Calls the handler reaches through a pointer follow their traced targets
 (annotations/irq-hooks.csv), or the one target a CONST_TABLES word gives (the driver
 image's, a known index; I3 fails any write into those tables), and proved switch tables
 all entries; a call on a deferred path stops (annotations/irq-stops.csv). A register
 half keeps a known low byte under an unknown high byte (`q`). Unsigned and equality branches
 after cmp r16,imm narrow the register on each edge. Indexed offsets are ranges; loads of annotations/irq-bounds.csv variables
-take its bounds, and accesses of a class with an extent row (`*`) are clamped to it
-(I3's monitor checks every handler access against the footprint).
+take its bounds, as does a load at one known address of a variable it bounds (an
+indexed table word), and accesses of a class with an extent row (`*`) are clamped to it
+(I3's monitor checks every handler access against the footprint and every read of a
+bounded variable against its bound). Ranges add and subtract modulo 2^w. A call site
+already on the call stack (a re-entry: the song interpreter through a queued seek) is
+followed SELF_DEPTH levels; deeper is an exit row (I3: same instructions and classes,
+the stack depth checked).
 Proved, else Violation: no interrupted register, flag or stack word is read but
 to save it (a push or its copy), no unwritten word of the handler's stack area and no
 stack address is stored outside it, every exit (IRET, or the chain to the BIOS
 handler with the frame in place) has every register, SP and the frame as on entry,
-no DF read, every port in PORTS, no software interrupt, recursion or indirect
+no DF read, every port in PORTS, no software interrupt or indirect
 transfer but the BIOS chain. A possible divide fault is listed (runtime row).
 
 Main code: a forward analysis over emit.Program's graph from the MZ entry with the
@@ -55,7 +62,8 @@ load and a CAS store that retries on change), no
 compute row may contain a sync access, and every main write of a bounded G
 variable must keep its irq-bounds.csv bound, else Violation.
 Output build/gen/irq-footprint.csv: kind (mem, port, if, hook, runtime, exit, extent,
-stack, sync), class, first, last, access, where.
+stack, sync, shadow: a main instruction every state of which is in an STI's shadow),
+class, first, last, access, where.
 """
 
 from __future__ import annotations
@@ -77,11 +85,22 @@ DRIVER = image.DRIVER                # the build's music driver, relocated at DR
 D = driver.value
 PORTS = {0x388: "OPL index (rt_out8)", 0x389: "OPL data (rt_out8)", 0x20: "PIC EOI",
          0x3C8: "DAC write index (rt_dac_out)", 0x3C9: "DAC data (rt_dac_out)"}
+if DRIVER == "ADLIB_W.IMS":
+    # CT-VOICE's start and stop at interrupt level (the tick's queued requests and the
+    # flight's far callback reach the voice device's functions): its DSP at the base
+    # port 220h (irq-bounds.csv), DMA channel 1 and the PIC mask of IRQ 7 (as Wing
+    # Commander 2's PORTS; MEASURED: ports.csv of every sbms run)
+    PORTS.update({0x22C: "SB DSP write/status (rt_out8)", 0x22E: "SB DSP read status (rt_in8)",
+                  0x21: "PIC mask (rt_out8)", 0x02: "DMA address 1 (rt_out8)",
+                  0x03: "DMA count 1 (rt_out8)", 0x0A: "DMA mask (rt_out8)",
+                  0x0B: "DMA mode (rt_out8)", 0x0C: "DMA flip-flop (rt_out8)",
+                  0x83: "DMA page 1 (rt_out8)"})
 BIOS_TICK = ("BDA", 0x6C, 0x70)      # rt_bios_int08: tick dword, midnight byte (0040:006C)
 BIOS_ENTRY = 0xFFEA5                 # indirect.csv target of the chain (F000:FEA5)
 GAME_DS_SLOT = (DRIVER, 0x0000, D(0x915, 0x911))  # ADLIB.IMS install +0915/+09C5: mov cs:[0911h],ds
 SIGNATURES = 64                      # signatures per context and instruction before joining
 WIDEN = 6                            # joins that change a joined state before widening
+SELF_DEPTH = 1                       # levels of one call site the proof follows (re-entry: an exit row)
 REGS = ("ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "cs", "ds", "es", "ss", "flagsx")
 HALF = {"al": ("ax", 0), "ah": ("ax", 1), "bl": ("bx", 0), "bh": ("bx", 1),
         "cl": ("cx", 0), "ch": ("cx", 1), "dl": ("dx", 0), "dh": ("dx", 1)}
@@ -156,6 +175,19 @@ SEGMENT_WORDS = {
     ("0125", 0x0015): "3A07",          # the root timer callback's DGROUP (XWING.EXE +01356)
                                        # (MEASURED: 4229h at m01 and in flight)
 }
+if DRIVER == "ADLIB_W.IMS":
+    SEGMENT_WORDS.update({
+        ("A0539", 0x00C4): "G",        # CT-VOICE's status word pointer's segment: the voice
+                                       # install's function 5 (+052EF..+052FC) passes 05D5h,
+                                       # G (irq-bounds.csv CS:00C2h)
+        ("A0539", 0x00CC): "S",        # its voice data pointer's segment (CS:00CAh): function 6
+                                       # normalises the caller's ES:DI (+05BDB..+05BE7), the
+                                       # sound the driver's resource lookup (+007D8) returns,
+                                       # and +05976 advances it block by block (huge pointer
+                                       # arithmetic, the 1000h carry rule's sum)
+        ("A0539", 0x00C8): "S",        # the block header pointer's segment (CS:00C6h), function
+                                       # 7's (+05C87), read only by the stop's dead branch
+    })
 
 
 def base(mod: str) -> int:
@@ -187,6 +219,12 @@ SEGMENT_LOADS = {
 
 # Dead reads: (module, offset) -> the value given to a read of a word the handler
 # never wrote whose value reaches no use (the analysis does not refine on branches)
+# Segment 0 constants: (module, offset) of the `mov es,ax` with AX = 0 that addresses the
+# interrupt vector table (class IVT, paragraph 0): CT-VOICE's vector install and restore
+# for its IRQ ((IRQ+8)*4, irq-bounds.csv CS:0032h), which its start and stop run at
+# interrupt level (+0566B, +056AD)
+IVT_SEGMENTS = {(DRIVER, 0x05681), (DRIVER, 0x056BE)} if DRIVER == "ADLIB_W.IMS" else set()
+
 DEAD_READS = {
     (DRIVER, driver.carry(0x119A)): ("c", 0),   # mov di,[bp-2] before any write: DI is returned only
                                   # when exactly one record matched (+011B5 je, DX = 0),
@@ -210,6 +248,15 @@ CONST_TABLES = {
                                "flight and at m01, ms-p2c m01, m12, m14)",
 }
 CONST_BASE = {"G": GAME_DS_PARA * 16, "A0000": 0}   # the classes' offsets in the driver image
+if DRIVER == "ADLIB_W.IMS":
+    # CT-VOICE's function table (14 near pointers at CS:0085h): its far entry (0539:0000,
+    # a jump to +05AE4) calls the one its BX names, below 0Eh, with DS = CS (call
+    # [bx+85h] at +05B0C); every caller passes a constant BX (+052D1..+05386). The word
+    # of function 6 (CS:0091h) is the DSP's by DMA, an irq-bounds.csv row, not the image's
+    for first, last in ((0x0085, 0x0090), (0x0093, 0x00A0)):
+        CONST_TABLES[("A0539", first, last)] = (
+            "CT-VOICE's function table at CS:0085h but function 6's word (DERIVED: the code)")
+    CONST_BASE["A0539"] = 0x5390
 
 # -- abstract values -----------------------------------------------------------
 def rng(v, w):
@@ -231,6 +278,17 @@ def mk(lo, hi, w):
     if lo < 0 or hi > mask(w):
         return ("r", 0, mask(w))
     return ("c", lo) if lo == hi else ("r", lo, hi)
+
+
+def wrap(lo, hi, w):
+    """mk of lo..hi modulo 2^w: an interval wholly below 0 or above the mask is the
+    same interval shifted by the modulus (cmp byte [v],2 of a 0..1 variable: 254..255,
+    ZF clear); one that straddles either end is every value."""
+    m = mask(w) + 1
+    if hi < 0 or lo >= m:
+        k = lo // m
+        lo, hi = lo - k * m, hi - k * m
+    return mk(lo, hi, w)
 
 
 def split(v, k):
@@ -279,6 +337,8 @@ def join(a, b):
         return ("s", a[1] | b[1])
     if {a[0], b[0]} == {"s", "c"} and (a if a[0] == "c" else b)[1] == 0:
         return ("s", (a if a[0] == "s" else b)[1] | {NULL})    # a null far pointer's segment
+    if a[0] == "F" or b[0] == "F":
+        return X        # two different saved FLAGS: a POPF of the join fails
     if a[0] in ("e", "p", "q") or b[0] in ("e", "p", "q"):
         return combine(join8(split(a, 0), split(b, 0)), join8(split(a, 1), split(b, 1)))
     if a[0] in TAINT or b[0] in TAINT or a[0] in ("sp", "s") or b[0] in ("sp", "s"):
@@ -455,8 +515,34 @@ class Handler:
             return self.iret(n, p)
         if i.op == "jmpf" and isinstance(i.operands[0], Mem):
             return self.chain(n, i, p)
+        if i.op in ("pushf", "popf"):
+            return self.flags_word(ctx, n, i, p, fall)
         out = self.step_ops(ctx, n, i, p, u, fall)
         return self.narrow(n, i, fall, out)
+
+    def flags_word(self, ctx, n, i, p, fall):
+        """PUSHF saves the handler's own flags (a FLAGS token: each flag's value and
+        flagsx), POPF of that token restores them (CT-VOICE's far entry, ADLIB_W.IMS
+        +05AE4..05B23); a POPF of any other word is a violation."""
+        sp = p.regs["sp"]
+        if sp[0] != "sp":
+            self.err(n, f"{i.op} with SP {sp}")
+            return []
+        if i.op == "pushf":
+            token = ("F", tuple(p.flags.get(f) for f in FLAGS), p.regs["flagsx"])
+            self.access(n, p, p.regs["ss"], ("sp", sp[1] - 2), 16, "w", token)
+            p.regs["sp"] = ("sp", sp[1] - 2)
+            return [(ctx, fall, p.freeze())]
+        v = self.access(n, p, p.regs["ss"], sp, 16, "r")
+        if v[0] != "F":
+            self.err(n, f"POPF of {v}, not a word PUSHF saved")
+            return []
+        p.flags = {f: x for f, x in zip(FLAGS, v[1]) if x is not None}
+        p.regs["flagsx"] = v[2]
+        iv = p.flags.get("IF")
+        self.fp.ifs[iv[1] if iv and iv[0] == "c" else "?"].add(site(n))
+        p.regs["sp"] = ("sp", sp[1] + 2)
+        return [(ctx, fall, p.freeze())]
 
     # the only predecessor of each node (prog.succ), for branch narrowing
     def single_pred(self, n):
@@ -558,8 +644,15 @@ class Handler:
                 else:
                     self.err(n, "far call outside the scope")
                     continue
-                if fall in ctx:
-                    self.err(n, "recursion")
+                if ctx.count(fall) >= SELF_DEPTH:
+                    # a song marker (7Dh/40h, +03560 -> +02BBA) releases the requests
+                    # main code queued for it (G:0EE8, 64 entries), and a queued seek
+                    # (+01B04) re-runs the interpreter (+02D74), whose markers may release
+                    # more: the tick re-enters it as deep as the queue goes. The proof
+                    # follows SELF_DEPTH levels; a deeper one runs the same instructions
+                    # over the same classes, each access checked against the footprint by
+                    # I3's monitor, below the proved stack depth, which it fails (K)
+                    self.fp.exits[f"call nested beyond {SELF_DEPTH} levels (I3: stack depth)"].add(site(n))
                     continue
                 for target in targets:
                     if kind == "callf":     # the callee's CS (its retf pops the pushed one)
@@ -704,6 +797,8 @@ class Handler:
                 got = const
             elif (cls, var, w) in self.bounds:
                 got = mk(*self.bounds[(cls, var, w)], w)
+            elif lo + size - 1 == hi and (cls, lo, w) in self.bounds:
+                got = mk(*self.bounds[(cls, lo, w)], w)     # a bounded word at one known address
             if n in SEGMENT_LOADS and w == 16:
                 got = ("s", frozenset({SEGMENT_LOADS[n]}))
             out = got if out is None else join(out, got)
@@ -736,6 +831,8 @@ class Handler:
             return v
         if self.seg_class(v) is not None:
             return ("s", self.seg_class(v))
+        if v == ("c", 0) and n in IVT_SEGMENTS:
+            return ("s", frozenset({"IVT"}))
         self.err(n, f"segment register from {v}")
         return X
 
@@ -1026,10 +1123,10 @@ def arith(op, w, vals, widths):
         return mk(a, b, w) if b <= m else ("r", 0, m)
     if op == "add":
         c, d = rest[0]
-        return mk(a + c, b + d, w)
+        return wrap(a + c, b + d, w)
     if op == "sub":
         c, d = rest[0]
-        return mk(a - d, b - c, w)
+        return wrap(a - d, b - c, w)
     if op == "shl" and rest[0][0] == rest[0][1]:
         return mk(a << rest[0][0], b << rest[0][0], w)
     if op == "shr" and rest[0][0] == rest[0][1]:
@@ -1522,7 +1619,7 @@ class Proof:
 
     def lin_class(self):
         """Footprint class -> runtime paragraph (None: located at run time)."""
-        out = {"BDA": 0x40}
+        out = {"BDA": 0x40, "IVT": 0}
         for (cls, *_rest) in self.fp.mem:
             if re.fullmatch(r"A?[0-9A-F]{4}", cls):
                 out[cls] = int(cls[-4:], 16) + (DRVSEG if cls[0] == "A" else LOADSEG)
@@ -1549,6 +1646,7 @@ class Proof:
         self.written, self.accessed = written, accessed
         self.counts = Counter()
         self.sync = set()
+        self.shadow = set()
         declared = declared_sync()
         prog = self.prog
         for mod, u in prog.units.items():
@@ -1576,6 +1674,8 @@ class Proof:
                 live = [st for st in states if not (st.iflag == 0 or st.shadow)]
                 if not live:
                     self.counts["masked (IF = 0)"] += 1
+                    if all(st.shadow for st in states):
+                        self.shadow.add(n)   # entered only from an STI: no delivery before it
                     continue
                 found = {self.classify_insn(n, i, st, acc) for st in live}
                 if n in declared:
@@ -1653,6 +1753,14 @@ class Proof:
             # a load whose store is a CAS that retries on change (lower.shift) commits once
             if [x.split()[0] for x in mem] == ["move.b", "cas.b"] and mem[0].strip() == \
                     "move.b (a0),d6" and mem[1].strip() == "cas.b d6,d7,(a0)":
+                continue
+            # adc/sbb on a constant address (lower.carry_in_place): one add/sub of the
+            # EA on each side of the CF branch, exactly one of which runs
+            ops = [x.split() for x in mem]
+            if len(mem) == 2 and {o[0].split(".")[0] for o in ops} <= {"addq", "addi", "subq", "subi"} \
+                    and len({o[0].split(".")[0][:3] for o in ops}) == 1 \
+                    and len({o[1].split(",", 1)[1] for o in ops}) == 1 \
+                    and any(x.strip().startswith("bra ") for x in lines[lines.index(mem[0]):lines.index(mem[1])]):
                 continue
             if len(mem) != 1:
                 self.errors.append(f"{site(n)}: {i} meets handler-written {cls}:{lo:04X}..{hi:04X} "
@@ -1818,6 +1926,8 @@ class Proof:
             out.append(f"huge,{cls},,,,{' '.join(sorted(sites))}")
         for n, cls, lo, hi, kind, written in sorted(self.sync):
             out.append(f"sync,{cls},0x{lo:04x},0x{hi:04x},{kind},{site(n)}")
+        for n in sorted(self.shadow):
+            out.append(f"shadow,,,,,{site(n)}")
         return out
 
     def summary(self) -> str:

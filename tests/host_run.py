@@ -34,6 +34,13 @@ With --amiga DIR, the same checks run on the A1200 model's capture
 this host run's dead-stack set, and the shown frame (plane0-7.bin, bytes per
 row in regs.txt, colours.bin = LoadRGB32 table) decodes to the reference
 framebuffer and DAC. --label prints a milestone's label for the fixture.
+With the Sound Blaster driver (XWING_DRIVER=ADLIB_W.IMS, P10) the references are the
+SB machine's (sbhost-*, sbhostb-*: tools/reference.py --sb --polls); every DSP status
+read (22Ch, 22Eh) answers the reference's next recorded one (trace/dsp-status.csv) in
+the same service-event interval, differing from the model's answer (ports.c) only by
+the device's timing (22Ch busy, 22Eh data not yet there), and all are used; the DSP
+blocks the model starts (plat_sb_block) are those the reference's DSP and DMA writes
+start (trace/sound.csv, decoded here independently of ports.c).
 Exit 1 on any difference, a runtime stop or the time limit.
 """
 
@@ -65,6 +72,12 @@ import reference as R  # noqa: E402  tools/reference.py: the milestone table's s
 import seeds  # noqa: E402
 
 REPO = image.REPO
+DRIVER = image.DRIVER               # the build's music driver (translator/image.py)
+DRV = emit.TAG[DRIVER]              # its labels' prefix
+SB = DRIVER == "ADLIB_W.IMS"        # the Sound Blaster build: SB references (P10)
+# the installation the guest reads: the SB build's is configured for the Sound Blaster
+# (tools/pc_run.py --sb), so the game loads ADLIB_W.IMS
+INSTALL = REPO / "tmp/dos/configured-sb/XWING" if SB else image.M.REF
 ELF = REPO / "build/host/xwing.elf"
 MEM = 0x01000000          # flat map: code, data, stack, guest RAM
 STACK_TOP = 0x00FF0000
@@ -300,7 +313,11 @@ SABOTAGE = {
     "song-requests": "the monitor counts no driver request (song buffer reloads become races)",
     "ems-cache": "the EMS guard caches never emptied (ems.c rt_ems_cache_clear returns at once)",
     "ems-cache-irq": "IRQ0's handler leaves its EMS guard caches (ems.c rt_ems_cache_restore returns at once)",
+    "sb-block": "the first DSP block's length one byte long (the block oracle; SB build)",
+    "sb-irq": "an IRQ 7 posted with the first replayed interrupt, no DSP block playing (SB build)",
+    "dsp-status": "the model's 22Eh status reporting no data after the DSP reset (SB build)",
 }
+SPEECH = ("sb-block", "sb-irq", "dsp-status")   # plants of the SB build only
 
 
 def dos_file_stamp(stamp):
@@ -343,7 +360,7 @@ class MemFile:
 
 class Host:
     def __init__(self, ref_root: Path, sabotage: str | None = None, elf: Path | None = None,
-                 retrace: list | None = None):
+                 retrace: list | None = None, dsp: dict | None = None):
         self.launch = ""
         self.root = ref_root
         self.file_clock = None
@@ -382,7 +399,8 @@ class Host:
         self.stubs = {self.syms[n]: n for n in ("plat_alloc", "plat_free", "plat_open", "plat_create", "plat_read", "plat_write",
                                                 "plat_delete", "plat_seek",
                                                 "plat_calendar_date", "plat_file_stamp", "plat_close", "plat_dir_names", "plat_file_info", "plat_timer_rate", "plat_mouse", "plat_present", "plat_palette",
-                                                "plat_service", "plat_vga_status", "plat_log", "plat_console",
+                                                "plat_service", "plat_vga_status", "plat_dsp_status", "plat_sb_block",
+                                                "plat_sb_pause", "plat_sb_irq", "plat_log", "plat_console",
                                                 "plat_sfx_wanted", "plat_sfx_captured", "plat_exit")}
         # --sfx-capture: the effect captures (src/runtime/sfx.c), each with the
         # guest RAM it started from; sfx_cap while one runs (out of the game's
@@ -394,6 +412,11 @@ class Host:
         self.retrace = list(retrace or [])
         self.retrace_i = self.retrace_used = 0
         self.retrace_bad: str | None = None
+        # DSP status replay: per port (22Ch, 22Eh) its runs, next row, reads used of it
+        self.dsp = {port: [list(runs), 0, 0] for port, runs in (dsp or {}).items()}
+        self.dsp_reads = 0
+        self.blocks: list[tuple[int, int, int]] = []   # plat_sb_block: linear, length, rate
+        self.sb_pauses: list[int] = []                 # plat_sb_pause: D0h 1, D4h 0
         self.mouse_dx = self.mouse_dy = self.mouse_buttons = 0
         self.presents = 0
         # D9 display: every byte the guest stores to the frame is inside the
@@ -544,7 +567,7 @@ class Host:
         # words (+02B4D, +02B6D) at interrupt level: the lockstep must run them
         # where the reference did (translator/irq.py; docs/design.md)
         self.irq_counts = Counter()
-        for name, what in (("FLT_19424", "callback"), ("AD_02B4D", "enqueue"), ("AD_02B6D", "enqueue")):
+        for name, what in (("FLT_19424", "callback"), (f"{DRV}_02B4D", "enqueue"), (f"{DRV}_02B6D", "enqueue")):
             if name in self.syms:
                 @U.CODE_CB
                 def count(h, addr, size, user, what=what):
@@ -562,7 +585,7 @@ class Host:
                 return
             if self.sabotage != "song-requests":
                 self.irq.request()
-        e.hook_range(U.HOOK_CODE, driver_request, self.syms["AD_00000"], self.syms["AD_00000"])
+        e.hook_range(U.HOOK_CODE, driver_request, self.syms[f"{DRV}_00000"], self.syms[f"{DRV}_00000"])
 
         # memory watch from the guest entry on (rt_start's own writes are not watched)
         self.in_service = False
@@ -744,7 +767,7 @@ class Host:
 
         self.cov = None             # --save: the block hook's library (Host.record)
         # guest addresses hooked here: a save point must not share one (Host.run)
-        self.hooked = {self.syms[n] for n in ("FLT_19424", "AD_02B4D", "AD_02B6D", "AD_00000")
+        self.hooked = {self.syms[n] for n in ("FLT_19424", f"{DRV}_02B4D", f"{DRV}_02B6D", f"{DRV}_00000")
                        if n in self.syms}
         for r in image.rows("flags.csv"):
             lab = emit.label(r["module"], int(r["save"], 16))
@@ -917,6 +940,15 @@ class Host:
                 self.e.write(args[0] + 300, bytes([self.mem(args[0] + 300, 1)[0] ^ 1]))
         elif n == "plat_vga_status":
             res = self.vga_status()
+        elif n == "plat_dsp_status":
+            res = self.dsp_status(args[0], args[1])
+        elif n == "plat_sb_block":
+            length = args[1] + (self.sabotage == "sb-block" and not self.blocks)
+            self.blocks.append((args[0], length, args[2]))
+        elif n == "plat_sb_pause":
+            self.sb_pauses.append(args[0])
+        elif n == "plat_sb_irq":
+            pass        # DSP F2h: the reference's IRQ 7 is replayed where it took it
         elif n == "plat_log":
             self.log.append(self.cstr(args[0]))
             print(self.log[-1])
@@ -994,6 +1026,39 @@ class Host:
 
     def retrace_left(self) -> int:
         return sum(r[2] for r in self.retrace[self.retrace_i:]) - self.retrace_used
+
+    def dsp_status(self, port: int, model: int) -> int:
+        """The reference's next read of DSP status port 22Ch or 22Eh, or of the
+        OPL's timer status at 228h, in the same service interval. It may differ
+        from the model's answer only by the device's timing: 22Ch busy (bit 7
+        set), 22Eh data not yet there (bit 7 clear), 228h timer 1 not yet expired
+        (flags C0h clear). Copied from Wing Commander 2's; 228h added."""
+        n = len(self.services)
+        if port not in self.dsp:
+            self.retrace_bad = self.retrace_bad or f"DSP status {port:X}h read: none in the reference"
+            return model
+        runs, i, used = self.dsp[port]
+        while i < len(runs) and used == runs[i][2]:
+            i, used = i + 1, 0
+        self.dsp[port][1:] = i, used + 1
+        self.dsp_reads += 1
+        if i == len(runs):
+            self.retrace_bad = self.retrace_bad or \
+                f"DSP status {port:X}h read after the reference's last (service events {n})"
+            return model
+        svc, value, _ = runs[i]
+        if self.sabotage == "dsp-status" and port == 0x22E and model == 0xAA:
+            model = 0x2A     # the model's 22Eh reporting no data after the reset
+        timing = value == (model | 0x80 if port == 0x22C else model & 0x3F if port == 0x228
+                           else model & 0x7F)
+        if svc != n or (value != model and not timing):
+            self.retrace_bad = self.retrace_bad or \
+                f"DSP status {port:X}h read {self.dsp_reads} at service event {n}: the reference's " \
+                f"{value:02x} at {svc}, the model's {model:02x}"
+        return value
+
+    def dsp_left(self) -> int:
+        return sum(sum(r[2] for r in runs[i:]) - used for runs, i, used in self.dsp.values())
 
     def post(self, vector: int) -> None:
         tail = self.mem(self.syms["rt_irq_tail"], 1)[0]
@@ -1417,6 +1482,8 @@ class Host:
             handles, the reference took the next of its group only after the IRET
             back to the same poll point (rt_irq_back at this stack depth)."""
             key = self.irqs[self.irq_i][:3]
+            if self.sabotage == "sb-irq" and self.irq_i == 0:
+                self.post(0x0F)     # an IRQ 7 with no DSP block playing: machine.c stops
             while self.irq_i < len(self.irqs) and self.irqs[self.irq_i][:3] == key:
                 vector = self.irqs[self.irq_i][3]
                 guest = self.guest_vector(vector)
@@ -1554,10 +1621,11 @@ def milestone_script(name: str, bypassed: bool = False) -> dict:
 def host_reference(milestone: str, bypassed: bool = False) -> Path:
     """The newest host reference run's trace (tools/reference.py --polls; bypassed:
     --polls --bypass, the port's copy-protection bypass applied in the reference)."""
-    runs = sorted(RUNS.glob(f"{'hostb' if bypassed else 'host'}-*-{milestone}"))
+    sb = "sb" if SB else ""
+    runs = sorted(RUNS.glob(f"{sb}{'hostb' if bypassed else 'host'}-*-{milestone}"))
     if not runs:
         raise SystemExit(f"no host reference for {milestone}: python3 tools/reference.py --polls "
-                         f"{'--bypass ' if bypassed else ''}{milestone}")
+                         f"{'--sb ' if SB else ''}{'--bypass ' if bypassed else ''}{milestone}")
     return runs[-1] / "trace"
 
 
@@ -1573,6 +1641,58 @@ def reference_bypass(trace: Path) -> int:
     if len(at) != 1:
         raise SystemExit(f"{trace}: {len(at)} bypass events, not one")
     return at[0]
+
+
+def dsp_runs(trace: Path) -> dict[int, list[tuple[int, int, int]]]:
+    """trace/dsp-status.csv (the SB tracer, --polls): per DSP status port its runs
+    of (service events, value, reads)."""
+    out: dict[int, list] = {}
+    path = trace / "dsp-status.csv"
+    if not SB:
+        return out
+    with path.open() as f:
+        for r in csv.DictReader(f):
+            out.setdefault(int(r["port"], 16), []).append(
+                (int(r["service"]), int(r["value"]), int(r["repeat"])))
+    return out
+
+
+def reference_blocks(trace: Path) -> list[tuple[int, int, int]]:
+    """The Sound Blaster blocks the reference's DSP and DMA writes start
+    (trace/sound.csv; decoded here independently of ports.c): (linear, length,
+    rate) per 14h command. Copied from Wing Commander 2's."""
+    blocks = []
+    flip, addr, page, tc, command, args = 0, 0, 0, 0, None, []
+    with (trace / "sound.csv").open() as f:
+        for r in csv.DictReader(f):
+            if r["direction"] != "out":
+                continue
+            port, v = int(r["port"], 16), int(r["value"], 16)
+            if port == 0x02:
+                addr = (addr & 0xFF) | v << 8 if flip else (addr & 0xFF00) | v
+                flip ^= 1
+            elif port == 0x03:
+                flip ^= 1
+            elif port == 0x0C:
+                flip = 0
+            elif port == 0x83:
+                page = v
+            elif port == 0x22C:
+                if command is None:
+                    if v in (0x40, 0x14):
+                        command, args = v, []
+                    elif v in (0xE0, 0xE2, 0xE4):
+                        command, args = v, []       # one argument byte, not a block
+                    continue
+                args.append(v)
+                if command == 0x40:
+                    tc, command = v, None
+                elif command == 0x14 and len(args) == 2:
+                    blocks.append((page << 16 | addr, (args[0] | args[1] << 8) + 1, 1000000 // (256 - tc)))
+                    command = None
+                elif command in (0xE0, 0xE2, 0xE4):
+                    command = None
+    return blocks
 
 
 def retrace_runs(trace: Path) -> list[tuple[int, int, int]]:
@@ -2008,6 +2128,8 @@ def main(argv=None) -> int:
     if args.sabotage:
         missed = []
         for name, what in SABOTAGE.items():
+            if name in SPEECH and not SB:
+                continue
             problems = check(args.milestone, args.timeout, None, name)
             print(f"sabotage {name:12} ({what}): {len(problems)} problems, first: "
                   f"{problems[0] if problems else '-'}", flush=True)
@@ -2031,12 +2153,12 @@ def resident_problems(sabotage: str | None = None) -> list[str]:
     """machine.c rt_lookup chooses among the rows sharing a CS:IP by the overlay
     descriptors' resident bit (m01 dispatches none of them; MEASURED 2026-11-06):
     for each such key, each row's overlay alone resident must return that row."""
-    h, problems = Host(image.M.REF, sabotage), []
+    h, problems = Host(INSTALL, sabotage), []
     ret = h.syms["plat_exit"]  # stop address, never executed
     h.e.write(h.syms["rt_guest"], TOP.to_bytes(4, "big"))
     n = h.u32(h.syms["dispatch_count"])
     # the rows' overlays from an unplanted image (the plant zeroes them in h)
-    craw = Host(image.M.REF).mem(h.syms["dispatch_table"], 12 * n)
+    craw = Host(INSTALL).mem(h.syms["dispatch_table"], 12 * n)
     real: dict[int, list[tuple[int, int]]] = {}
     for j in range(n):
         cs, ip, overlay, _far, code = struct.unpack_from(">HHHHI", craw, 12 * j)
@@ -2078,7 +2200,7 @@ def ems_guard_problems(elf: Path, sabotage: str | None = None) -> list[str]:
     for name, slot in (("rt_ems_es", 4), ("rt_ems_ds", 0)):   # G_ES, G_DS in the state block
         for d7, d6, order, want_live in ((0x3C00, 0x140, (0, 1), (0, 0)), (0x3C00, 0x140, (1, 0), (1, 1)),
                                          (0x0100, 0x140, (1, 0), (0, 0))):
-            h = Host(image.M.REF, elf=elf, sabotage=sabotage)
+            h = Host(INSTALL, elf=elf, sabotage=sabotage)
             ret = h.syms["plat_exit"]  # stop address, never executed
             h.e.write(h.syms["rt_guest"], TOP.to_bytes(4, "big"))
             rr = h.syms["rt_r"]        # runtime.h struct rt_regs: ax, cx, dx, bx
@@ -2151,7 +2273,7 @@ def rearm_problems() -> list[str]:
     """runtime.h poll-point contract on the C path the replay never reaches (it
     posts only where the reference took the interrupt, so with IF set):
     rt_set_flags_word with IF set re-arms G_IRQ from rt_irq_pending."""
-    h, problems = Host(image.M.REF), []
+    h, problems = Host(INSTALL), []
     ret = h.syms["plat_exit"]  # stop address, never executed
     h.e.write(h.syms["rt_guest"], TOP.to_bytes(4, "big"))
     for flags in (0x0002, 0x0202):
@@ -2358,8 +2480,10 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     chunks = rep_replay.read(trace, required=True)
     rep = rep_replay.Replay(chunks)
     script["rep"] = rep
-    h = Host(image.M.REF, sabotage, elf=elf or rep_replay.host_image(rep.labels),
-             retrace=retrace_runs(trace))
+    h = Host(INSTALL, sabotage, elf=elf or rep_replay.host_image(rep.labels),
+             retrace=retrace_runs(trace), dsp=dsp_runs(trace))
+    if sabotage in SPEECH and not SB:
+        raise SystemExit(f"--sabotage {sabotage}: the Sound Blaster build's (XWING_DRIVER=ADLIB_W.IMS)")
     h.calendar_date, h.file_clock = reference_clocks(trace)
     for path in seeds.files(milestone):   # beside the installation, as a file the guest wrote
         h.written[path.name.upper()] = bytearray(path.read_bytes())
@@ -2441,15 +2565,26 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
         problems.append(h.retrace_bad)
     if h.stopped_at == label and h.retrace_left():
         problems.append(f"VGA status: {h.retrace_left()} reference reads not made")
+    if SB:
+        if h.stopped_at == label and h.dsp_left():
+            problems.append(f"DSP status: {h.dsp_left()} reference reads not made")
+        want = reference_blocks(trace)
+        got = h.blocks if h.stopped_at == label else h.blocks[:len(want)]
+        print(f"SB blocks: {len(h.blocks)} started, {len(want)} in the reference; DSP status reads: "
+              f"{h.dsp_reads}; pauses {h.sb_pauses.count(1)}, continues {h.sb_pauses.count(0)}")
+        if got != want[:len(got)] or (h.stopped_at == label and len(got) != len(want)):
+            k = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), min(len(got), len(want)))
+            problems.append(f"SB blocks: block {k}: {got[k] if k < len(got) else None} (linear, length, rate), "
+                            f"the reference's {want[k] if k < len(want) else None}")
     if h.display_miss:
         problems.append(h.display_miss)
     print("music driver at interrupt level: flight callback "
           f"{h.irq_counts['callback irq']} runs, request 0Fh enqueue stores {h.irq_counts['enqueue irq']} "
           f"(main code: {h.irq_counts['callback main']}, {h.irq_counts['enqueue main']})")
-    ran = trace / "executed-ADLIB.IMS.bin"  # absent: the driver was never loaded (m00)
+    ran = trace / f"executed-{DRIVER}.bin"  # absent: the driver was never loaded (m00)
     ran = ran.read_bytes() if ran.exists() else b""
     if h.stopped_at == label and len(ran) > 0x6B6 and ran[0x6B6] and not h.irq_counts["callback irq"]:
-        problems.append("the reference ran the driver's flight callback (ADLIB.IMS +006B6); "
+        problems.append(f"the reference ran the driver's flight callback ({DRIVER} +006B6); "
                         "the host run never did at interrupt level")
     print(f"EMS: {h.ems_alias_reads} guest bytes read through a page mapped at two frame "
           f"pages, {len(h.ems_alias_bad)} differ from another copy")

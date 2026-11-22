@@ -778,3 +778,78 @@ Luftwaffe's `tfh_paula.c`, its fixed slots replaced by the driver's players):
   time, slower here than the fields the sample plays in. MEASURED: the capture 332
   fields, the render and cache write 1,007 fields (549,044 Chip bytes), 8 starts of id
   17 and 8 plays, at the end id 17 on OPL channels 1–7, all muted.
+
+Speech (P10) is the Sound Blaster build's (`XWING_DRIVER=ADLIB_W.IMS`, translator/image.py):
+it translates `ADLIB_W.IMS` in place of `ADLIB.IMS`, and the driver's embedded CT-VOICE code
+drives the card. The AdLib build's generated code is unchanged by it.
+- Model (`src/runtime/ports.c`, Wing Commander 2's DSP, DMA and IRQ 7 model fitted to the
+  commands the references show; its comment lists them): the detection (reset, E0h, E1h,
+  E2h's identification byte by DMA, E4h/E8h, F2h's IRQ 7), the OPL2 timer test at
+  228h/229h, and playback: the time constant (40h), one 8-bit single-cycle block (14h) per
+  clip over DMA channel 1, the speaker (D1h, D3h) around it, pause and continue (D0h, D4h).
+  CT-VOICE stops a clip by pausing it and starts the next with a new 14h; the paused
+  block's IRQ 7 never comes (MEASURED: m02i, blocks 9 to 12), so a 14h over a paused
+  block replaces it, and one over a playing block stops.
+  Status reads answer as the model stands; `plat_dsp_status` reports the device's timing.
+  A block's end posts IRQ 7 (vector 0Fh); `machine.c` stops on an IRQ 7 the PIC masks, or
+  with neither a block nor F2h pending. The IVT holds the reference BIOS's vectors 0Ah,
+  0Bh, 0Dh and 0Fh, which the detection reads and restores.
+- Proof (`translator/irq.py`): the tick reaches CT-VOICE's far entry (`+05AE4`) through
+  queued requests and the flight callback. Its calls through tables are `irq-hooks.csv`
+  rows (the function table at `+05B0C`, the block types at `+05968`); the variables they
+  depend on are `irq-bounds.csv` rows of that driver (its I/O base and IRQ, the E2h-written
+  table index, the status word's pointer, the unset callback); its PUSHF pairs are
+  `flags.csv` rows; range arithmetic wraps; a call nested one level deeper than itself (the
+  seek's fast-forward re-entering the tick, `+01B04`) is an exit row the I3 monitor checks
+  by the stack depth. The driver's adc/sbb of a constant address and an immediate stays one
+  68k instruction on memory (`Ctx.atomic_carry`): its code runs in main code and at
+  interrupt level. An annotation row of one driver's code applies to that driver's build
+  only (`image.rows`).
+- Delivery: an IRQ0 for a guest handler the proof does not cover (the voice install's
+  timing check at `+05297`, which inverts the interrupted AX that its loop at
+  `+05216..+05222` watches; `ADLIB.IMS`'s calibration handler) waits for a poll point and
+  is delivered there like any guest vector, on the live registers; only the proved handler
+  runs on the private stack with the interrupted state restored. IRQ 7 is delivered the
+  same way. Production polls the waits that need such a delivery (`irq-polls.csv`): the
+  timing check's loops (`+0521A`, `+0521E`), without which the Amiga image spins at the
+  install (MEASURED), the detection's wait for F2h's IRQ 7 (`+050A9`) and CT-VOICE's
+  interrupt test (`+055AC`), whose one-byte block's IRQ 7 must arrive within 2000h passes
+  or the driver installs no tick (MEASURED).
+- Checks: host lockstep against the Sound Blaster references (`tools/reference.py --polls
+  --sb`, then `XWING_DRIVER=ADLIB_W.IMS python3 tests/host_run.py`): every DSP status
+  read against `trace/dsp-status.csv`, its value differing only by the device's timing
+  and none left over; every block's (linear, length, rate) against the reference's DSP and
+  DMA writes (`trace/sound.csv`, decoded independently of `ports.c`); and the run's other
+  checks (services, interrupts, OPL writes, RAM, frames, the I3 monitor), whose sync rows
+  the build re-measured (`irq-sync.csv`, column `driver`). The voices' VOC data lies in the
+  front end's song buffer, which the handler reads through its song pointers: a handler
+  read at a footprint song site (class S) is a song read wherever it lands, so the voice
+  bytes take the song check against the driver requests around their load
+  (`tests/irq_monitor.py`). An access in an STI's shadow is masked for the monitor as for
+  the proof, which lists such instructions (footprint kind `shadow`: CT-VOICE's stop,
+  whose wait at `+055F0` re-enables interrupts before each read of its flag). The plants `sb-block` (the first
+  block one byte long), `sb-irq` (an IRQ 7 with no block playing) and `dsp-status` (22Eh
+  reporting no data after the reset) must fail it. MEASURED at m01: 1,117 interrupts,
+  1,404,004 services, 495 OPL writes and 1 block equal, 97 status reads replayed; all
+  three plants caught. MEASURED over every pinned milestone (m00 to m17 and m02i): all
+  pass, with 120 blocks equal (m02i 44 with 44 pauses and 29 continues; m15 10; m14 9)
+  and 3,647 status reads replayed; at m01 every runtime plant but `song-requests` is
+  caught, and `song-requests` is at m07 (the front end's load into the song and voice
+  buffer racing the handler's reads).
+- Play (`src/platform/amiga/sb_play.c`): `plat_sb_block` converts the block's bytes to
+  signed in one of two Chip blocks (`Audio.cpp`; a block in the EMS page frame stops),
+  and the player plays it on Paula voice 3 (the effects take voices 0–2), in chunks of at
+  most one Paula loop, at the rate's period, at full volume while the DSP's speaker is
+  on, from the next field; a pause holds it, a continue restarts at the sample reached.
+  The card's terminal count is timed apart from the voice (`amiga_platform.c`): the
+  other CIA-B timer counts length / rate in E-clocks from the 14h, one-shot in 16-bit
+  slices, held while a D0h pause lasts and dropped when a new block replaces a paused
+  one, and posts IRQ 7 at zero (interrupts disabled around the post; the main program
+  runs in user mode, where SR is privileged); without that timer a block stops.
+  `make t-sb-play` (in `make gates-audio`) runs the player on synthetic blocks: the
+  restart, period, speaker, end field (within a field of length / rate), chunks, pad,
+  pause, continue, PAL and NTSC; `t-sab-sb-play` plants nine faults. `make
+  test-amiga-speech` runs the production image of this build on the Sound Blaster setup
+  on the 68030 model to m01's label, where the blocks started must be the reference's,
+  then 500 fields, in which one must end (MEASURED: 1 started, 1 ended, 9 Paula
+  restarts); no label within 15,000 fields fails.

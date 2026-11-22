@@ -45,7 +45,7 @@ OBJECTS = obj/start.o obj/main.o obj/XWing.o obj/Input.o obj/Audio.o obj/GCCRunt
 	obj/framework_amiga_hardware.o obj/framework_bitmap.o \
 	obj/framework_copper_list.o obj/framework_palette24.o \
 	obj/gcc8_c_support.o obj/gcc8_a_support.o obj/memory.o obj/version.o \
-	obj/amiga_platform.o obj/fm_paula.o obj/fx_play.o obj/fm_effect_run.o obj/amiga_run.o obj/c2p1x1_8_c5_bm.o obj/rt_entry.o \
+	obj/amiga_platform.o obj/fm_paula.o obj/fx_play.o obj/sb_play.o obj/fm_effect_run.o obj/amiga_run.o obj/c2p1x1_8_c5_bm.o obj/rt_entry.o \
 	$(patsubst $(RUNTIME)/%.c,obj/rt_%.o,$(wildcard $(RUNTIME)/*.c)) obj/program.o
 
 # Sync image (Secret Weapons of the Luftwaffe's docs/irq-plan.md I8): the
@@ -56,6 +56,17 @@ ifneq ($(SYNC)$(REPLAY),)
 CCFLAGS += -DXWING_SYNC
 VASMGEN += -DXWING_SYNC=1
 VASMFLAGS += -DXWING_SYNC=1
+endif
+
+# The Sound Blaster build (P10, XWING_DRIVER=ADLIB_W.IMS, translator/image.py):
+# the speech player's Chip blocks (Audio.cpp, sb_play.c).
+# Both builds share obj/: the objects the flag changes depend on the
+# driver's stamp, which a switch replaces.
+ifeq ($(XWING_DRIVER),ADLIB_W.IMS)
+CCFLAGS += -DXWING_SB
+DRIVER_STAMP = obj/driver-sb.stamp
+else
+DRIVER_STAMP = obj/driver-adlib.stamp
 endif
 
 # Diagnostic replay image (tests/amiga_replay.py), built in its own working
@@ -104,7 +115,11 @@ obj/main.o: $(REPO)/src/main.cpp | obj
 obj/XWing.o: $(AMIGA_SRC)/XWing.cpp | obj
 	$(CC) $(CPPFLAGS) -c -o $@ $<
 
-obj/Audio.o: $(AMIGA_SRC)/Audio.cpp | obj
+$(DRIVER_STAMP): | obj
+	rm -f obj/driver-*.stamp
+	touch $@
+
+obj/Audio.o: $(AMIGA_SRC)/Audio.cpp $(DRIVER_STAMP) | obj
 	$(CC) $(CPPFLAGS) -c -o $@ $<
 
 obj/Input.o: $(AMIGA_SRC)/Input.cpp | obj
@@ -137,13 +152,15 @@ obj/gcc8_a_support.o: $(SUPPORT)/gcc8_a_support.s | obj
 obj/memory.o: $(AMIGA_SRC)/memory.s | obj
 	$(VASM) $(VASMFLAGS) -o $@ $<
 
-obj/amiga_platform.o: $(AMIGA_SRC)/amiga_platform.c | obj
+obj/amiga_platform.o: $(AMIGA_SRC)/amiga_platform.c $(DRIVER_STAMP) | obj
 	$(CC) $(CCFLAGS) -ffreestanding -I"$(RUNTIME)" -I"$(AMIGA_SRC)" -c -o $@ $<
 
 obj/fm_paula.o: $(AMIGA_SRC)/fm_paula.c | obj
 	$(CC) $(CCFLAGS) -ffreestanding -DFM_EFFECT_ASM -c -o $@ $<
 
 obj/fx_play.o: $(AMIGA_SRC)/fx_play.c $(AMIGA_SRC)/fx_play.h $(AMIGA_SRC)/fm_paula.h | obj
+	$(CC) $(CCFLAGS) -ffreestanding -c -o $@ $<
+obj/sb_play.o: $(AMIGA_SRC)/sb_play.c $(AMIGA_SRC)/sb_play.h $(AMIGA_SRC)/fm_paula.h | obj
 	$(CC) $(CCFLAGS) -ffreestanding -c -o $@ $<
 
 obj/fm_effect_run.o: $(AMIGA_SRC)/fm_effect_run.s | obj

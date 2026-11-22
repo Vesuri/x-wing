@@ -1027,7 +1027,7 @@ class Program:
                                             for lo, hi in smc_t)),
                    code_regions=self.code_regions(cs, mod), seg_limit=self.smc_limit, seg_lo=self.smc_seg_lo,
                    seg_repeat=label(mod, off) in self.seg_repeat,
-                   program=True, vram=mod in VRAM_MODULES, ems=True,
+                   program=True, vram=mod in VRAM_MODULES, ems=True, atomic_carry=mod == DRIVER,
                    ems_ds=ems_kind == "guard", ems_restore=ems_kind == "restore",
                    ems_far_inside=far_inside, ems_exit_after=exit_after,
                    driver_call=mod == M.ROOT and off in self.driver_jumps, ret_mismatch=RM,

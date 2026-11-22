@@ -30,13 +30,16 @@ static const char environment[] =
 /* Reference interrupt vectors the game reads (INT 21h AH=35h) or chains to.
  * 4Bh is read as data: the front end's name lookup (FRONTEND.OVL +0C364)
  * reads the first byte of a string at 0000:012D when the film room loads a
- * film (MEASURED: XWING_WATCH at m15-film-replay). */
+ * film (MEASURED: XWING_WATCH at m15-film-replay). 0Ah, 0Bh, 0Dh and 0Fh
+ * (IRQ 2, 3, 5 and 7) ADLIB_W.IMS's Sound Blaster detection reads from the
+ * IVT and restores (+04FEF; MEASURED: the sbhost m01-logo snapshot). */
 #define MOUSE_INT74_SEG 0xf000
 #define MOUSE_INT74_OFF 0xd000
 
 static const struct { uint8_t vector; uint16_t seg, off; } vectors[] = {
     {0x00, 0xf000, 0xca60}, {0x05, 0xf000, 0xff54}, {0x08, 0xf000, 0xfea5},
-    {0x09, 0xf000, 0xe987}, {0x10, 0xc000, 0x00ee}, {0x16, 0xf000, 0xcfa0},
+    {0x09, 0xf000, 0xe987}, {0x0a, 0xf000, 0xff55}, {0x0b, 0xf000, 0xce60},
+    {0x0d, 0xf000, 0xce60}, {0x0f, 0x0070, 0x000e}, {0x10, 0xc000, 0x00ee}, {0x16, 0xf000, 0xcfa0},
     {0x1c, 0xf000, 0xcbe0}, {0x21, 0xf000, 0xd0e0}, {0x22, 0xf000, 0xdac8},
     {0x23, 0x0701, 0x0128}, {0x24, 0x0701, 0x0110}, {0x2f, 0xf000, 0xd200}, {0x33, 0xc402, 0x0010},
     {0x4b, 0xf000, 0xd260}, {0x67, 0xc401, 0x0004}, {0x74, MOUSE_INT74_SEG, MOUSE_INT74_OFF},
@@ -344,10 +347,12 @@ static void irq_settle(void)
 }
 
 /* Posted interrupts in order until one runs a guest handler or none is
- * left. IRQ0 with a guest handler returns 1 (rt_entry.s rt_irq_async runs it
+ * left. IRQ0 with the proved guest handler returns 1 (rt_entry.s rt_irq_async runs it
  * on the private stack, the interrupted state restored after it); another
  * returns as rt_int_c does, the flags settled with its IF = 0: the handler's
  * IRET re-arms G_IRQ when more are posted, and the glue polls again. */
+static int async_handler(void);
+
 uint32_t rt_irq_c(uint32_t d6, uint32_t ip)
 {
     uint16_t cs = (uint16_t)(d6 >> 16);
@@ -360,7 +365,22 @@ uint32_t rt_irq_c(uint32_t d6, uint32_t ip)
     while (G_IF && !rt_irq0_running && irq_head != rt_irq_tail) {
         uint8_t irq = rt_irq_ring[irq_head++ % RT_IRQ_RING];
         uint8_t vector = irq & 0x7f;
-        if (vector == 8 && guest_vector(vector)) {
+        if (vector == 0x0f) {       /* IRQ 7: DSP F2h, or a block ended (platform.h plat_sb_block) */
+            if (rt_pic_masked(7)) {
+                rt_stop("IRQ 7 while the PIC masks it (CS, IP)", cs, ip);
+            }
+            if (rt_sb_f2) {
+                rt_sb_f2 = 0;
+            } else if (rt_sb_playing) {
+                rt_sb_playing = 0;
+            } else {
+                rt_stop("IRQ 7 without a DSP block playing (CS, IP)", cs, ip);
+            }
+        }
+        /* only the proved handler runs on the private stack with the
+         * interrupted state restored; another (ADLIB_W.IMS's timing check
+         * inverts the interrupted AX) is delivered like any guest vector */
+        if (vector == 8 && guest_vector(vector) && async_handler()) {
             irq_settle();
             return 1;               /* rt_irq_async (I4) */
         }

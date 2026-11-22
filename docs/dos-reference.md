@@ -137,7 +137,11 @@ every reference run passes, also removes the Sound Blaster; the patch
   count (`tc`), a jump (`break`) or the trace's end (`open`); each block it writes into
   memory (`write`, the DSP's E2h identification byte) is a row of its own, and the written
   bytes' last writer is the pseudo-module `DMA` at the channel (`writes.csv`), so the image
-  proofs account for them.
+  proofs account for them;
+- `trace/dsp-status.csv` (with the retrace log, so in the host references): the reads of
+  the DSP's status ports 22Ch and 22Eh and of the OPL's timer status at 228h, whose values
+  DOSBox-X times, as runs of one port and value within one service-event interval; the host
+  run replays them against the model's answers (`tests/host_run.py`).
 
 The OPL log (`--opl`) also takes the card's OPL ports 228h/229h.
 

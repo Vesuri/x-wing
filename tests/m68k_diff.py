@@ -128,6 +128,14 @@ def lower_region_case(insns, cs: int, tag: str, end_ip: int):
     return lines + exact, stats
 
 
+def carries_in_place(i) -> bool:
+    """adc/sbb of a constant address and an immediate (lower.carry_in_place, the
+    driver's Ctx.atomic_carry)."""
+    return i.op in ("adc", "sbb") and len(i.operands) == 2 and \
+        type(i.operands[0]).__name__ == "Mem" and i.operands[0].base is None and \
+        i.operands[0].index is None and type(i.operands[1]).__name__ == "Imm"
+
+
 def loads_segment(i) -> bool:
     """mov/pop to ES, DS or SS, les, lds (lower.putseg)."""
     o = i.operands[0] if i.operands else None
@@ -513,6 +521,16 @@ class Harness(X.Harness):
                 return
             self.lowered.update(st)
             self.pending.append((label + " seg-repeat", code, case, undef, oracle, text,
+                                 regs, flags, insns[-1].op))
+        if any(map(carries_in_place, insns)):   # the driver's one-instruction form
+            tag = f"c{len(self.pending)}"
+            try:
+                text, st = lower_case(insns, cs, tag, insns[-1].next_ip, atomic_carry=True)
+            except LowerError as e:
+                self.bad.append(f"{label} atomic-carry {code.hex()}: lowering: {e}")
+                return
+            self.lowered.update(st)
+            self.pending.append((label + " atomic-carry", code, case, undef, oracle, text,
                                  regs, flags, insns[-1].op))
         if n == 1 and ems_case(insns[0]):
             self.ems_variant(code, label, insns, case, overrides)

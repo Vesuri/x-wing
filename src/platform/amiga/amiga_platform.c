@@ -363,8 +363,84 @@ static int timer_open(void)
     return 0;
 }
 
+/* The DSP's block time (P10): the card ends a single-cycle block, and posts
+ * IRQ 7, length / rate after its 14h, held while D0h pauses the DMA; Paula
+ * plays the samples from the next field (sb_play.c), so the end is timed
+ * here, on the other CIA-B timer, one-shot in 16-bit slices of E-clocks, not
+ * by the player's fields (CT-VOICE's interrupt test waits 2000h loop passes
+ * for a one-byte block's IRQ: MEASURED, the Amiga image's init failed). */
+#define ECLOCK_PAL 709379u
+#define ECLOCK_NTSC 715909u
+static struct Interrupt dsp_interrupt;
+static WORD dsp_bit = -1;
+static ULONG dsp_left;              /* E-clocks after the loaded slice */
+static ULONG dsp_held;              /* a paused block's E-clocks */
+static UWORD dsp_slice;             /* the loaded slice; 0: not running */
+
+static volatile UBYTE *dsp_cr(void) { return dsp_bit == CIAICRB_TA ? &CIAB->ciacra : &CIAB->ciacrb; }
+
+static void dsp_load(void)
+{
+    ULONG n = dsp_left > 0xffff ? 0xffff : (dsp_left ? dsp_left : 1);
+    volatile UBYTE *cr = dsp_cr();
+    dsp_left -= n < dsp_left ? n : dsp_left;
+    dsp_slice = (UWORD)n;
+    *cr &= dsp_bit == CIAICRB_TA ? 0xc0 : 0x80;    /* stop; keep TOD/serial bits */
+    *(dsp_bit == CIAICRB_TA ? &CIAB->ciatalo : &CIAB->ciatblo) = (UBYTE)n;
+    *(dsp_bit == CIAICRB_TA ? &CIAB->ciatahi : &CIAB->ciatbhi) = (UBYTE)(n >> 8);
+    *cr |= CIACRAF_LOAD | CIACRAF_RUNMODE | CIACRAF_START;   /* one-shot */
+}
+
+#ifdef XWING_SB
+static ULONG dsp_tick(void)
+{
+    if (!dsp_slice) {
+        return 0;
+    }
+    if (dsp_left) {
+        dsp_load();
+    } else {
+        dsp_slice = 0;
+        amiga_post_irq7();          /* the card's terminal count */
+    }
+    return 0;
+}
+#endif
+
+/* E-clocks still to run, the timer stopped. */
+static ULONG dsp_stop(void)
+{
+    volatile UBYTE *cr = dsp_cr();
+    *cr &= (UBYTE)~CIACRAF_START;
+    UWORD at = dsp_bit == CIAICRB_TA ? (UWORD)(CIAB->ciatahi << 8 | CIAB->ciatalo)
+                                     : (UWORD)(CIAB->ciatbhi << 8 | CIAB->ciatblo);
+    ULONG left = dsp_slice ? dsp_left + at : 0;
+    dsp_slice = 0;
+    return left;
+}
+
+#ifdef XWING_SB
+static void dsp_open(void)
+{
+    WORD bit = cia_bit == CIAICRB_TA ? CIAICRB_TB : CIAICRB_TA;
+    dsp_interrupt.is_Node.ln_Type = NT_INTERRUPT;
+    dsp_interrupt.is_Node.ln_Name = (char *)"X-Wing DSP";
+    dsp_interrupt.is_Code = (void (*)(void))dsp_tick;
+    if (cia_bit >= 0 && !AddICRVector(cia_base, bit, &dsp_interrupt)) {
+        dsp_bit = bit;
+        *dsp_cr() &= (UBYTE)~CIACRAF_START;
+    }
+}
+#endif
+
 static void timer_close(void)
 {
+    if (dsp_bit >= 0) {
+        *dsp_cr() &= (UBYTE)~CIACRAF_START;
+        RemICRVector(cia_base, dsp_bit, &dsp_interrupt);
+        dsp_bit = -1;
+        dsp_slice = 0;
+    }
     if (cia_bit >= 0) {
         *(cia_bit == CIAICRB_TA ? &CIAB->ciacra : &CIAB->ciacrb) &= ~CIACRAF_START;
         RemICRVector(cia_base, cia_bit, &cia_interrupt);
@@ -582,6 +658,80 @@ uint8_t plat_vga_status(void)
 #endif
 }
 
+/* The DSP and the OPL timer answer at once: the model's status (ports.c).
+ * The diagnostic replay has no DSP reads recorded. */
+uint8_t plat_dsp_status(uint32_t port, uint32_t value)
+{
+#ifdef XWING_REPLAY
+    rt_stop("DSP status read in a replay: none recorded (port, value)", port, value);
+#else
+    (void)port;
+    return (uint8_t)value;
+#endif
+}
+
+/* Vector 0Fh (IRQ 7) posted from the main program or the field task: all
+ * interrupts masked around the post, which the CIA tick and the keyboard
+ * make at interrupt level. Disable(), not SR: the main program runs in user
+ * mode, where a move to or from SR is a privilege violation (MEASURED: the
+ * detection's F2h stopped the Amiga image in Exec's alert). */
+void amiga_post_irq7(void)
+{
+    Disable();
+    rt_irq_ring[rt_irq_tail % RT_IRQ_RING] = 0x0f;
+    ++rt_irq_tail;
+    RT_RAISE_IRQ();
+    Enable();
+}
+
+/* Speech (Audio.cpp, sb_play.c): the block on Paula, IRQ 7 at its end. */
+extern void amiga_audio_sb_block(uint32_t linear, uint32_t length, uint32_t rate);
+extern void amiga_audio_sb_pause(uint32_t paused);
+void plat_sb_block(uint32_t linear, uint32_t length, uint32_t rate)
+{
+#ifdef XWING_REPLAY
+    rt_stop("Sound Blaster block in a replay: none recorded (linear, length)", linear, length);
+#else
+    if (dsp_bit < 0) {
+        rt_stop("DSP block without a CIA-B timer for its end (linear, length)", linear, length);
+    }
+    amiga_audio_sb_block(linear, length, rate);
+    /* length * E-clock / rate in 32 bits (no libgcc): exact up to 65535 Hz */
+    uint32_t eclock = amiga_ntsc ? ECLOCK_NTSC : ECLOCK_PAL, div = rate ? rate : 1, shift = 0;
+    uint32_t q = eclock / div, r = eclock % div;
+    while ((div >> shift) > 0xffffu) {
+        ++shift;
+    }
+    uint32_t ticks = length * q + length * (r >> shift) / (div >> shift);
+    Disable();
+    (void)dsp_stop();               /* a paused block's end never comes (ports.c) */
+    dsp_held = 0;
+    dsp_left = ticks;
+    dsp_load();
+    Enable();
+#endif
+}
+
+void plat_sb_pause(uint32_t paused)
+{
+    amiga_audio_sb_pause(paused);
+    Disable();
+    if (paused) {
+        dsp_held = dsp_stop();
+    } else if (dsp_held) {
+        dsp_left = dsp_held;
+        dsp_held = 0;
+        dsp_load();
+    }
+    Enable();
+}
+
+/* DSP F2h: IRQ 7 at once, at the next poll point. */
+void plat_sb_irq(void)
+{
+    amiga_post_irq7();
+}
+
 /* Shell start: the Shell's output; Workbench start: none. */
 void plat_console(const void *buffer, uint32_t length)
 {
@@ -721,6 +871,12 @@ int amiga_guest_open(void)
     if (!timer_open()) {
         plat_log("X-Wing no CIA-B timer");
     }
+#ifdef XWING_SB
+    dsp_open();
+    if (dsp_bit < 0) {
+        plat_log("X-Wing no second CIA-B timer for the DSP");
+    }
+#endif
 #endif
     return 1;
 }

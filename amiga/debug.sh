@@ -18,7 +18,8 @@ ELF="${XWING_ELF:-out/XWing.elf}"
 [ -f "$ELF" ] || { echo "build first: make"; exit 1; }
 # The game directory as installed and configured (docs/dos-reference.md): the
 # guest's C:\XWING, the current directory of the run (local only, never committed).
-SOURCE=../tmp/dos/configured/XWING
+# XWING_GAME_DIR: another configured directory (the Sound Blaster setup's, P10).
+SOURCE="${XWING_GAME_DIR:-../tmp/dos/configured/XWING}"
 [ -f "$SOURCE/XWING.EXE" ] || { echo "game directory not found: $SOURCE  (make dos-reference)"; exit 1; }
 
 # KS 3.1 sets the AGA bits in GfxBase only after SetPatch (Secret Weapons of the

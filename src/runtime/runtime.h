@@ -243,6 +243,10 @@ extern uint8_t rt_opl_index;
 extern uint8_t rt_opl_keyon[9];     /* per channel: key-on edges, wrapping (FM re-hoster) */
 extern uint16_t rt_deliver_cs, rt_deliver_ip;
 extern void *rt_deliver_code;
+extern uint8_t rt_sb_playing;       /* ports.c: a DSP block plays; its IRQ 7 clears it */
+extern uint8_t rt_sb_f2;            /* ports.c: DSP F2h raised IRQ 7; its delivery clears it */
+extern uint8_t rt_sb_speaker;       /* ports.c: DSP D1h on, D3h off (Paula speech volume) */
+uint8_t rt_pic_masked(uint8_t irq); /* ports.c: the PIC's mask bit of an IRQ */
 
 /* Effect capture (sfx.c, docs/translator-design.md Sound: effects R1): at the
  * return of FLIGHT's sound loader, with rt_sfx_prerender_on, each effect id's

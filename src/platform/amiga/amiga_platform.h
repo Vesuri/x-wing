@@ -34,6 +34,9 @@ void amiga_mouse_script_buttons(uint32_t buttons);
 
 /* The FM re-hoster's next commands (Audio.cpp), from plat_service. */
 void amiga_audio_service(void);
+/* Vector 0Fh (IRQ 7) posted, interrupts masked around it: DSP F2h and the end
+ * of a speech block (Audio.cpp). */
+void amiga_post_irq7(void);
 
 /* 1 for an NTSC display (60 Hz fields, NTSC clocks), from graphics'
  * DisplayFlags at XWing's open: the mode LoadView(NULL) gives at the

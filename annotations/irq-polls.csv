@@ -1,3 +1,7 @@
 module,offset,reason
 ADLIB.IMS,0x0094d,"the calibration's wait for four ticks: its INT 08h handler (+00978) reads the interrupted CX and DX, so production takes those ticks here, with the guest registers live, not at the CIA interrupt (MEASURED: Amiga run, divide error at +00994 with a stale DX)"
 ADLIB.IMS,0x00954,"the calibration's counting loop: a tick there runs the same handler, which divides by the loop's DX:AX (MEASURED: as above)"
+ADLIB_W.IMS,0x0521a,"the voice install's timing check, waiting for AX to change: its INT 08h handler (+05297) inverts the interrupted AX, so production takes the tick here, with the guest registers live, not at the CIA interrupt (DERIVED: +05216..+05222 poll only in sync builds otherwise; MEASURED: Amiga run, the install spun past m01's time)"
+ADLIB_W.IMS,0x0521e,"the same check's counting loop, which waits for the next inversion (DERIVED: as above)"
+ADLIB_W.IMS,0x050a9,"the detection's wait for F2h's IRQ 7 (vector 0Fh, delivered at poll points): its handler sets G:069Ah, which the loop compares, so production takes the IRQ here; otherwise the loop runs out and the IRQ comes later (DERIVED: the loop polls only in sync builds otherwise)"
+ADLIB_W.IMS,0x055ac,"CT-VOICE's interrupt test, waiting up to 2000h passes for a one-byte block's IRQ 7 (vector 0Fh, delivered at poll points) to set its flag at CS:00B1h: production takes the IRQ here, or the test fails and the driver installs no tick (DERIVED: the loop polls only in sync builds otherwise; MEASURED: Amiga run, +04C28 returned FFFFh)"

@@ -35,7 +35,8 @@ def load(ref: Path = M.REF) -> dict[str, M.Module]:
 
 def rows(name: str) -> list[dict]:
     """An annotation file's rows for this build: a row whose `driver` column names a
-    driver applies to that driver's build only; in a build of another driver than
+    driver applies to that driver's build only, and a row of a driver's code to that
+    driver's build only (ADLIB.IMS rows carry, below); in a build of another driver than
     ADLIB.IMS, a hand-written row of ADLIB.IMS code applies to the same instruction of
     DRIVER unless the file has a DRIVER row at the same offset (translator/driver.py carry)."""
     with (ANNOTATIONS / name).open() as f:
@@ -47,17 +48,21 @@ def rows(name: str) -> list[dict]:
                 if r.get(col):
                     r[col] = " ".join(x for x in r[col].split() if not x.startswith(other))
         return out
+    if out and "module" in out[0]:      # another driver's own rows never apply
+        out = [r for r in out if r["module"] not in DRIVERS or r["module"] in (DRIVER, DRIVERS[0])]
     if DRIVER == DRIVERS[0] or not out or "module" not in out[0]:
         return out
     from . import driver
-    key = "offset" if "offset" in out[0] else "first"
+    # the row's key column and the code offsets it names (flags.csv: a PUSHF and its POPF)
+    key, cols = next((k, c) for k, c in (("offset", ("offset",)), ("first", ("first", "last")),
+                                          ("save", ("save", "restore"))) if k in out[0])
     own = {r[key] for r in out if r["module"] == DRIVER}
     keep = []
     for r in out:
         if r["module"] == DRIVERS[0]:
             if r[key] in own:
                 continue
-            for col in ("offset",) if key == "offset" else ("first", "last"):
+            for col in cols:
                 driver.carry(int(r[col], 16))
             r["module"] = DRIVER
         keep.append(r)

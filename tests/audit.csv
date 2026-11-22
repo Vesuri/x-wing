@@ -1,7 +1,9 @@
-counter,expected,reason
-spill,0,fixed register contract (D4); no lowering spills to the native stack
-full-flag materialization,3,"MS C run-time LAHF readers in the root: sub +02A87 and cmp +02A99 (LAHF at +02AA3), cmp +036AC (LAHF at +036BB)"
-PF store,6,"the same three setters, and cmp +05B35, cmp +05B39, xor +05AF0 (LAHF at +05B41); the manager's PUSHF pairs in annotations/flags.csv only save and restore"
-AF store,7,"the same five LAHF setters, and add +056DB, adc +056DE (DAA at +056DD, +056E0)"
-dispatcher exit,257,"the 257 indirect.csv sites without a proved switch table or an irq-hooks.csv row (366 sites, 92 tables, 21 hooks of which 4 are tables)"
-stop_unknown site,111,"92 switch tables' out-of-table fallback (data-tables.csv included), the 17 other irq-hooks.csv calls' untraced targets, the return of the noreturn.csv call at +01517 and the root's unrelocated callf 0000:0000 at +0431F"
+driver,counter,expected,reason
+,spill,0,fixed register contract (D4); no lowering spills to the native stack
+,full-flag materialization,3,"MS C run-time LAHF readers in the root: sub +02A87 and cmp +02A99 (LAHF at +02AA3), cmp +036AC (LAHF at +036BB)"
+,PF store,6,"the same three setters, and cmp +05B35, cmp +05B39, xor +05AF0 (LAHF at +05B41); the manager's PUSHF pairs in annotations/flags.csv only save and restore"
+,AF store,7,"the same five LAHF setters, and add +056DB, adc +056DE (DAA at +056DD, +056E0)"
+,dispatcher exit,257,"the 257 indirect.csv sites without a proved switch table or an irq-hooks.csv row (366 sites, 92 tables, 21 hooks of which 4 are tables)"
+,stop_unknown site,111,"92 switch tables' out-of-table fallback (data-tables.csv included), the 17 other irq-hooks.csv calls' untraced targets, the return of the noreturn.csv call at +01517 and the root's unrelocated callf 0000:0000 at +0431F"
+ADLIB_W.IMS,dispatcher exit,260,"the 260 indirect.csv sites without a proved switch table or an irq-hooks.csv row: the AdLib build's 257 but ADLIB.IMS's 8 for ADLIB_W.IMS's 11, whose call cx at +00387 (no traced target) and +005FA (the OPL's and the voice glue's) and CT-VOICE's callback callf [00BAh] at +05954 (never set: irq-bounds.csv CS:00BAh) are new"
+ADLIB_W.IMS,stop_unknown site,108,"the AdLib build's 111 but ADLIB.IMS's 25 for ADLIB_W.IMS's 22: +00387 and +005FA dispatch instead, +0047B, +004DE and +005D2 are not reached (no indirect.csv row), and CT-VOICE's +05968 (the block types' table) and +05B0C (its function table) are irq-hooks.csv calls"

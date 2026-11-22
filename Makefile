@@ -270,6 +270,22 @@ test-amiga-audio: amiga
 		tee ../$(AMIGA_CAPTURE)/audio.log
 	grep -Eq '^XWING_AUDIO fields=[0-9]+ irq0=[0-9]+ keyons=[1-9][0-9]* renders=[1-9][0-9]* restarts=[1-9][0-9]*$$' \
 		$(AMIGA_CAPTURE)/audio.log
+# Speech on Paula (P10): the Sound Blaster build's production image on the Sound Blaster
+# setup past the label (amiga/speech.gdb.in); the blocks started by the label must be
+# the reference's (SPEECH_BLOCKS, MEASURED: m01's host lockstep) and some must end.
+SPEECH_BLOCKS ?= 1
+SPEECH_LIMIT ?= 15000
+test-amiga-speech: export XWING_DRIVER = ADLIB_W.IMS
+test-amiga-speech: amiga
+	@mkdir -p $(AMIGA_CAPTURE)
+	sed -e "s|@LABEL@|$$(python3 tests/host_run.py --label --milestone $(AMIGA_MILESTONE))|" \
+		-e "s|@FIELDS@|$(AUDIO_FIELDS)|" -e "s|@LIMIT@|$(SPEECH_LIMIT)|" \
+		amiga/speech.gdb.in > $(AMIGA_CAPTURE)/speech.gdb
+	$(ENV) cd amiga && AMIGA_CPU=$(AMIGA_CPU) XWING_GAME_DIR=../tmp/dos/configured-sb/XWING \
+		./debug.sh "" "../$(AMIGA_CAPTURE)/speech.gdb" 2>&1 | tee ../$(AMIGA_CAPTURE)/speech.log
+	grep -Eq '^XWING_SPEECH_LABEL started=$(SPEECH_BLOCKS)$$' $(AMIGA_CAPTURE)/speech.log
+	grep -Eq '^XWING_SPEECH fields=[0-9]+ started=[0-9]+ ended=[1-9][0-9]* restarts=[1-9][0-9]*$$' \
+		$(AMIGA_CAPTURE)/speech.log
 
 # AdLib FM on Paula (P7), copied from Secret Weapons of the Luftwaffe's Makefile: the
 # re-hoster (src/platform/amiga/fm_paula.c) on the OPL logs of milestone runs
@@ -327,6 +343,11 @@ t-fx-play:
 	$(call RUN,fx-play,python3 tests/test_fx_play.py)
 t-sab-fx-play:
 	$(call RUN,sabotage-fx-play,python3 tests/test_fx_play.py --sabotage)
+# The Sound Blaster speech player (src/platform/amiga/sb_play.c, P10) on synthetic blocks.
+t-sb-play:
+	$(call RUN,sb-play,python3 tests/test_sb_play.py)
+t-sab-sb-play:
+	$(call RUN,sabotage-sb-play,python3 tests/test_sb_play.py --sabotage)
 # The effects in flight on the 68030 model: the Amiga replay to m12 with the capture,
 # the prerender and the player running; no host check (tests/amiga_replay.py --sfx).
 t-amiga-sfx: host
@@ -334,7 +355,8 @@ t-amiga-sfx: host
 # Isolated audio changes: the sound checks and their plants.
 gates-audio:
 	@$(MAKE) -s -k -j$(JOBS) t-fm t-sab-fm $(FM_UNITS:%=t-fm-%) $(FM_UNITS:%=t-sab-fm-%) \
-		t-fm-effect t-sab-fm-effect t-fm-effect-asm t-sab-fm-effect-asm t-fx-play t-sab-fx-play
+		t-fm-effect t-sab-fm-effect t-fm-effect-asm t-sab-fm-effect-asm t-fx-play t-sab-fx-play \
+		t-sb-play t-sab-sb-play
 
 # Release (docs/release.md), copied from Secret Weapons of the Luftwaffe's Makefile and
 # adapted. The release image is built in build/amiga-release with RELEASE=1 (no

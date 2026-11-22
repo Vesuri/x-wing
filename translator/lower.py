@@ -136,6 +136,7 @@ class Ctx:
     program: bool = False                     # program mode (return checks, runtime calls)
     vram: bool = False                        # graphics driver: stores to A000h mark rows (D9)
     ems: bool = False                         # EMS model: ES accesses guarded, DS/SS loads checked
+    atomic_carry: bool = False                # the driver (main and interrupt level): a carry RMW stays one
     ems_ds: bool = False                      # listed code (ems-ds.csv guard): DS accesses guarded too
     ems_restore: bool = False                 # ems-ds.csv restore: a DS load of the interrupted DS
     ems_far_inside: bool = False              # listed code's far transfer into listed code (a keep RETF too)
@@ -1018,6 +1019,12 @@ class Lowering:
         across them (R28), then X-safe moves of the destination."""
         sz = SZ[w]
         mark, x_in = len(self.out), self.x_cf
+        top = (1 << w) - 1
+        if self.c.atomic_carry and isinstance(a, Mem) and a.base is None and a.index is None \
+                and isinstance(b, Imm) and not {"AF", "PF"} & self.c.need \
+                and (b.value & top) not in (top, top >> 1):
+            self.carry_in_place(kind, a, b.value & top, w, x_in)
+            return
         if isinstance(a, Mem):
             self.lea(a)
         s = self.src_operand(b, areg=False, mem=False, scratch="d6")
@@ -1045,6 +1052,33 @@ class Lowering:
         self.af_post(r)
         if r == "d7":
             self.store_dest(a, "d7")
+
+    def carry_in_place(self, kind: str, a: Mem, v: int, w: int, x_in: bool) -> None:
+        """adc/sbb of a variable at a constant address and an immediate in the driver,
+        whose code runs in main code and at interrupt level (Ctx.atomic_carry): the x86
+        RMW is one instruction, which the CIA tick cannot split (D8), so it stays one 68k
+        instruction on memory: add/sub of v + CF, CF branched on. Exact but for AF
+        (dead here) when v is neither all ones (the carry out) nor the largest positive
+        value (the overflow)."""
+        sz = SZ[w]
+        m68 = "add" if kind == "adc" else "sub"
+        ea = self.ea(a).at(w)
+        no_carry, done = self.local(), self.local()
+        if x_in:
+            self.e("moveq #0,d7")       # X holds CF (as carry_op reuses it): d7 = X, Z clear iff set
+            self.e("addx.b d7,d7")
+            self.stats["carry X reused"] += 1
+        else:
+            self.e("btst #0,G_FL+1(a6)")  # CF (the CCR image's C)
+            self.stats["flag load"] += 1
+        self.e(f"beq {no_carry}")
+        self.e(f"{m68}{'q' if 1 <= v + 1 <= 8 else 'i'}.{sz} #{v + 1},{ea}")
+        self.e(f"bra {done}")
+        self.at(no_carry)
+        self.e(f"{m68}{'q' if 1 <= v <= 8 else 'i'}.{sz} #{v},{ea}")
+        self.at(done)
+        self.finish_flags(kind, CCR_OK[kind])
+        self.stats["atomic carry"] += 1
 
     def unary(self, m68: str, kind: str | None) -> None:
         """inc dec neg not on any operand."""

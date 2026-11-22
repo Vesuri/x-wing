@@ -1,0 +1,46 @@
+# Speech on Paula (make test-amiga-speech, the Sound Blaster build): the production
+# image runs to the milestone label (its first visit) and reports the blocks the
+# player started by then (sb_play.c; no label within LIMIT fields fails), then FIELDS more vertical blanks and reports
+# the blocks whose end it counted, each of which posted IRQ 7 (Audio.cpp), and the
+# Paula restarts. The Makefile requires the started count to be the reference's
+# and the ended count above 0.
+set pagination off
+set confirm off
+break plat_exit
+commands
+  silent
+  printf "XWING_SPEECH_EXIT\n"
+  quit 1
+end
+break *rt_stop
+commands
+  silent
+  x/s *(char **)($sp+4)
+  printf "XWING_SPEECH_STOP a=%x b=%x fields=%u started=%u ended=%u\n", *(unsigned *)($sp+8), *(unsigned *)($sp+12), rt_fields, sb_started, sb_ended
+  quit 1
+end
+break amiga_start_return
+commands
+  silent
+  printf "XWING_PROGRAM_RETURNED %d\n", *(int *)($sp+4)
+  quit 1
+end
+# Watchdog: no label within LIMIT fields is a failure (breakpoint 4)
+break Audio::verticalBlank()
+ignore $bpnum @LIMIT@
+commands
+  silent
+  printf "XWING_SPEECH_TIMEOUT fields=%u started=%u\n", rt_fields, sb_started
+  quit 1
+end
+break @LABEL@
+continue
+delete $bpnum
+delete 4
+printf "XWING_SPEECH_LABEL started=%u\n", sb_started
+break Audio::verticalBlank()
+ignore $bpnum @FIELDS@
+continue
+delete $bpnum
+printf "XWING_SPEECH fields=%u started=%u ended=%u restarts=%u\n", rt_fields, sb_started, sb_ended, amiga_audio_restarts
+quit 0

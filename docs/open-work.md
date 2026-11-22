@@ -9,28 +9,14 @@ gate 6) are in place, and P7's music and prerendered effects play on Paula (`mak
 `make test-amiga-audio`, `make t-amiga-sfx`). Host lockstep to a flight milestone resumes
 from a save at the flight's start (`make t-resume-<milestone>`). P9's 0.1 early alpha is packaged
 (`make release`, [release](release.md)) on a reduced gate (owner decision 2026-11-19).
+P10's gate holds: the Sound Blaster build (`XWING_DRIVER=ADLIB_W.IMS`) matches the Sound
+Blaster references' DSP commands and blocks in host lockstep over every pinned milestone,
+with the AdLib gates unchanged, and plays its speech on Paula (`make test-amiga-speech`;
+[translator design](translator-design.md), Speech).
 
-1. P10, Sound Blaster PCM ([port plan](port-plan.md#p10-sound-blaster-pcm)). With a Sound
-   Blaster the game loads `ADLIB_W.IMS` (MEASURED: the installer's "SoundBlaster" writes `adlib_w` to `LANDRU.CFG`), whose
-   embedded Creative CT-VOICE code drives the DSP; WC2's DSP, DMA and IRQ 7 model is the
-   copy source (WC2 `d8c9860`, `dfd3db4`), fitted to WC2's own commands. Steps:
-   - Sound Blaster references: the machine, its configuration, the tracer's streams and the
-     pinned milestones are in place ([DOS reference](dos-reference.md#sound-blaster-p10)).
-     The driver detects the card with reset, E0h, E1h, E2h, E4h, E8h, F2h and C6h, then
-     plays every clip as one 8-bit single-cycle DMA block: 40h, 14h, D1h, D3h (speaker off,
-     which WC2 met at its exit). Rates: A5h and 4Ah/4Ch in the intro, 83h elsewhere. Only
-     these runs read `SPEECH.LFD`; the AdLib runs read `SFX.LFD` as often (MEASURED), so the
-     clips are speech (INFERRED). Left: the speech scenes beyond the milestones and the exit;
-   - `ADLIB_W.IMS` in the translator: the map takes both drivers, and a build translates
-     one (`XWING_DRIVER=ADLIB_W.IMS`, translator/driver.py; the AdLib build is the
-     default and unchanged). Left: the IRQ0 proof of that build, whose tick reaches
-     CT-VOICE's far entry (+05AE4: pushf, a call through its table at CS:0085h, popf) and
-     reports a recursion at +03086; then the build's gates;
-   - the DSP, DMA and IRQ 7 model at the commands the references show, its host lockstep
-     and block oracle, and its sabotages;
-   - the blocks played on Paula (new: WC2 times them silently).
-   Acceptance: the P10 gate: DSP command and sample streams match per milestone; AdLib
-   gates unchanged.
+1. P10, Sound Blaster PCM ([port plan](port-plan.md#p10-sound-blaster-pcm)), the rest:
+   the speech scenes beyond the pinned milestones and the exit, which the Sound Blaster
+   references do not reach yet ([DOS reference](dos-reference.md#sound-blaster-p10)).
 2. P8, speed ([port plan](port-plan.md#p8-speed-gate-7)): the fidelity checks it reruns at
    every step resume from a flight's start (`make t-resume-<milestone>`), and its combat
    window is the combat film, m17 (owner decision 2026-11-19). The instruments are in place
