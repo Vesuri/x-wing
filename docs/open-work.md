@@ -28,6 +28,20 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    the 68040 check.
    Whether the film's playback costs what the same flight would live is still open: m13's
    window shows another scene.
+   A second window, not yet a fixture: the intro's full-screen Star Destroyer scene runs at
+   about one frame a second on the 68030 model, the rest of the intro at about seven
+   (MEASURED: 2 presents in a 100-field profile from field 10,000 of the Sound Blaster
+   image's intro; poll points 0.7%). Two front-end routines and the runtime calls they make
+   take most of it:
+   - the compare-and-copy FRONTEND 1A5E:0119, about 53%: a REPE CMPSW of the new frame
+     against a copy of the screen in the EMS frame stops at each changed word, writes it to
+     the copy and to VGA, and restarts (35,700 restarts in 100 fields). Each restart pays
+     the REPE CMPSW lowering's setup, two `rt_ems_es` guards and an `rt_vram_mark`;
+   - the sprite decoder FRONTEND 1B58:007A, about 34%: its runs of a few bytes each pay a
+     REP STOSW or REP MOVSW setup, and its reads of sprite data in the EMS frame are
+     guarded (`annotations/ems-ds.csv`, the sprite blitters; 114,731 `rt_ems_ds` calls).
+   `tools/profile_report.py` refused the capture (one field 1.17% unaccounted, over its 1%;
+   0.08% over the window) and does not know `ADLIB_W.IMS`'s label prefix `AW`.
 2. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
    `--seed 7` a walk case's x86 store faults at an unmapped address and the oracle then
    reads its recorded writes back, raising UC_ERR_READ_UNMAPPED (the same at P4's commit).
