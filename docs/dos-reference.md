@@ -145,6 +145,18 @@ every reference run passes, also removes the Sound Blaster; the patch
 
 The OPL log (`--opl`) also takes the card's OPL ports 228h/229h.
 
+What the milestones play (MEASURED: each DMA read block, with a block split at a 64 KiB
+page joined to the one before it, against the entry sizes of `SPEECH.LFD`'s directory,
+which are the block's length plus 34 header bytes): 23 of the file's 59 clips. The intro
+plays 16 of them (m02i), the front end plays `welcome`, `register`, `youmay` and
+`shuttlex`, the tour of duty `dutyreg` (split at 90000h in m14) and `goodluck`, and the
+film replay `bording2`. The other blocks, the intro's included, are not whole
+`SPEECH.LFD` entries; apart from the one-byte interrupt tests, they are clips cut short,
+or clips from other files (INFERRED). No pinned milestone reaches the other 36 clips' scenes
+(briefings, proving-ground results, mission completions, awards); they take the same
+driver path ([design](design.md), P10's speech scenes). The exit's D3h (speaker off) is in
+m16, before its label, the program's final `INT 21h/4Ch`.
+
 `tools/reference.py --sb` records the milestones on this machine as `sbms-<time>-<id>-*`,
 pinned in `manifest/milestones-sb.sha256`; two passes match the pins (MEASURED). The
 copy-protection question differs from the AdLib machine's, so the milestones past the screen

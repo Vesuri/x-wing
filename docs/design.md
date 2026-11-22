@@ -26,6 +26,7 @@
 | P8 frame-time target | The combat film (m17) at 100 ms per frame or less on the 68030 model (the cycle-exact `a1200-030` preset without its MMU), measured by the frames fixture ([perf-method](perf-method.md)) (owner decision 2026-11-19). Baseline: 360 ms |
 | Early alpha 0.1 | Released ahead of P8 as an unoptimized early alpha, version 0.1 (19.11.2026) (owner decision 2026-11-19), with a reduced gate: the archive allowlist and original-bytes scan, matching version strings, a reproducible stripped image, the WHDLoad slave and the start without WHDLoad run on the 68030, an installer test, and a ReadMe saying it is an unoptimized early alpha ([release](release.md)). The full gate 8 stays open |
 | P10 ahead of P8 and P9 | Sound Blaster PCM (P10) is worked and committed now, before P8's and P9's gates pass (owner decision 2026-11-20). P8 resumes after it; P10's own gate and every AdLib gate stay as they are |
+| P10's speech scenes | Covered by the mechanism (owner decision 2026-11-22): the pinned Sound Blaster milestones are P10's scenes. They play 23 of `SPEECH.LFD`'s 59 clips and every DSP path the driver takes, the 64 KiB page split and the exit's D3h included ([DOS reference](dos-reference.md#sound-blaster-p10)); the other clips' scenes (briefings, proving-ground results, mission completions, awards) get no milestones of their own, as every clip plays through the same CT-VOICE path (INFERRED) |
 | Chipset and release requirements | Not decided; 256-colour mode 13h implies AGA, as in Secret Weapons of the Luftwaffe |
 
 ## Faithfulness boundary

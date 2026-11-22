@@ -1,6 +1,6 @@
 # Open work
 
-Steps of the [port plan](port-plan.md), in order; P10 is worked ahead of P8 and P9 (owner decision 2026-11-20). The repo rules (P0),
+Steps of the [port plan](port-plan.md), in order. The repo rules (P0),
 the reference loop (P1: `make dos-reference` passes 21 pinned milestones, the combat film
 m17 among them), the static and live map (P2), x86 semantics (P3: `make test-x86`), the 68020 backend (P4: `make test-m68k`) and the
 first vertical slice (P5: `make test-amiga`, the Amiga replay and the host lockstep to m01)
@@ -9,15 +9,14 @@ gate 6) are in place, and P7's music and prerendered effects play on Paula (`mak
 `make test-amiga-audio`, `make t-amiga-sfx`). Host lockstep to a flight milestone resumes
 from a save at the flight's start (`make t-resume-<milestone>`). P9's 0.1 early alpha is packaged
 (`make release`, [release](release.md)) on a reduced gate (owner decision 2026-11-19).
-P10's gate holds: the Sound Blaster build (`XWING_DRIVER=ADLIB_W.IMS`) matches the Sound
-Blaster references' DSP commands and blocks in host lockstep over every pinned milestone,
-with the AdLib gates unchanged, and plays the intro's speech on Paula on the 68030 (`make test-amiga-speech`;
-[translator design](translator-design.md), Speech).
+P10, worked ahead of P8 and P9 (owner decision 2026-11-20), is done: the Sound Blaster build
+(`XWING_DRIVER=ADLIB_W.IMS`) matches the Sound Blaster references' DSP commands and blocks
+in host lockstep over every pinned milestone, the exit included, with the AdLib gates
+unchanged, and plays the intro's speech on Paula on the 68030 (`make test-amiga-speech`;
+[translator design](translator-design.md), Speech); the pinned milestones are its speech
+scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaster-p10)).
 
-1. P10, Sound Blaster PCM ([port plan](port-plan.md#p10-sound-blaster-pcm)), the rest:
-   the speech scenes beyond the pinned milestones and the exit, which the Sound Blaster
-   references do not reach yet ([DOS reference](dos-reference.md#sound-blaster-p10)).
-2. P8, speed ([port plan](port-plan.md#p8-speed-gate-7)): the fidelity checks it reruns at
+1. P8, speed ([port plan](port-plan.md#p8-speed-gate-7)): the fidelity checks it reruns at
    every step resume from a flight's start (`make t-resume-<milestone>`), and its combat
    window is the combat film, m17 (owner decision 2026-11-19). The instruments are in place
    ([perf-method](perf-method.md)): the meter over m06, m12, m13 and m17, its plant caught,
@@ -29,18 +28,18 @@ with the AdLib gates unchanged, and plays the intro's speech on Paula on the 680
    the 68040 check.
    Whether the film's playback costs what the same flight would live is still open: m13's
    window shows another scene.
-3. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
+2. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
    `--seed 7` a walk case's x86 store faults at an unmapped address and the oracle then
    reads its recorded writes back, raising UC_ERR_READ_UNMAPPED (the same at P4's commit).
    Acceptance: `tests/m68k_blocks.py` completes for seeds 1–8; a faulting store is
    compared as an exception, not a crash.
-4. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh
+3. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh
    reference reach named milestones and map its 68k CODE.
    Acceptance: a bounded run reaches a positively identified game state by guest state,
    writes a framebuffer read from video memory and a trap log, and reproduces their pinned
    hashes. The CODE resources are classified and the trap surface inventoried, ready for a
    correspondence table against the DOS routines.
-5. P9's gate 8 ([port plan](port-plan.md#p9-release-gate-8)), after P8. Still open:
+4. P9's gate 8 ([port plan](port-plan.md#p9-release-gate-8)), after P8. Still open:
    - the CPU matrix (030 with MMU, 040, 060), with CACR checks;
    - WHDLoad on 8 MB Fast: the slave reserves 8.5 MiB of ExpMem, and on 8 MiB of Zorro II
      WHDLoad refuses it with DOS error 103 ([WHDLoad](whdload.md#memory));

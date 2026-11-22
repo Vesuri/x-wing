@@ -364,8 +364,9 @@ Gate: rules and copied docs committed; AmigaXDev's docs carry the lessons.
 ### P10. Sound Blaster PCM
 
 - Record Sound Blaster references: the same milestones with a Sound Blaster 2.0 at 220h,
-  IRQ 7, DMA 1 ([DOS reference](dos-reference.md#sound-blaster-p10)), plus the speech and
-  digitised-effect scenes. The tracer logs DSP and DMA accesses and the DMA'd bytes.
+  IRQ 7, DMA 1 ([DOS reference](dos-reference.md#sound-blaster-p10)); they are P10's
+  speech scenes (owner decision 2026-11-22, `docs/design.md`). Every clip the card plays is
+  speech. The tracer logs DSP and DMA accesses and the DMA'd bytes.
 - Translate the `_W` driver the game selects with a Sound Blaster.
 - New: a DSP, DMA and IRQ model whose blocks play as Paula samples. Its oracle is the
   captured DSP stream.
