@@ -33,7 +33,9 @@ from package_release import PREFIX  # noqa: E402
 OWNER = 'Vesuri'
 GH_REPO = f'{OWNER}/x-wing'
 RELEASES = f'https://github.com/{GH_REPO}/releases/tag/'
-README = f'https://github.com/{GH_REPO}#what-to-expect-from-01'
+# README.md's "What to expect from <version>" heading
+README = f'https://github.com/{GH_REPO}#what-to-expect-from-' + \
+    (ROOT / 'VERSION').read_text().strip().replace('.', '')
 
 
 def run(*cmd, check=True):
