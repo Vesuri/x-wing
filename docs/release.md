@@ -81,6 +81,15 @@ is described in [whdload.md](whdload.md).
     starts the installed `X-Wing.info` from `SYS:WBStartup` (`amiga/debug.sh`
     `XWING_WORKBENCH`) on the 68030 with 8 MiB Fast. The release image must reach the m01
     label with the Workbench message held (`amiga/workbench.gdb.in`).
+  - `make test-save-exit` (`tools/test_save_exit.py`, `amiga/save_exit.gdb`): a save
+    and an exit on the 68030. The release image has no `KEYS`, so the non-release image
+    runs from a Shell on the configured DOS install. Its `KEYS` script registers the
+    pilot LUKE, clicks at the concourse, where m06 saves the pilot, then leaves as m16
+    does. It must reach m16's exit point (the INT 21h at XWING.EXE+1660), `plat_exit`
+    with the reference's exit code 3 (AX 4C03h, MEASURED) and the program's return of 0
+    to the Shell. The `LUKE.PLT` it wrote must equal the reference's m06 file
+    (`manifest/milestones.sha256`). MEASURED on 2026-11-23: one run passed; a second
+    stopped after the save with a full interrupt ring (open work).
 - **Make:**
   - `make release` refuses a tree with uncommitted changes. It builds the release image,
     the slaves and the helper, then packages and audits `dist/X-Wing-$(cat VERSION).lha`

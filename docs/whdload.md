@@ -75,4 +75,16 @@ Each mode's options:
 - `--z3 KiB` adds Zorro III Fast RAM, on the 32-bit setups only.
 
 Measured on 2026-11-19 on the 68030 without MMU: smoke, boot, load and run pass, with CACR
-2011 and 332 of 608 blocks resident. The other CPU setups belong to gate 8.
+2011 and 332 of 608 blocks resident.
+
+The CPU matrix (gate 8), the `run` mode with `--z3 16384`, MEASURED on 2026-11-23 on the
+release image of 0.2's sources:
+
+| Setup | CACR | Blocks resident |
+|---|---|---|
+| `a1200-030 --whdload-mmu` | 2111 | 332 of 608 |
+| `a1200-040` | 80008000 | 332 of 608 |
+| `a1200-060` | A0808000 | 332 of 608 |
+
+Each passes: the run ends by the timeout and the CACR matches the slave's cache policy.
+The start without WHDLoad has run on the 68030 only.

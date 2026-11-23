@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: release-gen help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-configure-sb dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx t-resume-plants t-sab-resume sound-reference sound-fm gates-audio amiga-release whdload test-whdload test-release-workbench install-data test-install-data release release-check release-repro publish
+.PHONY: release-gen help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-configure-sb dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx t-resume-plants t-sab-resume sound-reference sound-fm gates-audio amiga-release whdload test-whdload test-release-workbench test-save-exit install-data test-install-data release release-check release-repro publish
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -41,6 +41,7 @@ help:
 	@echo 'make whdload                assemble the WHDLoad slaves into build/whdload/'
 	@echo 'make test-whdload           the release slave on the 68030: smoke, boot, load, run'
 	@echo 'make test-release-workbench the installed X-Wing.info started by Workbench on the 68030'
+	@echo 'make test-save-exit         a pilot saved and the game left by its exit, on the 68030'
 	@echo 'make install-data           build X-WingInstallData (host and Amiga) into build/install-data/'
 	@echo 'make test-install-data      helper vs the DOS install: sources, refusals, cleanup'
 	@echo 'make release                package and audit dist/X-Wing-$$(cat VERSION).lha (clean tree only)'
@@ -396,6 +397,10 @@ test-release-workbench: amiga-release whdload install-data
 		XWING_ELF=../build/amiga-release/out/XWing.elf ./debug.sh "" ../$(RELEASE_INSTALLED)/workbench.gdb 2>&1 | \
 		tee ../$(RELEASE_INSTALLED)/gdb.log
 	grep -q '^XWING_WORKBENCH_OK$$' $(RELEASE_INSTALLED)/gdb.log
+# Save and exit (gate 8): the non-release image saves the pilot LUKE at the concourse and
+# leaves by the game's exit (tools/test_save_exit.py, amiga/save_exit.gdb).
+test-save-exit: amiga
+	@$(ENV) python3 tools/test_save_exit.py tmp/save-exit/$$(date +%Y%m%d-%H%M%S)
 install-data:
 	@$(ENV) $(MAKE) -C tools/install-data all amiga
 # tools/install-data/test_install.py: the floppy images and the configured DOS install.
