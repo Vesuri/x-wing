@@ -126,6 +126,20 @@ Built by `make release` from `1dfb2a5` on 19.11.2026:
 | `XWing.slave` | `d45ad54d7f09911d5e7dea037b0238616b43ed609d46b12855dd38a831c07fbc` |
 | `XWingInstallData` | `6beb192d17c1fd67ab6d69b3f8a64d564f8b0d9d37042cfc67b2fb00712bbeb0` |
 
+### 0.2
+
+The Sound Blaster build with its speech, the direct start beside WHDLoad and the `X-Wing`
+drawer (`docs/design.md`, "Release 0.2's starts and names"), on 0.1's gate with
+`make test-release-workbench` added. Built by `make release` on 23.11.2026, the source
+equal to `871ea0a`'s:
+
+| Artifact | SHA-256 |
+|---|---|
+| `X-Wing-0.2.lha`, 1,345,637 bytes | `91721e729768b0a2fcab4414b5ebdbd06a3db87ec2fd5bd491e6dacc6f8b654b` |
+| `X-Wing` (exe) | `15223aa8b6a27587a364ed5af719c727d857ef9a4da29b82d899c0679bcc6e2e` |
+| `X-Wing.slave` | `47a42c876410566e6785955bd09c7578a3a50af62e0b80caa4ee182eed55801f` |
+| `X-WingInstallData` | `183256f446bf994ce293fdba069cd7eaf8b7eaac10fa66e64eec35cd06e9f112` |
+
 ## Original data
 
 The floppies' files are pinned in `manifest/dos-disks.sha256` and their tree in
