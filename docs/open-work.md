@@ -24,10 +24,15 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    on the 68030 model.
    Target: the combat film at 100 ms per frame or less on the 68030 model (owner decision
    2026-11-19, `docs/design.md`). Step 2, the EMS guard's cache, brought the film to 320 ms
-   ([perf-method](perf-method.md#steps)). Next: re-profile the film and price the next step;
-   the 68040 check.
+   ([perf-method](perf-method.md#steps)). The intro has no target yet (the owner's to set).
    Whether the film's playback costs what the same flight would live is still open: m13's
    window shows another scene.
+   Where the film's cost lies, in step 2's m17 meter: generated code 85.4% of the model
+   cycles, about 61% of that in code bytes (DERIVED from the meter's counts and weights).
+   In the window the check whether DS is the VGA segment, before every store through DS,
+   ran 3,468,938 times: 7–15% of the meter (DERIVED: 12 to 25.5 model cycles each, inside
+   or outside a cached loop). The EMS ES guard ran 1,785,854 times with 861,401 flag saves
+   around it, about 5.5%, and `rt_ems_es` takes 6.75%.
    A second window, not yet a fixture: the intro's full-screen Star Destroyer scene runs at
    about one frame a second on the 68030 model, the rest of the intro at about seven
    (MEASURED: 2 presents in a 100-field profile from field 10,000 of the Sound Blaster
@@ -42,13 +47,55 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
      guarded (`annotations/ems-ds.csv`, the sprite blitters; 114,731 `rt_ems_ds` calls).
    `tools/profile_report.py` refused the capture (one field 1.17% unaccounted, over its 1%;
    0.08% over the window) and does not know `ADLIB_W.IMS`'s label prefix `AW`.
+   The steps, the biggest priced win first (the order agreed with the owner 2026-11-23).
+   Each is one commit with its meter and frames figures; below about 5% the frames fixture
+   cannot resolve a step and the meter decides.
+   3. Instruments. `profile_report.py` knows the `AW` prefix and applies its 1% bound to
+      the window, reporting the worst field (needs the owner's OK: AmigaXDev's method
+      rule). The film is re-profiled for the costs only the Amiga has: C2P, the present
+      and the FM render. The reference's own frame interval in the film and the intro is
+      the ceiling. An intro frames fixture over the Star Destroyer scene and an intro meter
+      window (which milestone: the owner's choice).
+   4. The Macintosh donor survey, desk work beside steps 5–8 (owner direction 2026-11-23).
+      The demo's 68k code is 435,841 bytes in CODE 1–6 with no MacsBug routine names
+      (MEASURED), so the film's hottest routines are matched to it by tables, constants
+      and structure. The survey settles the Mac engine's resolution (a 640×480 rasterizer
+      is no donor), its FPU use (the A1200's 68030 has none) and the cost of adapting a
+      routine to the port's reversed guest memory. Output: a table of DOS routine, Mac
+      counterpart and estimated speedup.
+   5. The VGA store check at DS loads: only the routines the traces show storing to VGA
+      through DS keep it per store; elsewhere a DS load of the VGA segment falls back to a
+      counted whole-screen mark. It changes D9 and needs the owner's OK. Controls: an
+      unmarked VGA store and an unlisted VGA DS load are caught.
+   6. The EMS guards: the one-entry cache's hit checked inline in generated code, and a
+      guard repeated while ES is unchanged dropped with its flag save. Controls:
+      `ems_guard_problems` and its sabotages, and a guard dropped across an ES change.
+   7. The intro's compare-and-copy, FRONTEND 1A5E:0119: a cheap restart path in the
+      REPE CMPSW lowering and the changed word's mark inline.
+   8. The intro's sprite decoder, FRONTEND 1B58:007A: a short-count path for REP STOSW and
+      REP MOVSW.
+   9. Checkpoint: the film, the intro and a first 68040 run; the later steps re-ranked.
+   10. The Amiga platform's costs, where step 3's profile shows them large: the FM render
+       and C2P.
+   11. Smaller translator items, each priced with `tools/lowering_cost.py` first: the
+       reversed index address reused while its register is unchanged (3,803,561
+       recomputations in the window), the cell walk (2.9% of the meter), near calls and
+       returns (2.8%).
+   12. Native routines for flight's hot code: Mac donors where step 4 found counterparts
+       (the Macintosh reference milestones below first), hand natives elsewhere. Each
+       needs the owner's authorization and an `annotations/hle.csv` row with its oracle.
+   13. The 68040 check and gate 7.
+
+   Steps 5–11 may bring the film to about 230–260 ms (INFERRED). 100 ms needs about 7
+   model cycles per guest instruction against 14.8 now, so step 12 carries the rest.
 2. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
    `--seed 7` a walk case's x86 store faults at an unmapped address and the oracle then
    reads its recorded writes back, raising UC_ERR_READ_UNMAPPED (the same at P4's commit).
    Acceptance: `tests/m68k_blocks.py` completes for seeds 1–8; a faulting store is
    compared as an exception, not a crash.
-3. Postponed (owner decision 2026-11-04); optional, for P8's donor route: make the Macintosh
-   reference reach named milestones and map its 68k CODE.
+3. Postponed (owner decision 2026-11-04) until P8 takes a donor (item 1, step 12; the
+   survey is step 4): make the Macintosh reference reach named milestones and map its
+   68k CODE.
    Acceptance: a bounded run reaches a positively identified game state by guest state,
    writes a framebuffer read from video memory and a trap log, and reproduces their pinned
    hashes. The CODE resources are classified and the trap surface inventoried, ready for a
