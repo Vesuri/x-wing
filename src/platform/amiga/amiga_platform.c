@@ -686,6 +686,7 @@ extern void amiga_audio_sb_pause(uint32_t paused);
 void plat_sb_block(uint32_t linear, uint32_t length, uint32_t rate)
 {
 #ifdef XWING_REPLAY
+    (void)rate;
     rt_stop("Sound Blaster block in a replay: none recorded (linear, length)", linear, length);
 #else
     if (dsp_bit < 0) {
