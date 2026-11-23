@@ -115,6 +115,7 @@ Copied from Secret Weapons of the Luftwaffe, as above.
 | `docs/release.md` | packaging, the release audits, the installer and the original archive format |
 | `docs/whdload.md` | the WHDLoad slave, its memory and its test |
 | `docs/perf-method.md` | P8: the meter, the frames fixture, the profile tools and the baselines |
+| `docs/mac-donors.md` | the Macintosh demo's 68k code as a donor: its engine, the counterparts found, transplanting |
 | `docs/open-work.md` | before starting any work |
 
 ## Shared guidance

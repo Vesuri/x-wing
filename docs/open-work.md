@@ -56,13 +56,6 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
       and the FM render. The reference's own frame interval in the film and the intro is
       the ceiling. An intro frames fixture over the Star Destroyer scene and an intro meter
       window (which milestone: the owner's choice).
-   4. The Macintosh donor survey, desk work beside steps 5–8 (owner direction 2026-11-23).
-      The demo's 68k code is 435,841 bytes in CODE 1–6 with no MacsBug routine names
-      (MEASURED), so the film's hottest routines are matched to it by tables, constants
-      and structure. The survey settles the Mac engine's resolution (a 640×480 rasterizer
-      is no donor), its FPU use (the A1200's 68030 has none) and the cost of adapting a
-      routine to the port's reversed guest memory. Output: a table of DOS routine, Mac
-      counterpart and estimated speedup.
    5. The VGA store check at DS loads: only the routines the traces show storing to VGA
       through DS keep it per store; elsewhere a DS load of the VGA segment falls back to a
       counted whole-screen mark. It changes D9 and needs the owner's OK. Controls: an
@@ -81,16 +74,17 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
        reversed index address reused while its register is unchanged (3,803,561
        recomputations in the window), the cell walk (2.9% of the meter), near calls and
        returns (2.8%).
-   12. Native routines for flight's hot code: Mac donors where step 4 found counterparts
-       (the Macintosh reference milestones below first), hand natives elsewhere. Each
-       needs the owner's authorization and an `annotations/hle.csv` row with its oracle.
+   12. Hand natives for flight's hot code. The Macintosh survey found no donor for it
+       ([Macintosh donors](mac-donors.md)): two counterparts, 1.9% of the film, and the
+       Macintosh engine renders other models at 640×480. Each native needs the owner's
+       authorization and an `annotations/hle.csv` row with its oracle.
    13. The 68040 check and gate 7.
 
    Steps 5–11 may bring the film to about 230–260 ms (INFERRED). 100 ms needs about 7
    model cycles per guest instruction against 14.8 now, so step 12 carries the rest.
-2. Postponed (owner decision 2026-11-04) until P8 takes a donor (item 1, step 12; the
-   survey is step 4): make the Macintosh reference reach named milestones and map its
-   68k CODE.
+2. Postponed (owner decision 2026-11-04) until P8 takes a donor; the survey found none for
+   the film's hot code ([Macintosh donors](mac-donors.md)): make the Macintosh reference
+   reach named milestones and map its 68k CODE.
    Acceptance: a bounded run reaches a positively identified game state by guest state,
    writes a framebuffer read from video memory and a trap log, and reproduces their pinned
    hashes. The CODE resources are classified and the trap surface inventoried, ready for a
