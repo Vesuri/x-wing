@@ -2,7 +2,10 @@
 # Boot the Amiga build on the A1200 chipset. Left mouse button quits.
 #   ./run.sh [path-to-kickstart-rom]
 # Run a different binary with $XWING_EXE, arguments with $XWING_ARGS; extra fs-uae args via $EXTRA_ARGS (they win);
-# AMIGA_CPU picks the CPU (68030: the minimum target model); DEBUG=1 adds the gdb stub.
+# The machine is AmigaXDev's shared preset with the CPU caches on: a1200-030 (the minimum target
+# model, 50 MHz 68030 with its data cache), or a1200-040 / a1200-060 for AMIGA_CPU=68040 / 68060.
+# AMIGA_SETUP names another preset; Another AMIGA_CPU, or AMIGA_SETUP=none, boots the bare A1200 with that CPU as before.
+# DEBUG=1 adds the gdb stub.
 # Speech (P10): build with `XWING_DRIVER=ADLIB_W.IMS make amiga`; this script then boots
 # the Sound Blaster setup.
 set -euo pipefail
@@ -41,8 +44,19 @@ cp -f "$EXE" "$DH0/c/XWing"
 # A resumed .uss saved by a halted GDB session makes any build look frozen.
 rm -f "$RUN"/state/*.uss
 
+case "${AMIGA_SETUP:-}" in
+  none) unset AMIGA_SETUP ;;
+  "") case "${AMIGA_CPU:-68030}" in
+        68040) AMIGA_SETUP=a1200-040 ;;
+        68060) AMIGA_SETUP=a1200-060 ;;
+        68030) AMIGA_SETUP=a1200-030 ;;
+      esac
+      [ -n "${AMIGA_SETUP:-}" ] && export AMIGA_SETUP ;;
+esac
+
 fsuae_prepare
-# Model, memory, sound and window: fsuae_options in $FSUAE_COMMON.
+# Model, memory, sound and window: fsuae_options in $FSUAE_COMMON; a preset's machine
+# and memory come first and win.
 KICKSTART="$ROM" AMIGA_MODEL=A1200 CPU="${CPU:-${AMIGA_CPU:-}}"
 CHIP_KB=2048 FAST_KB="${FAST_KB:-${FAST_MEMORY:-8192}}"
 fsuae_options
