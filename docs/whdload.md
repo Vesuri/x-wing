@@ -10,7 +10,7 @@ the Luftwaffe's `whdload/SwotlSlave.s` (`manifest/references.tsv`) and adapted. 
 
 - **Kickemu:** `kick31.s` boots Kickstart 3.1 in WHDLoad's space. `BOOTDOS` and `HDINIT`
   mount `slv_CurrentDir` (`data`) through kickfs.
-- **Start:** `_bootdos` loads `data/XWing` (the stripped release image), locks the current
+- **Start:** `_bootdos` loads `data/X-Wing` (the stripped release image), locks the current
   drawer as PROGDIR, and runs the image through `RunCommand` with a 16 KiB stack and an empty
   argument line. The same image runs from a Shell.
 - **Failure:** a nonzero result, from a failed start or a runtime stop, gives
@@ -43,7 +43,9 @@ the Luftwaffe's `whdload/SwotlSlave.s` (`manifest/references.tsv`) and adapted. 
   than 8 MB Fast RAM. On 8 MiB Zorro II it fails with DOS error 103 at the slave's load
   (MEASURED). This misses the 8 MB target (`docs/design.md`, Memory).
 - **Without WHDLoad:** the same image runs to the m01 label from a Shell on the 68030 model
-  with 8 MiB Fast (MEASURED). Its minimum Fast RAM is not measured yet (gate 8).
+  with 8 MiB Fast (MEASURED, 0.1), and from the installed `X-Wing.info` by Workbench
+  (`make test-release-workbench`, [release](release.md)). Its minimum Fast RAM is not
+  measured yet (gate 8).
 
 ## Tests
 

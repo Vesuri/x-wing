@@ -5,7 +5,7 @@
 
 Adapted from the WHDLoad project's common/tools/publish_release.py. From VERSION and the
 release date it derives:
-  tag      the version (0.1), a lightweight tag on HEAD, the commit whose build outputs
+  tag      the version (0.2), a lightweight tag on HEAD, the commit whose build outputs
            the archive was just checked against (make publish)
   title    X-Wing <version> (dd.mm.yyyy)
   notes    the early-alpha notice and the change points of the version's history entry in
@@ -124,8 +124,8 @@ def push(refspec):
 
 def main():
     version = (ROOT / 'VERSION').read_text().strip()
-    archive = ROOT / f'dist/XWing-{version}.lha'
-    digest = ROOT / f'dist/XWing-{version}.lha.sha256'
+    archive = ROOT / f'dist/X-Wing-{version}.lha'
+    digest = ROOT / f'dist/X-Wing-{version}.lha.sha256'
     for p in (archive, digest):
         if not p.is_file():
             sys.exit(f'{p} missing: make publish writes it')

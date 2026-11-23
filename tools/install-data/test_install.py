@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""XWingInstallData on the host: exact files, sources, refusals, cleanup, cancel.
+"""X-WingInstallData on the host: exact files, sources, refusals, cleanup, cancel.
 
     python3 tools/install-data/test_install.py build/install-data/XWingInstallData
 
 Inputs are local, never shipped: the five floppy images (XWING_IMAGES, default
 tmp/dos/disks, pinned in manifest/dos-disks.sha256). Oracle: the directory the
 original INSTALL.EXE installed and configured in DOSBox-X (XWING_REFERENCE,
-default tmp/dos/configured/XWING), pinned in manifest/dos-installed.sha256 and
-manifest/dos-configured.sha256. Adapted from Secret Weapons of the Luftwaffe's.
+default tmp/dos/configured-sb/XWING, its Sound Blaster configuration), pinned in
+manifest/dos-installed.sha256 and manifest/dos-configured-sb.sha256. Adapted from Secret Weapons of the Luftwaffe's.
 """
 import hashlib
 import os
@@ -19,8 +19,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGES = Path(os.environ.get('XWING_IMAGES', ROOT / 'tmp/dos/disks'))
-REFERENCE = Path(os.environ.get('XWING_REFERENCE', ROOT / 'tmp/dos/configured/XWING'))
-PINS = [ROOT / 'manifest/dos-installed.sha256', ROOT / 'manifest/dos-configured.sha256']
+REFERENCE = Path(os.environ.get('XWING_REFERENCE', ROOT / 'tmp/dos/configured-sb/XWING'))
+PINS = [ROOT / 'manifest/dos-installed.sha256', ROOT / 'manifest/dos-configured-sb.sha256']
 COPIED = ('INSTALL.EXE', 'DETECT.EXE', 'READ.ME')
 FILES = 284
 

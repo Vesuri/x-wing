@@ -20,22 +20,22 @@ ORIGINAL_LISTS = ['release/originals.sha256'] + [f'manifest/{n}.sha256' for n in
     'runtime-data', 'films', 'donor-binaries')]
 ORIGINAL_HASHES = {line.split()[0] for name in ORIGINAL_LISTS
                    for line in (ROOT / name).read_text().splitlines() if line.strip()}
-PREFIX = 'XWing Install'
-STAMP = release.dos_stamp(2026, 11, 19)
+PREFIX = 'X-Wing Install'
+STAMP = release.dos_stamp(2026, 11, 22)
 ICONS = ROOT / 'release/icons'
 
 
 def installer_icon(game=False):
-    # XWing.inf is distributed as is, renamed and configured by Installer.
+    # X-Wing.inf is distributed as is; Installer copies it to both game icons and configures them.
     return release.installer_icon(ICONS, 'X-Wing', game=game)
 
 
 def members(executable):
     return {
-        'XWing': executable.read_bytes(),
-        'XWing.slave': (ROOT / 'build/whdload/XWing.slave').read_bytes(),
-        'XWing.inf': installer_icon(game=True),
-        'XWingInstallData': (ROOT / 'build/install-data/XWingInstallData.exe').read_bytes(),
+        'X-Wing': executable.read_bytes(),
+        'X-Wing.slave': (ROOT / 'build/whdload/XWing.slave').read_bytes(),
+        'X-Wing.inf': installer_icon(game=True),
+        'X-WingInstallData': (ROOT / 'build/install-data/XWingInstallData.exe').read_bytes(),
         'Install': (ROOT / 'release/Install').read_bytes(),
         'Install.info': installer_icon(),
         'ReadMe': (ROOT / 'release/ReadMe').read_bytes(),
@@ -52,7 +52,7 @@ def main():
     version = (ROOT / 'VERSION').read_text().strip()
     files = members(args.executable)
     release.refuse_originals(files, ORIGINAL_HASHES)
-    archive = release.write(args.output_directory / f'XWing-{version}.lha',
+    archive = release.write(args.output_directory / f'X-Wing-{version}.lha',
                             release.archive(PREFIX, files, release.template_icon(ICONS, 'drawer.info.b64'), STAMP),
                             refuse_overwrite=True)
     print(f'{archive}: {len(files)} drawer contents plus drawer icon, {archive.stat().st_size} bytes')

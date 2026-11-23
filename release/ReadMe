@@ -33,18 +33,20 @@
  - Unsupported paths: the port stops rather than guessing when the game
    does something it does not support yet. The tests cover the paths
    above, not every mission or menu choice. Under WHDLoad a stop shows the
-   requester "X-Wing stopped"; started from a Shell, the Shell shows a line
-   beginning with XWING_STOP. Please report it with that line and what you
-   were doing (see Contact).
+   requester "X-Wing stopped"; started from a Shell (cd to the drawer's
+   data, then X-Wing), the Shell shows a line beginning with XWING_STOP.
+   Please report it with that line and what you were doing (see Contact).
  - Saving: pilots and films are written as on the PC, but saving under
    WHDLoad has not been tested yet. Keep copies of pilot files you care
    about.
  - Machines: tested only in an emulated A1200 with a 68030, not yet on
    real hardware, on a 68040 or 68060, or with WHDLoad's MMU option.
- - Memory: under WHDLoad it needs more than 8 MB Fast RAM (see
-   Requirements). Using less is planned.
- - Sound: AdLib music and sound effects play on the Amiga. The Sound
-   Blaster's digitized speech and effects are not supported yet.
+ - Memory: started directly it runs with 8 MB Fast RAM; under WHDLoad it
+   needs more (see Starting).
+ - Sound: the game is set up as on a PC with a Sound Blaster: AdLib
+   music and sound effects, and the digitized speech, play on the Amiga.
+   On a 68030 the intro runs slower than on the PC, so some of its spoken
+   lines are cut short or overlap.
  - Input: keyboard and mouse. No joystick yet.
  - The copy-protection question is skipped: the game continues as if it
    had been answered correctly.
@@ -52,20 +54,34 @@
 
  Requirements:
  -------------
- This install requires WHDLoad version 17.0 or better and a PAL or NTSC
- Amiga with AGA and a 68020 or better; a 68030 or faster is recommended.
- The installed program uses 2 MB ChipMem and 8.5 MB OtherMem, including
- its Kickstart image, so it needs more than 8 MB Fast RAM: for example
- 16 MB. The data cache needs the MMU: WHDLoad uses it on a 68040 or 68060,
- on a 68030 only with the WHDLoad option MMU (add the tooltype MMU to the
- icon).
+ A PAL or NTSC Amiga with AGA, Kickstart 3.0 or newer and a 68020 or
+ better; a 68030 or faster is recommended. 2 MB Chip RAM and 8 MB Fast RAM
+ to start the game directly; to start it with WHDLoad, WHDLoad version 17.0
+ or better, more than 8 MB Fast RAM and a Kickstart image (see below).
 
- The game requires an installed A600/A1200/A4000 Kickstart 3.1 image.
- The kickstart image must be located in the directory "Devs:Kickstarts" and
- must be named "kick40063.A600", "kick40068.A1200" or "kick40068.A4000".
- Additionally the file "kick40063.A600.RTB", "kick40068.A1200.RTB" or
- "kick40068.A4000.RTB" must be installed in the same directory as the kickstart
- image. It can be found in the archive "util/boot/skick346.lha" on aminet.
+
+ Starting:
+ ---------
+ The X-Wing drawer has two icons. Both run the same program.
+
+ X-Wing starts the game directly, from Workbench. It needs less memory:
+ 8 MB Fast RAM is enough, and no WHDLoad or Kickstart image. The game takes
+ over the machine while it runs; quit from the game's menus.
+
+ X-Wing (WHDLoad) starts it with WHDLoad, which reserves 2 MB ChipMem and
+ 8.5 MB OtherMem, including its Kickstart image, so it needs more than 8 MB
+ Fast RAM: for example 16 MB. Help quits at any time and Workbench comes
+ back as it was. The data cache needs the MMU: WHDLoad uses it on a 68040
+ or 68060, on a 68030 only with the WHDLoad option MMU (add the tooltype
+ MMU to the icon).
+
+ For WHDLoad, the game requires an installed A600/A1200/A4000 Kickstart
+ 3.1 image. The kickstart image must be located in the directory
+ "Devs:Kickstarts" and must be named "kick40063.A600", "kick40068.A1200" or
+ "kick40068.A4000". Additionally the file "kick40063.A600.RTB",
+ "kick40068.A1200.RTB" or "kick40068.A4000.RTB" must be installed in the same
+ directory as the kickstart image. It can be found in the archive
+ "util/boot/skick346.lha" on aminet.
 
 
  Installation:
@@ -80,23 +96,37 @@
  or the files XWING.001 to XWING.005 copied from the disks, together with
  INSTALL.EXE, DETECT.EXE and READ.ME from disk 1. Every file is checked;
  damaged or other disks are refused. The game is installed as the original
- installer sets it up for AdLib sound.
+ installer sets it up for a Sound Blaster, with digitized speech.
 
  To update, select the same parent drawer and choose Keep. Use existing (the
  default) keeps the installed game files; Replace installs them again from the
  disks. Pilots and films are kept either way.
+
+ Version 0.1 installed into a drawer named XWing, with the game files set up
+ for AdLib sound. Selecting the same parent drawer installs X-Wing beside it,
+ with the game files from the disks, and copies the pilots (.PLT) and films
+ (.CLP) over. The old XWing drawer can then be deleted.
 
 
  Playing:
  --------
  Keyboard and mouse work as in the PC original; keys are at their US
  keyboard positions. See the original manual for the controls. There is no
- joystick support yet. Quit from the game's menus. The WHDLoad QuitKey
- (Help) quits immediately.
+ joystick support yet. Quit from the game's menus. Under WHDLoad, the
+ QuitKey (Help) quits immediately.
 
 
  History:
  --------
+ version 0.2 (22.11.2026):
+ - digitized speech: the voices of the PC version with a Sound Blaster
+   now play, in the intro, the menus and the Tour of Duty
+ - the game starts without WHDLoad from the new X-Wing icon, with 8 MB
+   Fast RAM; X-Wing (WHDLoad) starts it with WHDLoad
+ - installed into an X-Wing drawer, set up for a Sound Blaster; updating
+   from 0.1 installs the game files again from the disks and copies the
+   pilots and films from the old XWing drawer
+
  version 0.1 (19.11.2026):
  - initial early alpha release: the whole game, with music and sound
    effects, unoptimized
@@ -119,5 +149,5 @@
  Lawrence Holland and Edward Kilham.
  Amiga port by Vesa Halttunen (Vesuri), assisted by AI.
  WHDLoad kickemu by Wepl and the WHDLoad team.
- XWingInstallData uses the AmigaXDev installer helpers (LGPL 2.1 or later,
+ X-WingInstallData uses the AmigaXDev installer helpers (LGPL 2.1 or later,
  see LICENSE.LGPL.txt; source at the address above).

@@ -1,0 +1,33 @@
+# The release image started by Workbench from the installed X-Wing.info (amiga/debug.sh
+# XWING_WORKBENCH; make test-release-workbench): it must reach the milestone label with
+# the Workbench message held, so it read its game files from data/. A runtime stop, an
+# exit or a return before the label fails.
+set pagination off
+set confirm off
+break plat_exit
+commands
+  silent
+  printf "XWING_WORKBENCH_EXIT\n"
+  quit 1
+end
+break *rt_stop
+commands
+  silent
+  x/s *(char **)($sp+4)
+  quit 1
+end
+break amiga_start_return
+commands
+  silent
+  printf "XWING_PROGRAM_RETURNED %d\n", *(int *)($sp+4)
+  quit 1
+end
+break @LABEL@
+continue
+printf "XWING_WORKBENCH_LABEL message=%d chip_free=%u chip_largest=%u\n", amiga_wb_startup != 0, amiga_chip_free, amiga_chip_largest
+if amiga_wb_startup == 0
+  quit 1
+end
+printf "XWING_WORKBENCH_OK\n"
+detach
+quit 0

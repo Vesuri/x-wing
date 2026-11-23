@@ -1,9 +1,11 @@
 # Release
 
 The Amiga release ships no game data. The user installs it from their own X-Wing DOS 1.0
-floppies with `XWingInstallData` (`tools/install-data`). The installer writes the same
-284 files the original `INSTALL.EXE` installs and configures for AdLib under DOSBox-X
-(`docs/dos-reference.md`).
+floppies with `X-WingInstallData` (`tools/install-data`). The installer writes the same
+284 files the original `INSTALL.EXE` installs and configures for the Sound Blaster under
+DOSBox-X (its "SoundBlaster" entry: `LANDRU.CFG` with `adlib_w`, `OPTIONS.CFG` a copy of
+`FASTNO.CFG`; MEASURED: `manifest/dos-configured-sb.sha256`,
+`docs/dos-reference.md`).
 
 ## Pipeline
 
@@ -12,8 +14,8 @@ adapted. Its `docs/release.md` holds the converged rules and where each comes fr
 is described in [whdload.md](whdload.md).
 
 - **Version:**
-  - `VERSION` holds `0.1`.
-  - The literal version and date 19.11.2026 appear in the game's `$VER`
+  - `VERSION` holds `0.2`.
+  - The literal version and date 22.11.2026 appear in the game's `$VER`
     (`src/platform/amiga/version.s`), in the slave's `slv_info` and `$VER`, in the helper's
     `$VER` (`tools/install-data/install_config.h`), in `Install`'s `$VER` and in the ReadMe's
     History.
@@ -21,6 +23,8 @@ is described in [whdload.md](whdload.md).
 - **Release image:**
   - `make amiga-release` builds `build/amiga-release` with `RELEASE=1`. The `XWING_RELEASE`
     build takes no diagnostic arguments or tool types, and has no listing.
+  - Since 0.2 it is the Sound Blaster build (`RELEASE_DRIVER`, `XWING_DRIVER=ADLIB_W.IMS`:
+    speech, P10); `build/gen` is regenerated for that driver when it holds the other.
   - It is stripped with `elf2hunk -s` to `amiga/out/XWing-release.exe`, and its RELOC32
     blocks are split (`tools/hunk_relocs.py`).
   - `hunk_relocs.py --release-of` checks that no symbol or debug hunk remains, and that every
@@ -28,11 +32,12 @@ is described in [whdload.md](whdload.md).
   - `make release-repro` makes a second clean build in its own directory and `cmp`s the
     stripped images.
 - **Package:**
-  - `tools/package_release.py` takes an explicit allowlist: `XWing`, `XWing.slave`,
-    `XWing.inf`, `XWingInstallData`, `Install`, `Install.info`, `ReadMe`, `ReadMe.info` and
-    `LICENSE.LGPL.txt`, under `XWing Install/` with the drawer icon.
+  - `tools/package_release.py` takes an explicit allowlist: `X-Wing` (the stripped image),
+    `X-Wing.slave`, `X-Wing.inf`, `X-WingInstallData`, `Install`, `Install.info`, `ReadMe`,
+    `ReadMe.info` and `LICENSE.LGPL.txt`, under `X-Wing Install/` with the drawer icon.
+    User-visible names keep the dash (owner, 2026-11-22); the build outputs keep theirs.
   - It packs them with AmigaXDev's `amigaxdev.release`: LH5, level-0 headers, sorted
-    members and the DOS stamp of 19.11.2026. `tools/_amigaxdev.py` checks the module against
+    members and the DOS stamp of 22.11.2026. `tools/_amigaxdev.py` checks the module against
     `manifest/mac-helpers.sha256`.
   - It refuses any member whose SHA-256 is an original's: the five volumes in
     `release/originals.sha256`, and every manifest that pins original material.
@@ -50,6 +55,15 @@ is described in [whdload.md](whdload.md).
 - **Installer:**
   - `release/Install` is the Installer 43 script, with SWOTL's flow: ReadMe first, the
     WHDLoad and Kickstart checks, `WHDLInstPath`, Remove/Keep and Use existing/Replace.
+  - It installs an `X-Wing` drawer: `data/` with the game files and the program
+    `data/X-Wing`, `X-Wing.slave`, the ReadMe and two copies of the game icon (a project
+    icon), both with a 16 KiB stack. `X-Wing.info` starts the program directly: its
+    default tool is `data/X-Wing`, and on a Workbench start the program makes the tool
+    file's own drawer current (`amiga_platform.c`, `wb_options`). `X-Wing (WHDLoad).info`
+    has WHDLoad as its default tool and the tool types `Slave=X-Wing.slave` and `PreLoad`.
+  - 0.1 installed into `XWing`, set up for AdLib. Beside an `XWing/data`, the script says
+    so, installs the game files from the disks and copies the old drawer's `#?.PLT` and
+    `#?.CLP` (pilots and films) that `X-Wing/data` lacks; the old drawer stays.
   - The helper unpacks into `InstallStaging`, and its output is copied into `data/` only
     after it succeeds.
   - `tools/test_release_installer.py` drives real Installer 43 in FS-UAE on a 68020, with
@@ -57,12 +71,19 @@ is described in [whdload.md](whdload.md).
     - `fresh`: images;
     - `files`: `XWING.001`–`005` with disk 1's files;
     - `keep` and `replace`: pilots survive;
+    - `upgrade`: beside 0.1's `XWing` drawer with the AdLib setup, the images are
+      installed and its pilot and film are copied;
     - `remove`;
     - `bad-disks`: a refused source leaves the install unchanged.
-  - The installed tree must equal the configured DOS install.
+  - The installed tree must equal the configured DOS install, and the two icons must have
+    their default tools, tool types and stack.
+  - `make test-release-workbench` installs the package (`fresh --keep`) and Workbench
+    starts the installed `X-Wing.info` from `SYS:WBStartup` (`amiga/debug.sh`
+    `XWING_WORKBENCH`) on the 68030 with 8 MiB Fast. The release image must reach the m01
+    label with the Workbench message held (`amiga/workbench.gdb.in`).
 - **Make:**
   - `make release` refuses a tree with uncommitted changes. It builds the release image,
-    the slaves and the helper, then packages and audits `dist/XWing-$(cat VERSION).lha`
+    the slaves and the helper, then packages and audits `dist/X-Wing-$(cat VERSION).lha`
     and writes its `.sha256`.
   - `make release-check` audits that archive again.
 

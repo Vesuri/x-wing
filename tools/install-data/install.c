@@ -47,10 +47,11 @@ static const unsigned char copy_sha[COPIES][32]={
      0xd7,0x9e,0x76,0x05,0x5a,0x67,0x5f,0x94,0x6a,0x84,0xe9,0xbd,0x0b,0xcc,0x5a,0x6a}};
 /* The catalog's directory indexes 1..4; "" is the game drawer itself. */
 static const char *const directory[5]={0,"","RESOURCE","MISSION","CP"};
-/* The configuration the original installer writes for AdLib with its fast
- * detail (docs/dos-reference.md): LANDRU.CFG, and OPTIONS.CFG as a copy of
- * the installed FASTYES.CFG. */
-static const char landru[]="adlib\r\nFAST\r\nems\r\ndiff\r\n";
+/* The configuration the original installer writes for the Sound Blaster
+ * (its "SoundBlaster" entry, docs/dos-reference.md; the release image is the
+ * Sound Blaster build): LANDRU.CFG with ADLIB_W.IMS's driver, and OPTIONS.CFG
+ * as a copy of the installed FASTNO.CFG. */
+static const char landru[]="adlib_w\r\nFAST\r\nems\r\ndiff\r\n";
 
 typedef struct {
     File f; int image; uint32_t size, data, cluster;
@@ -249,7 +250,7 @@ int install_data(const char *source,const char *dest,const char *temp)
         if(!io_close(&out)) goto done;
         io_close(&loose.f); files++;
     }
-    if(!path(target,dest,"FASTYES.CFG") || !io_open(&loose.f,target,0) || loose.f.size>sizeof buffer
+    if(!path(target,dest,"FASTNO.CFG") || !io_open(&loose.f,target,0) || loose.f.size>sizeof buffer
        || !io_read(&loose.f,buffer,loose.f.size) || !io_close(&loose.f)) goto done;
     if(!write_file(dest,"LANDRU.CFG",landru,sizeof landru-1) || !write_file(dest,"OPTIONS.CFG",buffer,loose.f.size)) goto done;
     files+=2;

@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-configure-sb dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx t-resume-plants t-sab-resume sound-reference sound-fm gates-audio amiga-release whdload test-whdload install-data test-install-data release release-check release-repro publish
+.PHONY: release-gen help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-configure-sb dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx t-resume-plants t-sab-resume sound-reference sound-fm gates-audio amiga-release whdload test-whdload test-release-workbench install-data test-install-data release release-check release-repro publish
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -40,9 +40,10 @@ help:
 	@echo 'make amiga-release          the stripped release image -> amiga/out/XWing-release.exe'
 	@echo 'make whdload                assemble the WHDLoad slaves into build/whdload/'
 	@echo 'make test-whdload           the release slave on the 68030: smoke, boot, load, run'
-	@echo 'make install-data           build XWingInstallData (host and Amiga) into build/install-data/'
+	@echo 'make test-release-workbench the installed X-Wing.info started by Workbench on the 68030'
+	@echo 'make install-data           build X-WingInstallData (host and Amiga) into build/install-data/'
 	@echo 'make test-install-data      helper vs the DOS install: sources, refusals, cleanup'
-	@echo 'make release                package and audit dist/XWing-$$(cat VERSION).lha (clean tree only)'
+	@echo 'make release                package and audit dist/X-Wing-$$(cat VERSION).lha (clean tree only)'
 	@echo 'make release-check          audit the existing archive again'
 	@echo 'make publish [PUBLISH=1]    tag the version and publish the archive on GitHub (dry run without PUBLISH=1)'
 	@echo 'make release-repro          a second clean release build gives the same stripped image'
@@ -364,8 +365,14 @@ gates-audio:
 # Release (docs/release.md), copied from Secret Weapons of the Luftwaffe's Makefile and
 # adapted. The release image is built in build/amiga-release with RELEASE=1 (no
 # diagnostic arguments, amiga_platform.c) and stripped to amiga/out/XWing-release.exe:
-# WHDLoad's LoadSeg of the symbol hunks never returns.
-amiga-release: gen-fresh
+# WHDLoad's LoadSeg of the symbol hunks never returns. The release is the Sound Blaster
+# build (P10: speech; its installer writes the Sound Blaster configuration), so build/gen
+# is regenerated for its driver when it holds the other one.
+RELEASE_DRIVER = ADLIB_W.IMS
+amiga-release release publish release-repro test-whdload test-release-workbench release-gen: export XWING_DRIVER = $(RELEASE_DRIVER)
+release-gen:
+	@$(ENV) python3 -m translator.check gen 2>/dev/null || { $(ENV) python3 -m translator.gen && $(ENV) python3 -m translator.check gen; }
+amiga-release: release-gen
 	mkdir -p build/amiga-release && ln -sf ../../amiga/Makefile build/amiga-release/Makefile
 	@$(ENV) $(MAKE) -C build/amiga-release REPO=../.. RELEASE=1
 	@$(ENV) elf2hunk build/amiga-release/out/XWing.elf amiga/out/XWing-release.exe -s
@@ -373,24 +380,36 @@ amiga-release: gen-fresh
 	python3 tools/hunk_relocs.py --release-of build/amiga-release/out/XWing.exe amiga/out/XWing-release.exe
 whdload:
 	$(MAKE) -C whdload all test smoke boot-test load-test memfree
-# tools/test_whdload.py: Kickstart 3.1 A1200 + RTB, WHDLoad, tmp/dos/configured/XWING.
+# tools/test_whdload.py: Kickstart 3.1 A1200 + RTB, WHDLoad, tmp/dos/configured-sb/XWING.
 # The game needs more than 8 MB Fast RAM under WHDLoad: 16 MB Zorro III on the 68030.
 test-whdload: whdload amiga-release
 	@$(ENV) for m in smoke boot load run; do python3 tools/test_whdload.py --mode $$m --z3 16384 || exit 1; done
+# The direct start: Installer installs the package (fresh, --keep replaces the drawer) and
+# Workbench starts its X-Wing.info (default tool data/X-Wing) on the 68030 with 8 MiB Fast;
+# the release image must reach the m01 label (amiga/workbench.gdb.in, debug.sh XWING_WORKBENCH).
+RELEASE_INSTALLED = tmp/release-installed
+test-release-workbench: amiga-release whdload install-data
+	@mkdir -p $(RELEASE_INSTALLED)
+	@$(ENV) python3 tools/test_release_installer.py fresh --keep $(RELEASE_INSTALLED)/X-Wing
+	sed -e "s|@LABEL@|$$(python3 tests/host_run.py --label --milestone m01-logo)|" amiga/workbench.gdb.in > $(RELEASE_INSTALLED)/workbench.gdb
+	$(ENV) cd amiga && FSUAE_RUN=.run-workbench AMIGA_CPU=68030 FAST_KB=8192 XWING_WORKBENCH=../$(RELEASE_INSTALLED)/X-Wing \
+		XWING_ELF=../build/amiga-release/out/XWing.elf ./debug.sh "" ../$(RELEASE_INSTALLED)/workbench.gdb 2>&1 | \
+		tee ../$(RELEASE_INSTALLED)/gdb.log
+	grep -q '^XWING_WORKBENCH_OK$$' $(RELEASE_INSTALLED)/gdb.log
 install-data:
 	@$(ENV) $(MAKE) -C tools/install-data all amiga
 # tools/install-data/test_install.py: the floppy images and the configured DOS install.
 test-install-data:
 	@$(ENV) $(MAKE) -C tools/install-data test
 # Release from committed sources only; never a diagnostic build.
-RELEASE_ARCHIVE = dist/XWing-$$(cat VERSION).lha
+RELEASE_ARCHIVE = dist/X-Wing-$$(cat VERSION).lha
 release:
 	@git diff --quiet HEAD || { echo "release needs a clean tree: commit or stash first"; exit 1; }
 	$(MAKE) amiga-release whdload install-data
 	mkdir -p dist
 	python3 tools/package_release.py amiga/out/XWing-release.exe dist
 	python3 tools/check_release.py $(RELEASE_ARCHIVE)
-	cd dist && shasum -a 256 XWing-$$(cat ../VERSION).lha > XWing-$$(cat ../VERSION).lha.sha256
+	cd dist && shasum -a 256 X-Wing-$$(cat ../VERSION).lha > X-Wing-$$(cat ../VERSION).lha.sha256
 release-check:
 	python3 tools/check_release.py $(RELEASE_ARCHIVE)
 # Publish the archive as GitHub release <version> (docs/release.md, "Publishing"): a dry
@@ -400,7 +419,7 @@ publish:
 	@git diff --quiet HEAD || { echo "publish needs a clean tree: commit or stash first"; exit 1; }
 	$(MAKE) amiga-release whdload install-data
 	python3 tools/check_release.py $(RELEASE_ARCHIVE)
-	cd dist && shasum -a 256 -c XWing-$$(cat ../VERSION).lha.sha256
+	cd dist && shasum -a 256 -c X-Wing-$$(cat ../VERSION).lha.sha256
 	PUBLISH=$(PUBLISH) python3 tools/publish_release.py
 # Reproducible: a second clean build in its own directory gives the same stripped image.
 release-repro: amiga-release

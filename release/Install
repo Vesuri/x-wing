@@ -1,9 +1,9 @@
 ; X-Wing WHDLoad installation. Commodore Installer V43 or newer.
 ; Copied from Secret Weapons of the Luftwaffe's (manifest/references.tsv) and adapted.
 ; File-install flow with WHDLoad Install Template / RAY Pokeri conventions.
-; $VER: Install 0.1 (19.11.2026)
+; $VER: Install 0.2 (22.11.2026)
 (set @app-name "X-Wing")
-(set #prefix "XWing")
+(set #prefix "X-Wing")
 (if (< @installer-version (* 43 65536))
   (abort "This installation requires Amiga Installer 43 or newer."))
 (welcome)
@@ -31,19 +31,24 @@
 (if (getenv "WHDLInstPath")
   (set @default-dest (getenv "WHDLInstPath")))
 (set #parent
-  (askdir (prompt "Where should X-Wing be installed? An XWing drawer will be created here.")
+  (askdir (prompt "Where should X-Wing be installed? An X-Wing drawer will be created here.")
     (help "Choose a writable hard disk drawer with at least 16 MB free.")
     (default @default-dest)))
 (run ("setenv WHDLInstPath \"%s\"\ncopy ENV:WHDLInstPath ENVARC:" #parent))
 (set #dest (tackon #parent #prefix))
 (set #data (tackon #dest "data"))
-(set #helper (tackon #source "XWingInstallData"))
+(set #helper (tackon #source "X-WingInstallData"))
 (set #staging (tackon #dest "InstallStaging"))
+; 0.1 installed into an XWing drawer, its game files set up for AdLib sound. This version
+; installs into X-Wing with the game files from the disks; the pilots and films are copied.
+(set #old-data (tackon (tackon #parent "XWing") "data"))
+(set #old-install 0)
+(if (= (exists #old-data) 2) (set #old-install 1))
 (if (exists #dest)
   ((set #remove-existing
      (askbool
        (prompt ("The drawer \"%s\" already exists. Remove it, including pilots and films, before installing?" #dest))
-       (help "Remove deletes the whole XWing drawer. Keep updates the program and keeps your pilots and films; you can then keep or replace the game files.")
+       (help "Remove deletes the whole X-Wing drawer. Keep updates the program and keeps your pilots and films; you can then keep or replace the game files.")
        (choices "Remove" "Keep") (default 0)))
    (if #remove-existing
      (delete #dest (all) (infos) (optional "force") (help @delete-help)))))
@@ -54,6 +59,8 @@
       (prompt "The X-Wing game files are already installed. Use the existing files or replace them from the disks?")
       (help "Use existing keeps the installed game files and skips the disk question. Replace extracts all game files again from the X-Wing disks; files the game created, such as pilots and films, are kept.")
       (choices "Use existing" "Replace") (default 0))))
+(if #old-install
+  (message ("X-Wing 0.1 is installed in \"%s\". This version installs into \"%s\" and takes the game files from the X-Wing disks again, set up for the Sound Blaster's digitized speech. Your pilots and films are copied over; the old drawer can be deleted afterwards." (pathonly #old-data) #dest)))
 (if #install-data
   (set #disks
     (askdir (prompt "Select the drawer containing the five X-Wing disk images or files.")
@@ -70,11 +77,19 @@
       (abort "The X-Wing disks could not be installed. Check that the drawer holds all five unmodified disk images or XWING files. Existing game files were not changed.")))
    (copyfiles (source #staging) (dest #data) (all) (help @copyfiles-help))
    (delete #staging (all) (optional "force") (help @delete-help))))
-(copyfiles (source (tackon #source "XWing")) (dest #data) (help @copyfiles-help))
-(copyfiles (source (tackon #source "XWing.slave")) (dest #dest) (help @copyfiles-help))
-(copyfiles (source (tackon #source "XWing.inf")) (dest #dest) (newname "XWing.info") (help @copyfiles-help))
-(tooltype (dest (tackon #dest "XWing")) (setdefaulttool "WHDLoad")
-  (settooltype "Slave" "XWing.slave") (settooltype "PreLoad" "")
+; Pilots (.PLT) and films (.CLP) of a 0.1 installation; files already here are kept.
+(if #old-install
+  (foreach #old-data "#?.(PLT|CLP)"
+    (if (= (exists (tackon #data @each-name)) 0)
+      (copyfiles (source (tackon #old-data @each-name)) (dest #data) (help @copyfiles-help)))))
+(copyfiles (source (tackon #source "X-Wing")) (dest #data) (help @copyfiles-help))
+(copyfiles (source (tackon #source "X-Wing.slave")) (dest #dest) (help @copyfiles-help))
+; X-Wing starts the program directly: Workbench finds the default tool from the drawer.
+(copyfiles (source (tackon #source "X-Wing.inf")) (dest #dest) (newname "X-Wing.info") (help @copyfiles-help))
+(tooltype (dest (tackon #dest "X-Wing")) (setdefaulttool "data/X-Wing") (setstack 16384) (noposition))
+(copyfiles (source (tackon #source "X-Wing.inf")) (dest #dest) (newname "X-Wing (WHDLoad).info") (help @copyfiles-help))
+(tooltype (dest (tackon #dest "X-Wing (WHDLoad)")) (setdefaulttool "WHDLoad")
+  (settooltype "Slave" "X-Wing.slave") (settooltype "PreLoad" "")
   (setstack 16384) (noposition))
 (copyfiles (source (tackon #source "ReadMe")) (dest #dest) (infos) (help @copyfiles-help))
 ; openwbobject was added after Installer 43; retain the template version gate.

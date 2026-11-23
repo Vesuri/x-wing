@@ -754,11 +754,14 @@ void plat_log(const char *line)
     amiga_io_end();
 }
 
-/* Workbench start (L84): the icon's drawer becomes the current directory
- * (a Shell's is its own) and the icon's tool types are the arguments, the
- * same keywords; KEYS= is copied, the icon is freed before the run. The
- * release image reads none. */
+/* Workbench start (L84): the program's own drawer becomes the current
+ * directory (a Shell's is its own) and the tool icon's tool types are the
+ * arguments, the same keywords; KEYS= is copied, the icon is freed before
+ * the run. The release image reads none. The installed X-Wing.info is a
+ * project icon whose default tool is data/X-Wing, so the tool's name may
+ * hold a path relative to its lock: the drawer is the tool file's parent. */
 static BPTR wb_old_dir = 0;
+static BPTR wb_dir = 0;
 static char *wb_keys = 0;
 static ULONG wb_keys_bytes = 0;
 
@@ -766,8 +769,18 @@ static int wb_options(void)
 {
     struct WBArg *tool = amiga_wb_startup->sm_ArgList;
     wb_old_dir = CurrentDir(tool->wa_Lock);
+    BPTR file = Lock((CONST_STRPTR)tool->wa_Name, ACCESS_READ);
+    if (file) {
+        wb_dir = ParentDir(file);
+        UnLock(file);
+    }
+    if (!wb_dir) {
+        plat_log("X-Wing cannot find its drawer");
+        return 0;
+    }
     IconBase = OpenLibrary((CONST_STRPTR)"icon.library", 37);
     if (!IconBase) {
+        CurrentDir(wb_dir);
         return 1;
     }
     struct DiskObject *icon = GetDiskObject((STRPTR)tool->wa_Name);
@@ -798,6 +811,7 @@ static int wb_options(void)
     }
     CloseLibrary(IconBase);
     IconBase = 0;
+    CurrentDir(wb_dir);
     return ok;
 }
 
@@ -909,6 +923,10 @@ void amiga_guest_close(void)
     }
     if (DOSBase && amiga_wb_startup) {
         CurrentDir(wb_old_dir);
+        if (wb_dir) {
+            UnLock(wb_dir);
+            wb_dir = 0;
+        }
     }
     if (DOSBase) {
         CloseLibrary((struct Library *)DOSBase);

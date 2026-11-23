@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Audit the exact minimal LHA release, its checksums and its members.
 
-    python3 tools/check_release.py dist/XWing-$(cat VERSION).lha [--exe amiga/out/XWing-release.exe]
+    python3 tools/check_release.py dist/X-Wing-$(cat VERSION).lha [--exe amiga/out/XWing-release.exe]
 
 Copied from Secret Weapons of the Luftwaffe's (manifest/references.tsv) and
 adapted. Every member is decoded independently with Lhasa (`lha pq`) and must
 equal its build output. No member may equal an original (package_release.py's
 lists) or hold any 64-byte block of the configured DOS install
-(tmp/dos/configured/XWING, every file) or of the five archive volumes
+(tmp/dos/configured-sb/XWING, every file: the release's Sound Blaster configuration) or of the five archive volumes
 (tmp/dos/disks images), forward or byte-reversed (guest RAM order).
 """
 import argparse
@@ -18,9 +18,9 @@ import subprocess
 from pathlib import Path
 from package_release import ORIGINAL_HASHES, PREFIX, ROOT, crc16, members
 
-DATE = '19.11.2026'
-STAMP = (((2026 - 1980) << 9) | (11 << 5) | 19) << 16
-INSTALL = Path(os.environ.get('XWING_REFERENCE', ROOT / 'tmp/dos/configured/XWING'))
+DATE = '22.11.2026'
+STAMP = (((2026 - 1980) << 9) | (11 << 5) | 22) << 16
+INSTALL = Path(os.environ.get('XWING_REFERENCE', ROOT / 'tmp/dos/configured-sb/XWING'))
 IMAGES = Path(os.environ.get('XWING_IMAGES', ROOT / 'tmp/dos/disks'))
 SIZE = 64
 
@@ -82,20 +82,20 @@ def main():
     for name, data in payloads.items():
         assert hashlib.sha256(data).hexdigest() not in ORIGINAL_HASHES, 'original file: ' + name
         assert not contains_block(data, blocks), 'original bytes in ' + name
-    for name in ('XWing', 'XWing.slave', 'XWingInstallData'):
+    for name in ('X-Wing', 'X-Wing.slave', 'X-WingInstallData'):
         assert payloads[name][:4] == b'\0\0\3\xf3', 'not an Amiga HUNK executable: ' + name
-    for name, kind in (('XWing.inf', 4), ('ReadMe.info', 4), ('Install.info', 4), ('@drawer', 2)):
+    for name, kind in (('X-Wing.inf', 4), ('ReadMe.info', 4), ('Install.info', 4), ('@drawer', 2)):
         assert payloads[name][:4] == b'\xe3\x10\0\1' and payloads[name][48] == kind, 'bad icon: ' + name
     version = (ROOT / 'VERSION').read_text().strip().encode()
-    for name in ('XWing', 'XWing.slave', 'XWingInstallData'):
+    for name in ('X-Wing', 'X-Wing.slave', 'X-WingInstallData'):
         assert b'$VER: ' + name.encode() + b' ' + version + b' (' + DATE.encode() + b')' in payloads[name], 'version: ' + name
     assert b'$VER: Install ' + version + b' (' + DATE.encode() + b')' in payloads['Install']
     assert b'version ' + version + b' (' + DATE.encode() + b'):' in payloads['ReadMe']
-    for heading in (b'EARLY ALPHA', b'not\n optimized', b'What to expect:', b'Requirements:', b'Installation:', b'Playing:',
+    for heading in (b'EARLY ALPHA', b'not\n optimized', b'What to expect:', b'Requirements:', b'Starting:', b'Installation:', b'Playing:',
                     b'History:', b'Contact:', b'Credits:', b'https://github.com/Vesuri/x-wing'):
         assert heading in payloads['ReadMe'], heading
     # WHDLoadSlave header, whdload.i: flags +14, BaseMem +16, keyexit +31, ExpMem +32.
-    slave = payloads['XWing.slave']
+    slave = payloads['X-Wing.slave']
     signature = b'\x70\xff\x4e\x75WHDLOADS'
     assert slave.count(signature) == 1, 'ambiguous WHDLoad header'
     header = slave.index(signature)

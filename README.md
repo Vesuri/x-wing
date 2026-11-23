@@ -7,14 +7,15 @@ Ground, historical missions and the Tour of Duty campaigns.
 
 The port runs the original game code, translated offline from 16-bit x86 to 68020 by
 this repository's static translator; there is no x86 emulator. The game runs as the
-original's VGA version (320×200, 256 colours) on AGA, and its AdLib music and sound
-effects are resynthesised on Paula.
+original's VGA version (320×200, 256 colours) on AGA, set up as on a PC with a Sound
+Blaster: its AdLib music and sound effects are resynthesised on Paula, and its digitized
+speech plays on Paula.
 
-Current Amiga release: **0.1 (19.11.2026), an early alpha**.
+Current Amiga release: **0.2 (22.11.2026), an early alpha**.
 
-## What to expect from 0.1
+## What to expect from 0.2
 
-0.1 runs the whole game, but nothing has been optimized yet. It is for people who
+0.2 runs the whole game, with speech, but nothing has been optimized yet. It is for people who
 want to try the port early and report what they find.
 
 - **Checked against the original:** the port was run on an emulated A1200 with a 68030
@@ -39,28 +40,40 @@ want to try the port early and report what they find.
   under WHDLoad yet. Keep copies of pilots you care about.
 - **Testing:** only on an emulated A1200 with a 68030; not yet on real hardware, a
   68040 or 68060, or with WHDLoad's `MMU` option.
-- **Memory:** under WHDLoad the game needs **more than 8 MB Fast RAM**. Bringing it
-  within 8 MB is planned.
-- **Not yet:** a joystick; the Sound Blaster's digitized speech and effects; Roland and
-  General MIDI music.
+- **Memory:** started directly the game runs with 8 MB Fast RAM; under WHDLoad it needs
+  more (see below).
+- **Speech:** on a 68030 the intro runs slower than on the PC, so some of its spoken
+  lines are cut short or overlap.
+- **Not yet:** a joystick; Roland and General MIDI music.
 - **Copy protection:** the code-name question is skipped. The game continues as if it
   had been answered correctly.
 
 ## Requirements and installation
 
-- A PAL or NTSC Amiga with AGA and a 68020 or better; **68030 or better recommended**.
-- **2 MB Chip RAM, and more than 8 MB Fast RAM** under WHDLoad (for example 16 MB). The
-  slave reserves 8.5 MB, including the Kickstart image.
-- WHDLoad 17+, Installer 43+, and a supported Kickstart 3.1 image with its RTB.
+- A PAL or NTSC Amiga with AGA, Kickstart 3.0+ and a 68020 or better; **68030 or better
+  recommended**. Installer 43+.
+- **2 MB Chip RAM and 8 MB Fast RAM** to start the game directly.
+- To start it with WHDLoad instead: WHDLoad 17+, a supported Kickstart 3.1 image with
+  its RTB, and **more than 8 MB Fast RAM** (for example 16 MB). The slave reserves 8.5 MB,
+  including the Kickstart image.
 - The five 1.44 MB PC floppies of **X-Wing 1.0** (LucasArts, 1993), as `disk1.img` to
   `disk5.img`, or as the files `XWING.001` to `.005` with `INSTALL.EXE`, `DETECT.EXE`
   and `READ.ME` from disk 1. Other releases, such as the CD-ROM editions, are not
   supported.
 
-Extract `XWing-0.1.lha`, open its **XWing Install** drawer and run **Install**. Select
+Extract `X-Wing-0.2.lha`, open its **X-Wing Install** drawer and run **Install**. Select
 the destination and the drawer with the disks. Every file is checked, and damaged or
 other disks are refused. The game is installed as the original installer sets it up for
-AdLib sound. Updating keeps pilots and films. Start the installed **XWing** icon.
+a Sound Blaster, with digitized speech. Updating keeps pilots and films. 0.1 installed
+into an `XWing` drawer, set up for AdLib: installing beside it creates `X-Wing` with the
+game files from the disks and copies the pilots and films over.
+
+The installed **X-Wing** drawer has two icons for the same program:
+
+- **X-Wing** starts the game directly: 8 MB Fast RAM, no WHDLoad or Kickstart image.
+  Quit from the game's menus.
+- **X-Wing (WHDLoad)** starts it with WHDLoad: more memory, but **Help** quits at any
+  time and Workbench comes back as it was.
 
 No original game code or data, Kickstart image or WHDLoad binary is distributed. See
 [the release ReadMe](release/ReadMe) for the supported ROM file names and the full
@@ -69,8 +82,8 @@ instructions.
 ## Controls
 
 Keyboard and mouse work as in the PC original, with keys at their US keyboard
-positions; see the original manual. Quit from the game's menus. The WHDLoad QuitKey
-(**Help**) quits immediately, without saving.
+positions; see the original manual. Quit from the game's menus. Under WHDLoad, the
+QuitKey (**Help**) quits immediately, without saving.
 
 ## Building
 
@@ -79,12 +92,12 @@ the WHDLoad SDK includes. The environment comes from AmigaXDev's `make setup`
 (`~/.local/share/amiga/env.sh`).
 
 ```sh
-make release          # dist/XWing-$(cat VERSION).lha, audited; clean tree only
+make release          # dist/X-Wing-$(cat VERSION).lha, audited; clean tree only
 make amiga            # standalone executable: amiga/out/XWing.exe
 make help             # every target: references, translator gates, replays, sound
 ```
 
-Without WHDLoad, the installed game runs from a Shell in its `data` drawer as `XWing`.
+From a Shell, the installed game runs in its `data` drawer as `X-Wing`.
 
 The tests compare the port with the original running under a scripted DOSBox-X. They
 need the inputs below, which you supply yourself, read-only, at these paths. Git

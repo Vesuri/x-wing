@@ -7,11 +7,12 @@ Copied from Secret Weapons of the Luftwaffe's (manifest/references.tsv) and
 adapted: five floppies, no sound choice. The installation files are the
 package members (tools/package_release.py from the current build), or with
 --archive those decoded from a release archive. --keep copies the last mode's
-installed XWing drawer to DIR (it holds game data: local only).
+installed X-Wing drawer to DIR (it holds game data: local only).
 
 Modes: fresh (images), files (XWING.001-005 and disk 1's files), keep (Use
-existing), replace (images over a damaged install), remove, bad-disks
-(Replace with a corrupted image). XWingInstallData runs on the emulated
+existing), replace (images over a damaged install), upgrade (beside 0.1's XWing
+drawer, AdLib setup: a new X-Wing drawer from the images, the old pilots and films
+copied), remove, bad-disks (Replace with a corrupted image). X-WingInstallData runs on the emulated
 68020; installed game files must equal the configured DOS install, pilots
 must survive Keep and Replace, and a refused source must leave the install as
 it was. Inputs are local: the floppy images and the configured DOS install
@@ -41,8 +42,11 @@ WHDLOAD = Path(os.environ.get('WHDLOAD', AMIGA / 'WHDLoad')) / 'C/WHDLoad'
 KICK = Path(os.environ.get('KICKSTART_A1200', AMIGA / 'Kickstarts/kick40068.A1200'))
 SCRIPT = os.environ.get('INSTALL_SCRIPT')  # sabotage override of the package's Install
 PACKAGE = {}
-MODES = ('fresh', 'files', 'keep', 'replace', 'remove', 'bad-disks')
+MODES = ('fresh', 'files', 'keep', 'replace', 'upgrade', 'remove', 'bad-disks')
+# 0.1's AdLib setup of the same files (manifest/dos-configured.sha256)
+ADLIB_SETUP = Path(os.environ.get('XWING_ADLIB_REFERENCE', ROOT / 'tmp/dos/configured/XWING'))
 PILOT = b'pilot written by the game'
+FILM = b'film recorded by the game'
 DAMAGED = 'VGA.PAC'
 
 
@@ -84,6 +88,7 @@ def script(mode):
     s = replace_form(s, '(set #parent', mark('parent-asked', '(set #parent "DH2:out")'))
     s = replace_form(s, '(set #remove-existing', mark('remove-asked', f'(set #remove-existing {int(mode == "remove")})'))
     s = replace_form(s, '(set #install-data\n', mark('reuse-asked', f'(set #install-data {int(mode in ("replace", "bad-disks"))})'))
+    s = replace_form(s, '(message ("X-Wing 0.1 is installed', mark('upgrade-told'))
     disks = 'DH2:files' if mode == 'files' else 'DH2:disks'
     s = replace_form(s, '(set #disks', mark('disks-asked', f'(set #disks "{disks}")'))
     s = replace_form(s, '(abort "The X-Wing disks', mark('disks-refused', '(exit (quiet))'))
@@ -118,22 +123,27 @@ def fixture(mode, base):
             (base / f'files/XWING.00{n}').write_bytes(fat12_file(image, f'XWING.00{n}'))
         for name in COPIED:
             (base / 'files' / name).write_bytes(fat12_file(images[0], name))
-    data = out / 'XWing/data'
-    if mode in ('keep', 'replace', 'remove', 'bad-disks'):
+    data = out / ('XWing/data' if mode == 'upgrade' else 'X-Wing/data')
+    if mode in ('keep', 'replace', 'upgrade', 'remove', 'bad-disks'):
         data.mkdir(parents=True)
         for name, path in REFERENCE_FILES.items():
             (data / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, data / name)
+        if mode == 'upgrade':
+            for name in ('LANDRU.CFG', 'OPTIONS.CFG'):
+                shutil.copyfile(ADLIB_SETUP / name, data / name)
         (data / 'PILOT.PLT').write_bytes(PILOT)
+        if mode == 'upgrade':
+            (data / 'BATTLE.CLP').write_bytes(FILM)
         if mode in ('keep', 'replace'):
             (data / DAMAGED).write_bytes(b'damaged')
-        (out / 'XWing/old-marker').touch()
+        (data.parent / 'old-marker').touch()
     (out / 'unrelated').write_text('keep')
     (boot / 's/startup-sequence').write_text(
         'CD DH0:\nStack 16384\nDF0:C/Assign C: DF0:C\nDF0:C/Assign LIBS: DF0:Libs\n'
         'DF0:C/Assign DEVS: DH0:devs\nDF0:C/Assign ENV: RAM:\nDF0:C/Assign ENVARC: DH0:env\n'
         'Copy ENVARC:WHDLInstPath ENV:WHDLInstPath\nDF0:C/Assign T: RAM:\nPath DH0: ADD\nC:LoadWB\n'
-        'Installer SCRIPT DH0:Install APPNAME XWing MINUSER NOVICE DEFUSER NOVICE '
+        'Installer SCRIPT DH0:Install APPNAME X-Wing MINUSER NOVICE DEFUSER NOVICE '
         'LOGFILE DH2:installer.log NOPRETEND >DH2:console.log\nEcho done >DH2:finished\n')
 
 
@@ -165,40 +175,53 @@ def emulate(base, seconds):
 
 def check(mode, base):
     asked = lambda name: (base / name).exists()
-    dest = base / 'out/XWing'
+    dest = base / 'out/X-Wing'
     data = dest / 'data'
     assert (base / 'multiview-readme').read_text().strip() == 'DH0:ReadMe'
     assert asked('more-readme') == (mode == 'fresh')
     assert (base / 'boot/env/WHDLInstPath').read_text().strip() == 'DH2:out'
     assert (base / 'out/unrelated').read_text() == 'keep'
     assert not (dest / 'InstallStaging').exists(), 'staging drawer left behind'
-    existing = mode not in ('fresh', 'files')
+    existing = mode not in ('fresh', 'files', 'upgrade')
     assert asked('remove-asked') == existing
     assert asked('reuse-asked') == (mode in ('keep', 'replace', 'bad-disks'))
+    assert asked('upgrade-told') == (mode == 'upgrade')
     if mode == 'bad-disks':
         # Refused before anything was copied: the earlier install is unchanged.
         assert asked('disks-refused')
-        assert not (data / 'XWing').exists() and not (dest / 'XWing.slave').exists()
+        assert not (data / 'X-Wing').exists() and not (dest / 'X-Wing.slave').exists()
         files = {k: p for k, p in tree(data).items() if k != 'PILOT.PLT'}
         assert files.keys() == REFERENCE_FILES.keys()
         assert (data / 'PILOT.PLT').read_bytes() == PILOT
         return
-    assert asked('disks-asked') == (mode in ('fresh', 'files', 'replace', 'remove'))
+    assert asked('disks-asked') == (mode in ('fresh', 'files', 'replace', 'upgrade', 'remove'))
     files = tree(data)
-    assert files.pop('XWING') and (data / 'XWing').read_bytes() == PACKAGE['XWing']
+    assert files.pop('X-WING') and (data / 'X-Wing').read_bytes() == PACKAGE['X-Wing']
     kept = mode in ('keep', 'replace')
-    assert (files.pop('PILOT.PLT', None) is not None) == kept, 'PILOT.PLT'
+    pilot = files.pop('PILOT.PLT', None)
+    assert (pilot is not None) == (kept or mode == 'upgrade'), 'PILOT.PLT'
+    if mode == 'upgrade':
+        # Copied from 0.1's drawer, which is left as it was.
+        assert pilot.read_bytes() == PILOT and files.pop('BATTLE.CLP').read_bytes() == FILM
+        old = base / 'out/XWing'
+        assert (old / 'old-marker').exists() and (old / 'data/PILOT.PLT').read_bytes() == PILOT
+        assert (old / 'data/LANDRU.CFG').read_bytes() == (ADLIB_SETUP / 'LANDRU.CFG').read_bytes()
     assert files.keys() == REFERENCE_FILES.keys(), sorted(files.keys() ^ REFERENCE_FILES.keys())[:8]
     for name, path in REFERENCE_FILES.items():
         expected = b'damaged' if mode == 'keep' and name == DAMAGED else path.read_bytes()
         assert files[name].read_bytes() == expected, name
-    assert (dest / 'XWing.slave').read_bytes() == PACKAGE['XWing.slave']
+    assert (dest / 'X-Wing.slave').read_bytes() == PACKAGE['X-Wing.slave']
     assert (dest / 'ReadMe').exists() and (dest / 'ReadMe.info').exists()
     assert (dest / 'old-marker').exists() == kept
-    icon = (dest / 'XWing.info').read_bytes()
-    assert b'WHDLoad\0' in icon
-    icon = icon.lower()
-    assert b'slave=xwing.slave\0' in icon and b'preload\0' in icon
+    # X-Wing.info starts the program directly, X-Wing (WHDLoad).info through the slave;
+    # both are the package's game icon (a project icon, do_Type 4) with a 16 KiB stack.
+    direct, whdload = (dest / 'X-Wing.info').read_bytes(), (dest / 'X-Wing (WHDLoad).info').read_bytes()
+    for icon in (direct, whdload):
+        assert icon[:4] == b'\xe3\x10\0\1' and icon[48] == 4 and icon[74:78] == (16384).to_bytes(4, 'big')
+    assert b'data/X-Wing\0' in direct and b'WHDLoad' not in direct and b'Slave' not in direct
+    assert b'WHDLoad\0' in whdload
+    whdload = whdload.lower()
+    assert b'slave=x-wing.slave\0' in whdload and b'preload\0' in whdload
 
 
 REFERENCE_FILES = {}
@@ -219,7 +242,7 @@ def main():
             if name.startswith(PREFIX + '/'):
                 PACKAGE[name[len(PREFIX) + 1:]] = subprocess.run(['lha', 'pq', str(args.archive), name],
                                                                  check=True, capture_output=True).stdout
-        assert {'Install', 'XWing', 'XWing.slave', 'XWingInstallData'} <= PACKAGE.keys(), sorted(PACKAGE)
+        assert {'Install', 'X-Wing', 'X-Wing.slave', 'X-WingInstallData'} <= PACKAGE.keys(), sorted(PACKAGE)
     else:
         PACKAGE.update(members(ROOT / 'amiga/out/XWing-release.exe'))
     REFERENCE_FILES.update(host_tree(REFERENCE))
@@ -234,8 +257,8 @@ def main():
         print(f'PASS: Installer {mode}', flush=True)
         if args.keep and mode == args.modes[-1]:
             shutil.rmtree(args.keep, ignore_errors=True)
-            shutil.copytree(base / 'out/XWing', args.keep, ignore=shutil.ignore_patterns('*.uaem'))
-            shutil.copyfile(base / 'out/XWing.info', args.keep.with_name(args.keep.name + '.info'))
+            shutil.copytree(base / 'out/X-Wing', args.keep, ignore=shutil.ignore_patterns('*.uaem'))
+            shutil.copyfile(base / 'out/X-Wing.info', args.keep.with_name(args.keep.name + '.info'))
             print('Installed drawer:', args.keep)
         shutil.rmtree(base)
 

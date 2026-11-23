@@ -1,4 +1,4 @@
-# XWingInstallData
+# X-WingInstallData
 
 Standalone C99 installer helper. Installs the X-Wing game directory from the user's
 five DOS 1.0 floppies (`disk1.img`..`disk5.img` FAT12 images, or the files
@@ -13,11 +13,12 @@ five DOS 1.0 floppies (`disk1.img`..`disk5.img` FAT12 images, or the files
   - the three copied files by size and SHA-256.
 - **Writes:**
   - the 279 archived files and the 3 copies;
-  - the AdLib configuration the original installer writes: `LANDRU.CFG`, plus
-    `OPTIONS.CFG` as a copy of `FASTYES.CFG`.
+  - the Sound Blaster configuration the original installer writes (the release image is
+    the Sound Blaster build): `LANDRU.CFG` with `adlib_w`, plus `OPTIONS.CFG` as a copy of
+    `FASTNO.CFG`.
 
   That makes 284 files, the tree of `manifest/dos-installed.sha256` and
-  `manifest/dos-configured.sha256`.
+  `manifest/dos-configured-sb.sha256`.
 - **Original data:** none, except the position code's value order
   (`docs/design.md`, "Installer's position code").
 - **Safety:** the destination must be new. On failure or Ctrl-C, the files and drawers

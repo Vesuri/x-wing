@@ -21,7 +21,7 @@ VBR of a 68020) ends it with COREDUMP and the dump is judged:
     data cache on where WHDLoad uses the MMU (68040/060, 68030 with MMU),
     otherwise the instruction cache alone.
 The MemFree slave's low-water marks (Chip, Fast) are read from its $100 slot.
---installed runs an installed XWing drawer as it is (slave, data/XWing, data).
+--installed runs an installed X-Wing drawer as it is (slave, data/X-Wing, data).
 --setup a1200-040: full 68040 with its MMU and FPU, JIT off, on $FSUAE_MMU;
 the report must show TC=8000 (translation on; AmigaXDev whdload-mmu.md).
 --setup a1200-030: full 68030 with its MMU on $FSUAE_MMU; WHDLoad uses the MMU
@@ -29,8 +29,8 @@ only with its MMU option (--whdload-mmu). --setup a1200-060: as the 68040, TC=80
 These setups emulate the data cache.
 
 Inputs are local, never shipped: Kickstart 3.1 A1200 + RTB, WHDLoad, the
-Workbench floppy and the configured DOS install (tmp/dos/configured/XWING,
-make dos-configure). Source amiga/env.sh first. The emulator is the one this
+Workbench floppy and the configured DOS install (tmp/dos/configured-sb/XWING,
+make dos-configure-sb: the release image is the Sound Blaster build). Source amiga/env.sh first. The emulator is the one this
 script started; it is stopped by its own PID only.
 """
 import argparse
@@ -62,8 +62,8 @@ def main():
     p.add_argument('--slave', type=Path, help='slave override (default: build/whdload/ per mode)')
     p.add_argument('--exe', type=Path, default=ROOT / 'amiga/out/XWing-release.exe',
                    help='stripped (make amiga-release): LoadSeg reads symbol hunks in small pieces')
-    p.add_argument('--data', type=Path, default=ROOT / 'tmp/dos/configured/XWING')
-    p.add_argument('--installed', type=Path, help='installed XWing drawer, used unchanged')
+    p.add_argument('--data', type=Path, default=ROOT / 'tmp/dos/configured-sb/XWING')
+    p.add_argument('--installed', type=Path, help='installed X-Wing drawer, used unchanged')
     p.add_argument('--setup', choices=('a1200', 'a1200-030', 'a1200-040', 'a1200-060'), default='a1200-030')
     p.add_argument('--whdload-mmu', action='store_true', help="WHDLoad's MMU option (68030)")
     p.add_argument('--rom', type=Path, default=KICK31)
@@ -96,12 +96,12 @@ def main():
         d.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(WHDLOAD, game / 'WHDLoad')
     if not args.installed:
-        shutil.copyfile(args.slave or ROOT / 'build/whdload' / SLAVES[args.mode], game / 'XWing.slave')
+        shutil.copyfile(args.slave or ROOT / 'build/whdload' / SLAVES[args.mode], game / 'X-Wing.slave')
     if args.mode != 'smoke':
         shutil.copyfile(args.rom, boot / 'devs/Kickstarts' / args.rom.name)
         shutil.copyfile(args.rom.with_name(args.rom.name + '.RTB'), boot / 'devs/Kickstarts' / (args.rom.name + '.RTB'))
     if args.mode in ('load', 'run') and not args.installed:
-        shutil.copyfile(args.exe, data / 'XWing')
+        shutil.copyfile(args.exe, data / 'X-Wing')
     if args.mode == 'run' and not args.installed:
         shutil.copytree(args.data, data, dirs_exist_ok=True)
     options = ['SPLASHDELAY=0', 'NOREQ']
@@ -111,7 +111,7 @@ def main():
         options += ['COREDUMP', f'TIMEOUT={args.ticks}']
     if args.whdload_mmu:
         options.append('MMU')
-    command = 'WHDLoad XWing.slave ' + ' '.join(options)
+    command = 'WHDLoad X-Wing.slave ' + ' '.join(options)
     print('Command:', command, flush=True)
     (boot / 's/WHDLoad.prefs').write_text('Expert\nReadDelay=0\n')
     (boot / 's/startup-sequence').write_text(

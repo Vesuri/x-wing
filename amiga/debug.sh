@@ -3,9 +3,12 @@
 #   ./debug.sh [path-to-kickstart] [fixture.gdb] [executable]
 # AMIGA_CPU picks the CPU (68030: the minimum target model). XWING_ARGS: the Shell
 # arguments. Without a fixture: interactive gdb; `continue` runs the program.
+# XWING_WORKBENCH=DRAWER: an installed X-Wing drawer (tools/test_release_installer.py
+# --keep) started by Workbench from its X-Wing.info (SYS:WBStartup), instead of the Shell;
+# the drawer's data/ is the game directory and its data/X-Wing the program.
 # The stub serves memory reads but silently drops writes: inject inputs from C.
 # Copied from Secret Weapons of the Luftwaffe's (manifest/references.tsv) and
-# adapted: Shell start only.
+# adapted: the Workbench start from the installed drawer's icon.
 set -uo pipefail
 cd "$(dirname "$0")"
 . ./env.sh
@@ -20,6 +23,7 @@ ELF="${XWING_ELF:-out/XWing.elf}"
 # guest's C:\XWING, the current directory of the run (local only, never committed).
 # XWING_GAME_DIR: another configured directory (the Sound Blaster setup's, P10).
 SOURCE="${XWING_GAME_DIR:-../tmp/dos/configured/XWING}"
+[ -n "${XWING_WORKBENCH:-}" ] && SOURCE="$XWING_WORKBENCH/data"
 [ -f "$SOURCE/XWING.EXE" ] || { echo "game directory not found: $SOURCE  (make dos-reference)"; exit 1; }
 
 # KS 3.1 sets the AGA bits in GfxBase only after SetPatch (Secret Weapons of the
@@ -27,20 +31,40 @@ SOURCE="${XWING_GAME_DIR:-../tmp/dos/configured/XWING}"
 [ -f "$SETPATCH" ] || { echo "SetPatch not found: $SETPATCH"; exit 1; }
 RUN="$FSUAE_RUN"; DH0="$RUN/dh0"; DH1="$RUN/dh1"; GDBHOME="$RUN/gdbhome"
 mkdir -p "$DH0/c" "$DH0/s" "$DH1" "$RUN/state" "$GDBHOME"
-# Do not simplify to `dh1:XWing`: with the path form gdb resolves symbols
-# against the wrong base and no breakpoint is ever hit (Rescue on Fractalus).
-printf 'C:SetPatch QUIET\ncd dh1:\nXWing %s\n' "${XWING_ARGS:-}" > "$DH0/s/startup-sequence"
-cp -f "$SETPATCH" "$DH0/c/SetPatch"
-rsync -a --delete "$SOURCE/" "$DH1/"
-# XWING_SEED_DIR: files a milestone finds beside the installation (tools/seeds.py),
-# their modification times kept.
-if [ -n "${XWING_SEED_DIR:-}" ]; then
-    for f in "$XWING_SEED_DIR"/*; do [ -f "$f" ] && cp -p "$f" "$DH1/"; done
+TRIGGER=XWing
+if [ -n "${XWING_WORKBENCH:-}" ]; then
+  # Workbench 2.04's C: and Libs: (LoadWB); ENV: as a startup-sequence makes it. The
+  # drawer's icon and data/ go to WBStartup as installed: the icon's default tool is
+  # data/X-Wing.
+  [ -f "$WORKBENCH_ADF" ] || { echo "Workbench floppy not found: $WORKBENCH_ADF"; exit 1; }
+  [ -f "$XWING_WORKBENCH/X-Wing.info" ] || { echo "not an installed drawer: $XWING_WORKBENCH"; exit 1; }
+  WB="$DH0/WBStartup"; rm -rf "$WB" "$DH1"; mkdir -p "$WB" "$DH1"
+  BOOT=(--floppy_drive_0="$WORKBENCH_ADF" --hard_drive_0_priority=10)
+  printf '%s\n' 'DH0:c/SetPatch QUIET' 'DF0:C/Assign C: DF0:C' 'Assign LIBS: DF0:Libs' \
+    'MakeDir RAM:ENV' 'Assign ENV: RAM:ENV' 'LoadWB' 'EndCLI >NIL:' > "$DH0/s/startup-sequence"
+  cp -f "$SETPATCH" "$DH0/c/SetPatch"
+  cp -f "$XWING_WORKBENCH/X-Wing.info" "$WB/"
+  rsync -a "$SOURCE/" "$WB/data/"
+  # Workbench names the process after the default tool as the icon writes it (MEASURED:
+  # "X-Wing" never matched and no breakpoint hit).
+  TRIGGER=data/X-Wing
+else
+  rm -rf "$DH0/WBStartup"; BOOT=()
+  # Do not simplify to `dh1:XWing`: with the path form gdb resolves symbols
+  # against the wrong base and no breakpoint is ever hit (Rescue on Fractalus).
+  printf 'C:SetPatch QUIET\ncd dh1:\nXWing %s\n' "${XWING_ARGS:-}" > "$DH0/s/startup-sequence"
+  cp -f "$SETPATCH" "$DH0/c/SetPatch"
+  rsync -a --delete "$SOURCE/" "$DH1/"
+  # XWING_SEED_DIR: files a milestone finds beside the installation (tools/seeds.py),
+  # their modification times kept.
+  if [ -n "${XWING_SEED_DIR:-}" ]; then
+      for f in "$XWING_SEED_DIR"/*; do [ -f "$f" ] && cp -p "$f" "$DH1/"; done
+  fi
+  # The program goes on the boot volume's C:, run by name as before (run.sh): the game
+  # directory stays the guest's C:\XWING entry for entry (its find-first scans
+  # count the entries).
+  cp -f "${3:-out/XWing.exe}" "$DH0/c/XWing" || exit 1
 fi
-# The program goes on the boot volume's C:, run by name as before (run.sh): the game
-# directory stays the guest's C:\XWING entry for entry (its find-first scans
-# count the entries).
-cp -f "${3:-out/XWing.exe}" "$DH0/c/XWing" || exit 1
 rm -f "$RUN"/state/*.uss
 
 fsuae_claim_port || exit 1
@@ -49,9 +73,9 @@ KICKSTART="$ROM" AMIGA_MODEL=A1200 CPU="${CPU:-${AMIGA_CPU:-}}" DEBUG=1
 CHIP_KB=2048 FAST_KB="${FAST_KB:-${FAST_MEMORY:-8192}}"
 fsuae_options
 FSUAE_LOG="$RUN/fsuae-dbg.log" fsuae_launch \
-  --hard_drive_0="$DH0" --hard_drive_1="$DH1" \
+  --hard_drive_0="$DH0" --hard_drive_1="$DH1" ${BOOT[@]+"${BOOT[@]}"} \
   --window_width=720 --window_height=568 \
-  --remote_debugger_trigger=XWing --state_dir="$RUN/state"
+  --remote_debugger_trigger="$TRIGGER" --state_dir="$RUN/state"
 
 for i in $(seq 1 60); do
   kill -0 "$FSUAE_PID" 2>/dev/null || { echo "FS-UAE exited early; see $RUN/fsuae-dbg.log"; exit 1; }
