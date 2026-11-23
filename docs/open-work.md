@@ -45,14 +45,10 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    - the sprite decoder FRONTEND 1B58:007A, about 34%: its runs of a few bytes each pay a
      REP STOSW or REP MOVSW setup, and its reads of sprite data in the EMS frame are
      guarded (`annotations/ems-ds.csv`, the sprite blitters; 114,731 `rt_ems_ds` calls).
-   `tools/profile_report.py` refused the capture (one field 1.17% unaccounted, over its 1%;
-   0.08% over the window) and does not know `ADLIB_W.IMS`'s label prefix `AW`.
    The steps, the biggest priced win first (the order agreed with the owner 2026-11-23).
    Each is one commit with its meter and frames figures; below about 5% the frames fixture
    cannot resolve a step and the meter decides.
-   3. Instruments. `profile_report.py` knows the `AW` prefix and applies its 1% bound to
-      the window, reporting the worst field (needs the owner's OK: AmigaXDev's method
-      rule). The film is re-profiled for the costs only the Amiga has: C2P, the present
+   3. Instruments. The film is re-profiled for the costs only the Amiga has: C2P, the present
       and the FM render. The reference's own frame interval in the film and the intro is
       the ceiling. An intro frames fixture over the Star Destroyer scene and an intro meter
       window (which milestone: the owner's choice).

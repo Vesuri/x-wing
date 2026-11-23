@@ -25,15 +25,16 @@ import subprocess
 
 import numpy as np
 
-PREFIX = {"R": "XWING.EXE", "FE": "FRONTEND.OVL", "FLT": "FLIGHT.OVL", "AD": "ADLIB.IMS"}  # emit.TAG
-GUEST = re.compile(r"^(R|FE|FLT|AD)_([0-9A-F]{5})(\w*)$")
+PREFIX = {"R": "XWING.EXE", "FE": "FRONTEND.OVL", "FLT": "FLIGHT.OVL", "AD": "ADLIB.IMS",
+          "AW": "ADLIB_W.IMS"}  # emit.TAG
+GUEST = re.compile(r"^(R|FE|FLT|AD|AW)_([0-9A-F]{5})(\w*)$")
 # labels inside their instruction X: after a poll point (emit.poll), a segment
 # check, CS store hook, far push (R29), repeated segment load (R30), stack run
 # (R31, reuse.stack_runs) or string direction join (lower.py)
 INSIDE = re.compile(r"_(np|sr\d+|hr\d+|pr\d+|gr\d+|kr\d+|rr\d+|er\d+|et\d+|dr\d+|dz\d+|dfend|dfback|"
                     r"dispatchend)$")
 # return-check trampolines (translator/emit.py mismatch_stub): generated code
-TRAMPOLINE = re.compile(r"^(R|FE|FLT|AD)_rm\d+$")
+TRAMPOLINE = re.compile(r"^(R|FE|FLT|AD|AW)_rm\d+$")
 DEFAULT_GEN = Path(__file__).resolve().parents[1] / "build/gen"
 IRQ_MARKER = 0x7FFFFFFF
 OUTSIDE = 0x7FFFFFFE     # absolute PC below the first hunk (native build)
@@ -78,6 +79,7 @@ def decode(path):
         skip(word())
     clock, unit = word(), word()
     out = []
+    worst = (0.0, -1)                   # (unrecorded share, field)
     for f in range(fields):
         skip(word())                        # custom registers
         skip(word())                        # AGA
@@ -104,17 +106,24 @@ def decode(path):
         pcs, cost = hunk_relative(pcs, sections[0] if sections else 0), np.array(cost, dtype=np.int64)
         # The cycle-exact 68030 (a1200-030) leaves up to a few thousand cycles of a
         # field to no record (MEASURED: 0.10% of a 100-field capture, at most 0.35% of
-        # a field, never more than the field): accept 1%, report the rest.
+        # a field; the intro's, 0.08% of the window, 1.17% of one field): accept 1% of
+        # the window (owner decision 2026-11-23), report the worst field; a field
+        # accounted beyond its cycles is refused.
         short = cycles - int(cost.sum())
-        if short < -max(100, cycles // 1000) or short > max(100, cycles // 100):
+        if short < -max(100, cycles // 1000):
             raise ValueError(f"field {f}: accounted {cost.sum()} vs {cycles}")
+        worst = max(worst, (short / max(cycles, 1), f))
         out.append((cycles, idle, pcs, cost))
         size = word()
         word()                              # screenshot kind
         skip(size)
     if pos != len(raw):
         raise ValueError("trailing data")
-    return dict(fields=out, sections=sections, clock=clock, unit=unit)
+    window = sum(c for c, *_ in out)
+    unrecorded = window - sum(int(c.sum()) for *_, c in out)
+    if unrecorded > max(100, window // 100):
+        raise ValueError(f"window: {unrecorded} of {window} cycles unrecorded, over 1%")
+    return dict(fields=out, sections=sections, clock=clock, unit=unit, worst=worst)
 
 
 def symbols(objdump, elf):
@@ -257,7 +266,8 @@ def main():
     pct = lambda c: f"{100 * c / total:6.2f}%"
     fields_total = sum(c for c, _ in field_cycles)
     print(f"unaccounted: {fields_total - total:,} of {fields_total:,} field cycles "
-          f"({100 * (fields_total - total) / max(fields_total, 1):.2f}%)")
+          f"({100 * (fields_total - total) / max(fields_total, 1):.2f}%); worst field "
+          f"{prof['worst'][1]} {100 * prof['worst'][0]:.2f}%")
     print(f"{len(field_cycles)} PAL fields, {total:,} cycle units "
           f"(clock {prof['clock']}, unit {prof['unit']}); idle per field "
           f"{sum(i for _, i in field_cycles) / len(field_cycles):,.0f}")

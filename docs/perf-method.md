@@ -50,7 +50,10 @@ hold the reasons behind them. The steps and their gate are in the
     deleted after the report.
 - **Profile report** (`tools/profile_report.py CAPTURE ELF`): class, module, guest routine
   and instruction, and runtime shares of a `monitor profile` capture. The cycle-exact 68030
-  leaves up to 1% of a field to no record. That is reported, and anything more is refused.
+  leaves a few thousand cycles of a field to no record (the intro's capture: 1.17% of one
+  field, 0.08% of the window). More than 1% of the window is refused, as is a field
+  accounted beyond its cycles; the report prints the window's share and the worst field
+  (owner decision 2026-11-23). It knows the Sound Blaster build's label prefix `AW`.
 - **Lowering cost** (`tools/lowering_cost.py`) and **call tree** (`tools/profile_tree.py`):
   per x86 form and per routine, inclusive.
 
