@@ -35,11 +35,11 @@ slv_CurrentDir dc.b "data",0
 slv_name dc.b "X-Wing",0
 slv_copy dc.b "1993 LucasArts",0
 slv_info dc.b "Amiga port by Vesuri",10
-        dc.b "Version 0.2 (22.11.2026)",10
+        dc.b "Version 0.2 (23.11.2026)",10
         dc.b "Early alpha",10
         dc.b "Help quits",0
 slv_config dc.b 0                 ; no Custom options
-        dc.b "$VER: X-Wing.slave 0.2 (22.11.2026)",0
+        dc.b "$VER: X-Wing.slave 0.2 (23.11.2026)",0
 _program dc.b "X-Wing",0
 _args_tail dc.b 10,0
         EVEN

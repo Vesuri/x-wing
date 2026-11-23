@@ -15,7 +15,7 @@ is described in [whdload.md](whdload.md).
 
 - **Version:**
   - `VERSION` holds `0.2`.
-  - The literal version and date 22.11.2026 appear in the game's `$VER`
+  - The literal version and date 23.11.2026 appear in the game's `$VER`
     (`src/platform/amiga/version.s`), in the slave's `slv_info` and `$VER`, in the helper's
     `$VER` (`tools/install-data/install_config.h`), in `Install`'s `$VER` and in the ReadMe's
     History.
@@ -37,7 +37,7 @@ is described in [whdload.md](whdload.md).
     `ReadMe.info` and `LICENSE.LGPL.txt`, under `X-Wing Install/` with the drawer icon.
     User-visible names keep the dash (owner, 2026-11-22); the build outputs keep theirs.
   - It packs them with AmigaXDev's `amigaxdev.release`: LH5, level-0 headers, sorted
-    members and the DOS stamp of 22.11.2026. `tools/_amigaxdev.py` checks the module against
+    members and the DOS stamp of 23.11.2026. `tools/_amigaxdev.py` checks the module against
     `manifest/mac-helpers.sha256`.
   - It refuses any member whose SHA-256 is an original's: the five volumes in
     `release/originals.sha256`, and every manifest that pins original material.

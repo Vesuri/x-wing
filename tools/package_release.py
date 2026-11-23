@@ -21,7 +21,7 @@ ORIGINAL_LISTS = ['release/originals.sha256'] + [f'manifest/{n}.sha256' for n in
 ORIGINAL_HASHES = {line.split()[0] for name in ORIGINAL_LISTS
                    for line in (ROOT / name).read_text().splitlines() if line.strip()}
 PREFIX = 'X-Wing Install'
-STAMP = release.dos_stamp(2026, 11, 22)
+STAMP = release.dos_stamp(2026, 11, 23)
 ICONS = ROOT / 'release/icons'
 
 

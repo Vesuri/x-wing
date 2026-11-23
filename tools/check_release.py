@@ -18,8 +18,8 @@ import subprocess
 from pathlib import Path
 from package_release import ORIGINAL_HASHES, PREFIX, ROOT, crc16, members
 
-DATE = '22.11.2026'
-STAMP = (((2026 - 1980) << 9) | (11 << 5) | 22) << 16
+DATE = '23.11.2026'
+STAMP = (((2026 - 1980) << 9) | (11 << 5) | 23) << 16
 INSTALL = Path(os.environ.get('XWING_REFERENCE', ROOT / 'tmp/dos/configured-sb/XWING'))
 IMAGES = Path(os.environ.get('XWING_IMAGES', ROOT / 'tmp/dos/disks'))
 SIZE = 64

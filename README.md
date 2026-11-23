@@ -11,7 +11,7 @@ original's VGA version (320×200, 256 colours) on AGA, set up as on a PC with a 
 Blaster: its AdLib music and sound effects are resynthesised on Paula, and its digitized
 speech plays on Paula.
 
-Current Amiga release: **0.2 (22.11.2026), an early alpha**.
+Current Amiga release: **0.2 (23.11.2026), an early alpha**.
 
 ## What to expect from 0.2
 
