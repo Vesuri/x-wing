@@ -23,6 +23,7 @@ break amiga_start_return
 commands
   silent
   printf "XWING_PROGRAM_RETURNED %d\n", *(int *)($sp+4)
+  printf "TICKS counted %u posted %u\n", rt_irq_counted, amiga_ticks
   detach
   quit 0
 end

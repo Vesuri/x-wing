@@ -291,6 +291,8 @@ uint32_t rt_int_c(uint32_t d6, uint32_t ip)
 /* Hardware interrupts posted by the platform (vector 08h tick, 09h key make,
  * 89h key break), taken in order at poll points while the guest has IF set. */
 volatile uint8_t rt_irq_ring[RT_IRQ_RING];
+volatile uint16_t rt_irq_more[RT_IRQ_RING];    /* runtime.h: ticks counted onto an 08h entry */
+volatile uint32_t rt_irq_counted;               /* ticks counted onto an entry (fixtures) */
 volatile uint8_t rt_irq_tail;
 volatile uint8_t rt_irq_pending;
 static uint8_t irq_head;
@@ -302,6 +304,21 @@ static uint8_t irq7_head;           /* IRQ 7 takes */
 static int irq_posted(void)
 {
     return irq_head != rt_irq_tail || (irq7_head != rt_irq7_tail && !rt_pic_masked(7));
+}
+
+/* The oldest posted vector, taken: a tick entry with ticks counted onto it
+ * gives one of them and stays (runtime.h rt_irq_more). Only the head entry is
+ * read here, which rt_irq_post never counts onto. */
+static uint8_t irq_take(void)
+{
+    uint8_t slot = irq_head % RT_IRQ_RING;
+    uint8_t vector = rt_irq_ring[slot];
+    if (vector == 8 && rt_irq_more[slot]) {
+        --rt_irq_more[slot];
+    } else {
+        ++irq_head;
+    }
+    return vector;
 }
 
 /* 22Eh read: a raised IRQ 7 not yet taken is lowered, and the DSP state it
@@ -398,7 +415,7 @@ uint32_t rt_irq_c(uint32_t d6, uint32_t ip)
     while (G_IF && !rt_irq0_running && irq_posted()) {
         uint8_t irq = 0x0f;         /* IRQ 7 after the ring (runtime.h) */
         if (irq_head != rt_irq_tail) {
-            irq = rt_irq_ring[irq_head++ % RT_IRQ_RING];
+            irq = irq_take();
         } else {
             ++irq7_head;
         }
@@ -499,7 +516,7 @@ int rt_irq0_bios_tick(void)
         return 0;
     }
     while (irq_head != rt_irq_tail && rt_irq_ring[irq_head % RT_IRQ_RING] == 8) {
-        ++irq_head;
+        irq_take();
         bios_tick();
         ++rt_irq0_bios;
     }
@@ -522,20 +539,26 @@ int rt_irq0_take(void)
             rt_irq_ring[irq_head % RT_IRQ_RING] != 8) {
         return 0;
     }
-    ++irq_head;
+    irq_take();
     rt_irq_pending = irq_posted();
     return 1;
 }
 
 void rt_irq_post(uint8_t vector)
 {
-    if ((uint8_t)(rt_irq_tail - irq_head) >= RT_IRQ_RING) {
+    uint8_t last = (uint8_t)(rt_irq_tail - 1) % RT_IRQ_RING;
+    if (vector == 8 && (uint8_t)(rt_irq_tail - irq_head) >= 2 && rt_irq_ring[last] == 8 &&
+            rt_irq_more[last] != 0xffff) {
+        ++rt_irq_more[last];        /* counted onto the newest tick, not yet the head */
+        ++rt_irq_counted;
+    } else if ((uint8_t)(rt_irq_tail - irq_head) >= RT_IRQ_RING) {
         if (!irq_stop_what) {       /* raised by rt_irq_c at the next poll */
             irq_stop_what = "hardware interrupt posted to a full ring (vector, head)";
             irq_stop_a = vector;
             irq_stop_b = irq_head;
         }
     } else {
+        rt_irq_more[rt_irq_tail % RT_IRQ_RING] = 0;
         rt_irq_ring[rt_irq_tail % RT_IRQ_RING] = vector;
         ++rt_irq_tail;
     }
@@ -749,6 +772,7 @@ int rt_machine_fields(rt_field_fn *f, void *ctx, int saving)
     f(ctx, "machine.deliver_cs", &rt_deliver_cs, sizeof rt_deliver_cs);
     f(ctx, "machine.deliver_ip", &rt_deliver_ip, sizeof rt_deliver_ip);
     f(ctx, "machine.irq_ring", rt_irq_ring, sizeof rt_irq_ring);
+    f(ctx, "machine.irq_more", (void *)rt_irq_more, sizeof rt_irq_more);
     f(ctx, "machine.irq_tail", &rt_irq_tail, sizeof rt_irq_tail);
     f(ctx, "machine.irq_head", &irq_head, sizeof irq_head);
     f(ctx, "machine.irq_pending", &rt_irq_pending, sizeof rt_irq_pending);

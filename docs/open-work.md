@@ -87,20 +87,12 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    correspondence table against the DOS routines.
 3. P9's gate 8 ([port plan](port-plan.md#p9-release-gate-8)), after P8. The CPU matrix
    passes under WHDLoad ([WHDLoad](whdload.md#tests)). Still open:
-   - a full interrupt ring stops the game while a long service blocks: a second
-     `make test-save-exit` run stopped with "hardware interrupt posted to a full ring"
-     after the pilot was saved (MEASURED), the first passed. The 32-entry ring fills in
-     about 0.1 s at about 6.6 ticks a field (DERIVED from the reference's 33 ticks in
-     five fields) while a runtime service holds the ticks (`rt_irq_mask`). The fix
-     (owner decision 2026-11-23, `docs/design.md`): consecutive ticks share one ring
-     entry with a count. Its validation is the host lockstep and the Amiga replay;
-     acceptance: repeated `make test-save-exit` passes;
    - WHDLoad on 8 MB Fast: the slave reserves 8.5 MiB of ExpMem, and on 8 MiB of Zorro II
      WHDLoad refuses it with DOS error 103 ([WHDLoad](whdload.md#memory));
    - Fast RAM in flight, where the measured low-water marks do not reach;
    - the minimum Fast RAM without WHDLoad;
-   - save and exit: `make test-save-exit` ([release](release.md)), reliable once the ring
-     above is fixed; the input scenarios (`KEYS` feeds `Input.cpp`, not the hardware);
+   - the input scenarios (`KEYS` feeds `Input.cpp`, not the hardware); save and exit
+     pass (`make test-save-exit`, [release](release.md));
    - speech in flight on the Amiga: blocks from the EMS page frame (m14) are played only
      by hand, as the Amiga replays refuse Sound Blaster blocks;
    - a real-hardware pass.

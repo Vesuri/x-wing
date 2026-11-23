@@ -88,8 +88,9 @@ is described in [whdload.md](whdload.md).
     does. It must reach m16's exit point (the INT 21h at XWING.EXE+1660), `plat_exit`
     with the reference's exit code 3 (AX 4C03h, MEASURED) and the program's return of 0
     to the Shell. The `LUKE.PLT` it wrote must equal the reference's m06 file
-    (`manifest/milestones.sha256`). MEASURED on 2026-11-23: one run passed; a second
-    stopped after the save with a full interrupt ring (open work).
+    (`manifest/milestones.sha256`). It prints the ticks counted onto a ring entry
+    (`rt_irq_counted`) and posted. MEASURED on 2026-11-23 with the counted ring: two runs
+    passed, with 1,938 and 1,947 ticks counted of about 21,650 posted.
 - **Make:**
   - `make release` refuses a tree with uncommitted changes. It builds the release image,
     the slaves and the helper, then packages and audits `dist/X-Wing-$(cat VERSION).lha`

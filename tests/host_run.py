@@ -1099,6 +1099,8 @@ class Host:
 
     def post(self, vector: int) -> None:
         tail = self.mem(self.syms["rt_irq_tail"], 1)[0]
+        # appended, never counted onto (machine.c rt_irq_post): its count 0
+        self.e.write(self.syms["rt_irq_more"] + tail % 32 * 2, b"\0\0")
         self.e.write(self.syms["rt_irq_ring"] + tail % 32, bytes([vector]))
         self.e.write(self.syms["rt_irq_tail"], bytes([(tail + 1) & 0xFF]))
         self.e.write(self.syms["rt_irq_pending"], b"\1")  # RT_RAISE_IRQ

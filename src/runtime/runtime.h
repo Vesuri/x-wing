@@ -199,6 +199,14 @@ uint16_t rt_psp(void);
  * rt_set_flags_word), so G_IRQ is never set without rt_irq_pending. */
 #define RT_IRQ_RING 32
 extern volatile uint8_t rt_irq_ring[RT_IRQ_RING];
+/* Ticks during a long service (owner decision 2026-11-23, docs/design.md): a
+ * tick posted while the newest entry is a tick the guest has not reached yet
+ * (not the head) is counted onto it, so a run of ticks takes two entries and
+ * every tick is delivered in order; the head's count is the takers' only
+ * (machine.c irq_take), the newest entry's the poster's, so neither needs
+ * interrupts disabled. An entry appended has its count 0. */
+extern volatile uint16_t rt_irq_more[RT_IRQ_RING];
+extern volatile uint32_t rt_irq_counted;    /* ticks counted onto an entry (fixtures) */
 extern volatile uint8_t rt_irq_tail;
 extern volatile uint8_t rt_irq_pending;
 #define RT_RAISE_IRQ() (rt_irq_pending = 1, *(volatile uint8_t *)&G_IRQ = 1)

@@ -845,7 +845,13 @@ drives the card. The AdLib build's generated code is unchanged by it.
   IRQ 7 is posted outside the ring (`runtime.h` `rt_irq7_tail`): a pending one holds no
   CIA tick, and a poll point takes it after the posted ring, IRQ0 and IRQ1 being the
   PIC's higher priorities. In the ring, 33 ticks posted behind it overwrote it (MEASURED);
-  a post to a full ring is now a stop at the next poll point (`rt_irq_post`).
+  a post to a full ring is now a stop at the next poll point (`rt_irq_post`). An IRQ0 tick
+  posted behind another, while the consumer has not reached it, is counted onto that
+  entry instead (`rt_irq_more`, owner decision 2026-11-23): a runtime service that holds
+  the ticks for longer than the ring's 32 entries no longer fills it, and every tick is
+  still delivered in order. The producer counts only onto an entry the consumer is not
+  taking (tail − 1 ≠ head), and the consumer touches only the head entry, so neither
+  masks interrupts.
 - Checks: host lockstep against the Sound Blaster references (`tools/reference.py --polls
   --sb`, then `XWING_DRIVER=ADLIB_W.IMS python3 tests/host_run.py`): every DSP status
   read against `trace/dsp-status.csv`, its value differing only by the device's timing

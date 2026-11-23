@@ -82,7 +82,9 @@ def main() -> int:
     got = hashlib.sha256(saved.read_bytes()).hexdigest() if saved.exists() else "missing"
     shutil.rmtree(run, ignore_errors=True)
     signals = [x for x in lines if x.startswith("XWING_")]
-    res = {"exe": str(args.exe), "cpu": args.cpu, "signals": signals, "pilot": got, "pilot_reference": want}
+    ticks = next((x for x in lines if x.startswith("TICKS ")), "")
+    res = {"exe": str(args.exe), "cpu": args.cpu, "signals": signals, "ticks": ticks,
+           "pilot": got, "pilot_reference": want}
     (out / "result.json").write_text(json.dumps(res, indent=1) + "\n")
     names = [x.split()[0] for x in signals]
     problems = []
@@ -98,6 +100,7 @@ def main() -> int:
         print("\n".join(lines[-15:]))
         sys.exit("FAIL: " + "; ".join(problems))
     print(f"save and exit: {signals[0]}, exit code {EXIT_CODE} as the reference, returned 0; {PILOT} equals the reference's (m06)")
+    print(ticks.lower().replace("ticks", "ticks:", 1))   # counted onto a ring entry, of all posted
     print("XWING_SAVE_EXIT_OK")
     return 0
 
