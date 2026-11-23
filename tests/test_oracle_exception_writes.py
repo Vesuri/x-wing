@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 import x86_diff as X
 
+UC_ERR_WRITE_UNMAPPED = 7   # unicorn.h
+
 
 class ExceptionWrites(unittest.TestCase):
     def setUp(self):
@@ -63,6 +65,22 @@ class ExceptionWrites(unittest.TestCase):
         self.check_fault('f6f1', 1, {}, fault_ip=0x100)
         self.test_ordinary_write()
 
+    def test_unmapped_store_is_an_error(self):
+        # mov [bx], al; then an address-size store, mov word [200000h], 1234h:
+        # DS*16 + 200000h lies past the mapped RAM. The run's result is the
+        # error, with the first store's byte; the reopened engine holds the
+        # background.
+        err, out, flags, mem, ints, ports, writes = self.run_code('880767c705000020003412', 2)
+        self.assertEqual((err, ints, ports), (UC_ERR_WRITE_UNMAPPED, [], []))
+        self.assertEqual(out, dict(self.regs, ip=0x102))
+        self.assertEqual(mem, {0x30200: 0x5a})
+        self.assertEqual(writes, {0x30200}, 'unmapped store recorded as a write')
+        self.assertEqual(self.oracle.e.read(0, X.RAM), self.background)
+
+    def test_unmapped_store_does_not_leak_into_next_case(self):
+        self.test_unmapped_store_is_an_error()
+        self.test_ordinary_write()
+
 
 def run_suite():
     return unittest.TextTestRunner(verbosity=2).run(
@@ -90,3 +108,11 @@ if __name__ == '__main__':
         assert all('exception discarded write ownership' in message
                    for _, message in broken.failures)
         print('sabotage: exception write-record loss caught by all three write controls')
+
+        # The unmapped store's bytes recorded as writes again: reading them back crashes.
+        with patch.object(X.Oracle, 'MAPPED', 1 << 64):
+            broken = run_suite()
+        assert not broken.failures
+        assert len(broken.errors) == 2
+        assert all('UC_ERR_READ_UNMAPPED' in message for _, message in broken.errors)
+        print('sabotage: unmapped store recorded as a write caught by both unmapped controls')

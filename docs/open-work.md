@@ -88,19 +88,14 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
 
    Steps 5–11 may bring the film to about 230–260 ms (INFERRED). 100 ms needs about 7
    model cycles per guest instruction against 14.8 now, so step 12 carries the rest.
-2. The x86 oracle under the cell-walk tests (`tests/x86_diff.py` Oracle.run): with
-   `--seed 7` a walk case's x86 store faults at an unmapped address and the oracle then
-   reads its recorded writes back, raising UC_ERR_READ_UNMAPPED (the same at P4's commit).
-   Acceptance: `tests/m68k_blocks.py` completes for seeds 1–8; a faulting store is
-   compared as an exception, not a crash.
-3. Postponed (owner decision 2026-11-04) until P8 takes a donor (item 1, step 12; the
+2. Postponed (owner decision 2026-11-04) until P8 takes a donor (item 1, step 12; the
    survey is step 4): make the Macintosh reference reach named milestones and map its
    68k CODE.
    Acceptance: a bounded run reaches a positively identified game state by guest state,
    writes a framebuffer read from video memory and a trap log, and reproduces their pinned
    hashes. The CODE resources are classified and the trap surface inventoried, ready for a
    correspondence table against the DOS routines.
-4. P9's gate 8 ([port plan](port-plan.md#p9-release-gate-8)), after P8. The CPU matrix
+3. P9's gate 8 ([port plan](port-plan.md#p9-release-gate-8)), after P8. The CPU matrix
    passes under WHDLoad ([WHDLoad](whdload.md#tests)). Still open:
    - a full interrupt ring stops the game while a long service blocks: a second
      `make test-save-exit` run stopped with "hardware interrupt posted to a full ring"

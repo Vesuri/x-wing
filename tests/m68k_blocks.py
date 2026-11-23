@@ -332,6 +332,8 @@ def walks(p: emit.Program, h, m, addr, stop_names, cases: int,
         mo, mf, mfx, mmem, mouts, mwrites, info = m.run(
             addr[wl + entry], case, h.rng, init={"d7": ip}, irq=False)
         diffs = []
+        if err:     # an edge case's error returned above; here the walk must run
+            diffs.append(f"x86 error {err}")
         if info["err"] or info["stop"] != want:
             diffs.append(f"stop {info['stop']} err {info['err']}")
         diffs += info["irq"]
@@ -901,6 +903,8 @@ def main(argv=None, on_batch=None) -> int:
                         stop = x
                         break
             diffs = []
+            if err:
+                diffs.append(f"x86 error {err}")
             if expected is not None and stop != expected:
                 diffs.append(f"required entry {expected}, reached {stop}")
             if info["err"]:

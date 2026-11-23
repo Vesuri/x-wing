@@ -100,7 +100,15 @@ def store_retry(addr, previous, attempted, before, now):
 class Oracle:
     """Unicorn x86-16. Its interrupt hook skips QEMU's exception delivery, so
     `old_exception` stays set and the next exception becomes #DF (8), then a
-    silent triple fault: the engine is reopened after every exception."""
+    silent triple fault: the engine is reopened after every exception, and
+    after every Unicorn error.
+
+    A store outside the mapped RAM (an address-size prefix's offset past FFFFh;
+    QEMU checks no real-mode limit) ends the run with UC_ERR_WRITE_UNMAPPED. Its
+    bytes are not recorded as writes, as there is nothing to read back: the
+    run's result is that error, which the comparison reports."""
+
+    MAPPED = RAM    # the write hook records stores below this address
 
     def __init__(self, background: bytes):
         self.bg = background
@@ -141,7 +149,7 @@ class Oracle:
         @U.MEM_CB
         def write(h, kind, addr, size, value, user):
             self.attempted = True
-            self.writes.update(range(addr, addr + size))
+            self.writes.update(range(addr, min(addr + size, self.MAPPED)))
             return True
 
         self.callbacks = ((U.HOOK_CODE, code), (U.HOOK_INTR, intr),
@@ -207,7 +215,7 @@ class Oracle:
         fl = self.e.reg_read(U.X86["flags"])
         mem = {a: self.e.read(a, 1)[0] for a in self.writes}
         writes = set(self.writes)  # completed run, independent of engine reset
-        if self.ints and self.ints[0] in EXCEPTIONS:
+        if err or self.ints and self.ints[0] in EXCEPTIONS:
             self.open()
             self.writes = set()  # fresh engine holds the background
         return err, out, fl, mem, list(self.ints), list(self.outs), writes
