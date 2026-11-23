@@ -710,8 +710,13 @@ Effects are prerendered (owner decision 2026-11-15), as Secret Weapons of the Lu
 (its `docs/sound-plan.md`). In place:
 - Capture (`src/runtime/sfx.c`, HLE `sfx_prerender`, observe only): at the return of
   FLIGHT's sound loader (`FLIGHT.OVL+19977`, AX the effects registered from id 4), the
-  runtime saves the driver's 7760h bytes, holds the tick, and per effect runs the
-  driver's own commands and timer handler as `tools/sfx_capture.py` describes. Its
+  runtime saves the driver's memory (its image and minimum allocation: 7760h bytes for
+  `ADLIB.IMS`, 87D0h for `ADLIB_W.IMS`), holds the tick, and per effect runs the
+  driver's own commands and timer handler as `tools/sfx_capture.py` describes. The
+  driver's layout (its handler, DS, sound table, queue, players, voices and OPL shadow)
+  is the build's driver's, read from its own code by the translator
+  (`translator/driver.py` `CAPTURE`, each value at an instruction the two drivers share,
+  emitted as `driver_layout`), for the runtime and the oracle alike. Its
   writes go to `rt_sfx_capture` (`rt_out8` while `rt_sfx_capturing`), not the chip;
   then the driver's memory and the OPL index are restored. MEASURED (the m13 reference
   snapshot under Unicorn): 34 effects, ids 4–37, from 13 to 696 writes; 32 end within
@@ -738,8 +743,11 @@ Effects are prerendered (owner decision 2026-11-15), as Secret Weapons of the Lu
   `tools/sfx_capture.py` run from the guest RAM at the hook, and the guest's RAM (the
   private stack aside), state block, registers and OPL index at the capture's return
   equal to the hook's; the run ends there. The harness's own replays (interrupts,
-  polls, REP slices, ports, EMS stores) are suspended while the capture runs. The
-  capture is saved, and `t-sab-sfx-capture` plants a tick, a value, an end and a guest
+  polls, REP slices, ports, EMS stores) are suspended while the capture runs, and the
+  model answers DSP status reads. Of the Sound Blaster's, DMA's and the PIC mask's
+  ports the capture may touch only the DSP: `ADLIB_W.IMS`'s stop all turns the speaker
+  off (D3h, one per id), which `rt_sfx_prerender` restores; the check turns the speaker
+  on at the capture's start and requires it on at the return. The capture is saved, and `t-sab-sfx-capture` plants a tick, a value, an end and a guest
   byte left changed on it, without a host run. MEASURED: 34 ids, 6,394 writes, ids 31
   and 32 without an end, all equal; a run with the capture on to m12 matched the
   reference (40,066,706 services, 31,703 interrupts and 20,651 OPL writes equal).
@@ -793,8 +801,20 @@ drives the card. The AdLib build's generated code is unchanged by it.
   `sblaster.cpp` restarts the count with the new length and drops the old end; reached on
   the 68030, where the intro's lines overlap).
   Status reads answer as the model stands; `plat_dsp_status` reports the device's timing.
-  A block's end posts IRQ 7 (vector 0Fh); `machine.c` stops on an IRQ 7 the PIC masks, or
-  with neither a block nor F2h pending. The IVT holds the reference BIOS's vectors 0Ah,
+  A block's end posts IRQ 7 (vector 0Fh); `machine.c` stops on one with neither a block
+  nor F2h pending. IRQ 7 is the reference's line (DERIVED: DOSBox-X's `sblaster.cpp`
+  `SB_RaiseIRQ` and its 22Eh read, `pic.cpp`): while 21h masks it a raise stays latched and
+  is taken once unmasked, and reading 22Eh lowers it, dropping a raise not yet taken
+  (`runtime.h` `rt_irq7_ack`). CT-VOICE's clip stop (`+0581C`) masks DMA channel 1 and
+  IRQ 7, then reads 22Eh, so a block that ends during a stop is never delivered. The port
+  takes interrupts at poll points only, so on the 68030 such an end could still be
+  untaken at the mask, which was a stop (MEASURED: "IRQ 7 while the PIC masks it" at
+  m08's door). `tests/host_run.py --sb-race` posts a block end after each clip pause
+  (D0h) of a milestone at the write that masks IRQ 7 (`+056AD`, IF clear): lockstep must
+  hold with no post left. A post at the pause itself is not this race: the driver sets IF
+  again before the mask, so the end is the original's to take, and lockstep then diverges.
+  Its control, `sb-race-late`, posts after the stop's 22Eh read, where the raise stays
+  latched and must fail the check. The IVT holds the reference BIOS's vectors 0Ah,
   0Bh, 0Dh and 0Fh, which the detection reads and restores.
 - Proof (`translator/irq.py`): the tick reaches CT-VOICE's far entry (`+05AE4`) through
   queued requests and the flight callback. Its calls through tables are `irq-hooks.csv`
@@ -848,7 +868,8 @@ drives the card. The AdLib build's generated code is unchanged by it.
   caught, and `song-requests` is at m07 (the front end's load into the song and voice
   buffer racing the handler's reads).
 - Play (`src/platform/amiga/sb_play.c`): `plat_sb_block` converts the block's bytes to
-  signed in one of two Chip blocks (`Audio.cpp`; a block in the EMS page frame stops),
+  signed in one of two Chip blocks (`Audio.cpp`; a block in the EMS page frame, which
+  flight plays from, has its frame pages copied in first: the m14 reference's E9741h),
   and the player plays it on Paula voice 3 (the effects take voices 0–2), in chunks of at
   most one Paula loop, at the rate's period, at full volume while the DSP's speaker is
   on, from the next field; a pause holds it, a continue restarts at the sample reached.

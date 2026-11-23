@@ -271,7 +271,12 @@ SFX_REPORT = r"""printf "XWING_SFX captures=%u capture_fields=%u fields=%u bytes
 dump binary memory @OUT@/sfx-starts.bin &rt_sfx_starts[0] &rt_sfx_starts[48]
 dump binary memory @OUT@/sfx-ticks.bin &rt_sfx_ticks[0] &rt_sfx_ticks[48]
 dump binary memory @OUT@/sfx-writes.bin &rt_sfx_writes[0] &rt_sfx_writes[48]"""
-DRV_DATA, DRV_PLAYERS, DRV_VOICES = 0x4D0, 0x6EA, 0x1ED2    # runtime sfx.c
+def _layout():
+    from translator import driver   # the build's driver layout, as sfx.c has it
+    return dict(driver.capture_layout())
+
+
+DRV_DATA, DRV_PLAYERS, DRV_VOICES = (_layout()[k] for k in ("DATA", "PLAYERS", "VOICES"))
 
 
 def sfx_problems(capture, lines):

@@ -143,6 +143,11 @@ extern const struct rt_dispatch_row dispatch_table[];
 extern const uint32_t load_segment;
 extern const uint32_t driver_segment;  /* the music driver (dos.c AX=4B03h) */
 extern const char driver_name[];       /* its file: ADLIB.IMS or ADLIB_W.IMS (translator image.DRIVER) */
+/* Its layout for the effect capture (sfx.c), read from its own code by the translator
+ * (translator/driver.py CAPTURE, in this order) */
+enum { RT_DRV_TIMER, RT_DRV_DATA, RT_DRV_DS_SLOT, RT_DRV_BIOS_COUNT, RT_DRV_TIMER_ACC, RT_DRV_SOUNDS,
+       RT_DRV_SHADOW, RT_DRV_QUEUE_HEAD, RT_DRV_QUEUE_TAIL, RT_DRV_PLAYERS, RT_DRV_VOICES, RT_DRV_BYTES };
+extern const uint16_t driver_layout[];
 extern const uint16_t irq0_async_handler[2];  /* CS, IP: the proved INT 08h handler */
 extern const uint32_t overlay_table;   /* descriptors, root image offset (machine.c) */
 
@@ -208,6 +213,15 @@ void rt_irq_post(uint8_t vector);
  * priorities (MEASURED: in the ring, 33 ticks posted behind it in five fields
  * overwrote it, the intro's first speech block). */
 extern volatile uint8_t rt_irq7_tail;
+/* The DSP's IRQ 7 as the reference's DOSBox-X raises it (DERIVED: sblaster.cpp
+ * SB_RaiseIRQ, the 22Eh read; pic.cpp): a raise latches at the PIC while 21h
+ * masks IRQ 7 and is taken once unmasked (ports.c rt_irq7_unmasked); reading
+ * 22Eh lowers it, dropping a raise not yet taken (rt_irq7_ack). ADLIB_W.IMS's
+ * clip stop (+0581C) masks DMA channel 1 and IRQ 7, then reads 22Eh: a block
+ * that ends during it is never delivered (MEASURED on the 68030: the end posted
+ * before the mask, still untaken at the next poll point). */
+void rt_irq7_ack(void);
+void rt_irq7_unmasked(void);
 void rt_bios_int08(void);
 /* Async IRQ0 (Secret Weapons of the Luftwaffe's docs/irq-plan.md I6): the platform's tick interrupt calls
  * rt_irq_interrupt (rt_entry.s) when rt_irq0_ready, else posts vector 08h;

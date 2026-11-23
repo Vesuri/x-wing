@@ -297,10 +297,35 @@ static uint8_t irq_head;
 volatile uint8_t rt_irq7_tail;      /* runtime.h: IRQ 7 posts */
 static uint8_t irq7_head;           /* IRQ 7 takes */
 
-/* Something posted, in the ring or IRQ 7. */
+/* Something posted the guest can take: in the ring, or IRQ 7 unmasked (a
+ * masked one stays latched, runtime.h rt_irq7_ack). */
 static int irq_posted(void)
 {
-    return irq_head != rt_irq_tail || irq7_head != rt_irq7_tail;
+    return irq_head != rt_irq_tail || (irq7_head != rt_irq7_tail && !rt_pic_masked(7));
+}
+
+/* 22Eh read: a raised IRQ 7 not yet taken is lowered, and the DSP state it
+ * would have cleared at its delivery is cleared (rt_irq_c). */
+void rt_irq7_ack(void)
+{
+    uint8_t tail = rt_irq7_tail;
+    while (irq7_head != tail) {
+        ++irq7_head;
+        if (rt_sb_f2) {
+            rt_sb_f2 = 0;
+        } else {
+            rt_sb_playing = 0;
+        }
+    }
+    rt_irq_pending = irq_posted();
+}
+
+/* 21h unmasks IRQ 7: a latched raise is taken at the next poll point. */
+void rt_irq7_unmasked(void)
+{
+    if (irq7_head != rt_irq7_tail) {
+        RT_RAISE_IRQ();
+    }
 }
 
 #define BIOS_TICKS 0x46c
@@ -379,8 +404,8 @@ uint32_t rt_irq_c(uint32_t d6, uint32_t ip)
         }
         uint8_t vector = irq & 0x7f;
         if (vector == 0x0f) {       /* IRQ 7: DSP F2h, or a block ended (platform.h plat_sb_block) */
-            if (rt_pic_masked(7)) {
-                rt_stop("IRQ 7 while the PIC masks it (CS, IP)", cs, ip);
+            if (rt_pic_masked(7)) { /* irq_posted holds a masked IRQ 7 back */
+                rt_stop("IRQ 7 taken while the PIC masks it (CS, IP)", cs, ip);
             }
             if (rt_sb_f2) {
                 rt_sb_f2 = 0;

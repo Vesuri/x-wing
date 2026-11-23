@@ -92,3 +92,35 @@ def carry(off: int) -> int:
     same instruction (checked by same)."""
     same(off)
     return off
+
+
+# The effect capture's driver layout (src/runtime/sfx.c, tools/sfx_capture.py): each
+# value as ADLIB.IMS's instruction at the site names it; the selected driver's is read
+# from its own instruction there (value, checked by same). Order: runtime.h RT_DRV_*.
+CAPTURE = (
+    ("TIMER", 0x09DE, 0x0A1B),        # mov dx: the INT 08h handler's offset
+    ("DATA", 0x0BEF, 0x04D0),         # mov ax: DS, paragraphs above CS
+    ("DS_SLOT", 0x0916, 0x0911),      # CS word: the handler's DS
+    ("BIOS_COUNT", 0x0A2D, 0x0910),   # CS byte: ticks to the BIOS chain
+    ("TIMER_ACC", 0x0188, 0x0678),    # DS word: the game-timer accumulator
+    ("SOUNDS", 0x07C2, 0x06E2),       # DS far pointer: the game's sound table
+    ("SHADOW", 0x4BD2, 0x0342),       # DS: the OPL register shadow
+    ("QUEUE_HEAD", 0x29E4, 0x0EBE),   # DS words: the request queue's read and write index
+    ("QUEUE_TAIL", 0x29E1, 0x12C0),
+    ("PLAYERS", 0x0E8E, 0x06EA),      # DS: the 8 players
+    ("VOICES", 0x3F1E, 0x1ED2),       # DS: the 9 voices
+)
+
+
+def driver_bytes(name: str = DRIVER) -> int:
+    """The driver's image and minimum allocation, from its MZ header, in paragraphs' bytes."""
+    import struct
+    head = (image.M.REF / name).read_bytes()[:12]
+    last, pages, _, hdr, minalloc = struct.unpack_from("<HHHHH", head, 2)
+    size = pages * 512 - (512 - last if last else 0) - hdr * 16
+    return (size + minalloc * 16 + 15) & ~15
+
+
+def capture_layout() -> list[tuple[str, int]]:
+    """The capture's layout for the selected driver, in CAPTURE's order, then BYTES."""
+    return [(n, value(site, old)) for n, site, old in CAPTURE] + [("BYTES", driver_bytes())]

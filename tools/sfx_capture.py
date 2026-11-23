@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Each iMUSE sound's AdLib writes, alone, from the original music driver.
 
-The original ADLIB.IMS runs under Unicorn x86 from a memory image with the driver
+The original music driver of the build (XWING_DRIVER: ADLIB.IMS, or ADLIB_W.IMS, whose
+FM code is ADLIB.IMS's) runs under Unicorn x86 from a memory image with the driver
 initialised and its sound table holding the music and SFXADL.LFD's effects (default: the
-m13-mission-flight reference snapshot). Per id, from that image: stop all (command 0Bh),
+m13-mission-flight reference snapshot of that driver's machine). Its layout is read from
+its own code (translator/driver.py CAPTURE; ADLIB.IMS's values below). Per id, from that image: stop all (command 0Bh),
 start (08h) and set its group (10h, as FLIGHT.OVL+18A3C), then the driver's INT 08h
 handler at its PIT rate until status (0Dh) reads 0 or 8 s. The request queue is emptied
 first and, before each tick, the
@@ -39,18 +41,22 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "tests"))
+sys.path.insert(0, str(REPO))
 import uc as U  # noqa: E402
+from translator import driver as drv  # noqa: E402
 
 RUNS = REPO / "ref/dosbox/runs"
 OUT = REPO / "tmp/sound"
-ENTRY, TIMER = 0x0000, 0x0A1B       # ADLIB.IMS load-image offsets (docs/external-surface.md)
-DATA_PARA = 0x4D0                   # the driver's DS, paragraphs from its code (ADLIB.IMS+00BEF)
-DRIVER_BYTES = 0x7760               # its image and minimum allocation (MZ header: 5378h + 23Eh paragraphs)
-SOUNDS = 0x6E2                      # DS: far pointer to the game's sound table, id * 4
-SHADOW = 0x342                      # DS: the driver's OPL register shadow (ADLIB.IMS+04BD2)
-TIMER_ACC, BIOS_COUNT = 0x678, 0x910    # DS word: game-timer accumulator; CS byte: BIOS chain countdown
-DS_SLOT = 0x911                     # CS word: the handler's DS
-QUEUE_HEAD, QUEUE_TAIL = 0xEBE, 0x12C0  # DS words: the request queue's read and write index (+02B7D)
+DRIVER = drv.DRIVER
+_L = dict(drv.capture_layout())
+ENTRY, TIMER = 0x0000, _L["TIMER"]  # load-image offsets (ADLIB.IMS: 0A1Bh; docs/external-surface.md)
+DATA_PARA = _L["DATA"]              # the driver's DS, paragraphs from its code (ADLIB.IMS: 4D0h, +00BEF)
+DRIVER_BYTES = _L["BYTES"]          # its image and minimum allocation (MZ header; ADLIB.IMS: 7760h)
+SOUNDS = _L["SOUNDS"]               # DS: far pointer to the game's sound table, id * 4 (ADLIB.IMS: 6E2h)
+SHADOW = _L["SHADOW"]               # DS: the driver's OPL register shadow (ADLIB.IMS: 342h, +04BD2)
+TIMER_ACC, BIOS_COUNT = _L["TIMER_ACC"], _L["BIOS_COUNT"]  # DS word: game-timer accumulator; CS byte: BIOS chain countdown
+DS_SLOT = _L["DS_SLOT"]             # CS word: the handler's DS
+QUEUE_HEAD, QUEUE_TAIL = _L["QUEUE_HEAD"], _L["QUEUE_TAIL"]  # DS words: the request queue's read and write index
 FIRST_EFFECT = 4                    # ids from 4 are effects (FLIGHT.OVL+18A55)
 STACK_SS, STACK_SP = 0xB000, 0x8000  # runtime.h RT_IRQ_SS:RT_IRQ_SP
 STOP_ALL, START, STATUS, GROUP = 0x0B, 0x08, 0x0D, 0x10
@@ -62,8 +68,9 @@ RET_SEG = 0x0050                    # a free BIOS-data paragraph: the far return
 def find_snapshot(path: str | None) -> Path:
     if path:
         return Path(path)
+    sb = DRIVER == "ADLIB_W.IMS"     # the Sound Blaster machine's references are sb*
     for d in sorted(RUNS.glob("*-m13-mission-flight/trace/snap-m13-mission-flight-0")):
-        if (d / "ram.bin").exists():
+        if (d / "ram.bin").exists() and d.parts[-3].startswith("sb") == sb:
             return d
     raise SystemExit("no m13-mission-flight snapshot under ref/dosbox/runs: make dos-reference")
 
@@ -77,10 +84,10 @@ def snapshot_image(snap: Path) -> tuple[bytes, int, int, int]:
             if k in U.X86:
                 regs[k] = int(v, 16)
     for r in csv.reader((snap / "residency.csv").open()):
-        if r[2] == "ADLIB.IMS":
+        if r[2] == DRIVER:
             seg = int(r[0], 16) - int(r[3], 16) // 16
             return (snap / "ram.bin").read_bytes(), seg, regs["ds"], regs["es"]
-    raise SystemExit(f"{snap}: ADLIB.IMS not resident")
+    raise SystemExit(f"{snap}: {DRIVER} not resident")
 
 
 def driver_segment(ram: bytes) -> int:
@@ -167,7 +174,7 @@ class Driver:
         err = self.e.start(self.seg * 16 + ip, self.ret)
         pc = self.e.reg_read(U.X86["cs"]) * 16 + self.e.reg_read(U.X86["ip"])
         if err or pc not in (self.ret, self.ret + 1):
-            raise SystemExit(f"ADLIB.IMS+{ip:05X}: stopped at {pc:05x} "
+            raise SystemExit(f"{DRIVER}+{ip:05X}: stopped at {pc:05x} "
                              f"({U.uc.uc_strerror(err).decode()}; {', '.join(self.stray[:4])})")
         return self.e.reg_read(U.X86["ax"])
 

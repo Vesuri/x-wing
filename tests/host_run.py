@@ -318,6 +318,15 @@ SABOTAGE = {
     "dsp-status": "the model's 22Eh status reporting no data after the DSP reset (SB build)",
 }
 SPEECH = ("sb-block", "sb-irq", "dsp-status")   # plants of the SB build only
+# --sb-race (SB build), on a milestone whose clips are paused (DSP D0h; m08): after each
+# pause, a block end is posted as the Amiga's audio interrupt posts it (rt_irq7_tail) at
+# the write that masks IRQ 7, the race the 68030 lost (MEASURED: "IRQ 7 while the PIC
+# masks it" at m08's door). ADLIB_W.IMS's clip stop (+0581C) masks IRQ 7 with IF clear
+# (+056AD), then reads 22Eh, which drops the raise (runtime.h rt_irq7_ack): lockstep
+# must hold with no post left. A post at the pause itself is no such race: the driver
+# restores IF before the mask, and the end is then the original's to take. Its control,
+# sb-race-late, posts after that 22Eh read instead: the raise stays latched, and the
+# check must fail.
 
 
 def dos_file_stamp(stamp):
@@ -406,6 +415,8 @@ class Host:
         # guest RAM it started from; sfx_cap while one runs (out of the game's
         # flow: no poll, service, OPL, IRQ or memory check sees it)
         self.sfx_cap = False
+        self.sfx_ports: list[tuple[str, int, int]] = []    # device accesses in a capture but OPL's
+        self.sfx_speaker = None     # rt_sb_speaker at the capture's return, 1 at its start
         self.sfx_captures: list[dict] = []
         self.sfx_before = self.sfx_after = None
         # VGA status replay: (service events, value, reads) runs of trace/retrace.csv
@@ -417,6 +428,7 @@ class Host:
         self.dsp_reads = 0
         self.blocks: list[tuple[int, int, int]] = []   # plat_sb_block: linear, length, rate
         self.sb_pauses: list[int] = []                 # plat_sb_pause: D0h 1, D4h 0
+        self.race_posts, self.race_armed = 0, False      # --sb-race, sabotage sb-race-late
         self.mouse_dx = self.mouse_dy = self.mouse_buttons = 0
         self.presents = 0
         # D9 display: every byte the guest stores to the frame is inside the
@@ -518,11 +530,17 @@ class Host:
 
         @U.CODE_CB
         def out8(h, addr, size, user):
-            if self.sfx_cap:
-                return
             port, v = self.r("d7") & 0xFFFF, self.r("d6") & 0xFF
+            if self.sfx_cap:
+                if port not in (0x388, 0x389):
+                    self.sfx_ports.append(("out", port, v))
+                return
             if port in (0x388, 0x389):
                 self.opl_ports.append((port, v))
+            if (port == 0x21 and v & 0x80 and self.race_armed and self.sabotage == "sb-race"
+                    and not self.mem(self.syms["pic_mask"], 1)[0] & 0x80):
+                self.race_armed = False     # --sb-race: before the store, no poll between
+                self.post_irq7()
             if port == 0x389:
                 reg = self.mem(self.syms["rt_opl_index"], 1)[0]
                 self.opl.append((reg, v))
@@ -941,12 +959,20 @@ class Host:
         elif n == "plat_vga_status":
             res = self.vga_status()
         elif n == "plat_dsp_status":
-            res = self.dsp_status(args[0], args[1])
+            if self.sfx_cap:    # out of the game's time: no reference read; the model answers
+                self.sfx_ports.append(("in", args[0], args[1]))
+                res = args[1]
+            else:
+                if args[0] == 0x22E and self.race_armed and self.sabotage == "sb-race-late":  # after rt_irq7_ack
+                    self.race_armed = False
+                    self.post_irq7()
+                res = self.dsp_status(args[0], args[1])
         elif n == "plat_sb_block":
             length = args[1] + (self.sabotage == "sb-block" and not self.blocks)
             self.blocks.append((args[0], length, args[2]))
         elif n == "plat_sb_pause":
             self.sb_pauses.append(args[0])
+            self.race_armed = bool(args[0]) and self.sabotage in ("sb-race", "sb-race-late")
         elif n == "plat_sb_irq":
             pass        # DSP F2h: the reference's IRQ 7 is replayed where it took it
         elif n == "plat_log":
@@ -975,8 +1001,11 @@ class Host:
             self.sfx_cap = addr == self.syms["rt_hle_sfx_prerender"]
             if self.sfx_cap:
                 self.sfx_before = self.sfx_guest()
+                # the speaker on, so the capture's D3h would leave it off unless restored
+                self.e.write(self.syms["rt_sb_speaker"], b"\1")
             else:
                 self.sfx_after = self.sfx_guest()
+                self.sfx_speaker = self.mem(self.syms["rt_sb_speaker"], 1)[0]
                 self.e.stop()
 
         for n in ("rt_hle_sfx_prerender", "rt_hle_sfx_prerender_done"):
@@ -1059,6 +1088,14 @@ class Host:
 
     def dsp_left(self) -> int:
         return sum(sum(r[2] for r in runs[i:]) - used for runs, i, used in self.dsp.values())
+
+    def post_irq7(self) -> None:
+        """amiga_platform.c's IRQ 7 post: rt_irq7_tail counted, then RT_RAISE_IRQ."""
+        tail = self.mem(self.syms["rt_irq7_tail"], 1)[0]
+        self.e.write(self.syms["rt_irq7_tail"], bytes([(tail + 1) & 0xFF]))
+        self.e.write(self.syms["rt_irq_pending"], b"\1")
+        self.e.write(G_IRQ, b"\1")
+        self.race_posts += 1
 
     def post(self, vector: int) -> None:
         tail = self.mem(self.syms["rt_irq_tail"], 1)[0]
@@ -2049,6 +2086,9 @@ def main(argv=None) -> int:
     ap.add_argument("--timeout", type=int, default=1800, help="seconds of emulation before failing")
     ap.add_argument("--amiga", type=Path, help="also check this A1200-model capture")
     ap.add_argument("--label", action="store_true", help="print the milestone's label and exit")
+    ap.add_argument("--sb-race", action="store_true",
+                    help="a DSP block end posted at each clip pause must be dropped by the clip "
+                         "stop's 22Eh read, lockstep holding (SB build; control: sabotage sb-race-late)")
     ap.add_argument("--sabotage", action="store_true",
                     help="each planted runtime fault (SABOTAGE) must fail the check")
     ap.add_argument("--dead-sabotage", nargs="*", choices=DEAD_SABOTAGE, metavar="CONTROL",
@@ -2137,6 +2177,18 @@ def main(argv=None) -> int:
                 missed.append(name)
         print("not caught: " + ", ".join(missed) if missed else "all sabotages caught")
         return 1 if missed else 0
+    if args.sb_race:
+        if not SB:
+            raise SystemExit("--sb-race: the Sound Blaster build's (XWING_DRIVER=ADLIB_W.IMS)")
+        problems = check(args.milestone, args.timeout, None, "sb-race", bypass=args.bypass)
+        for p in problems:
+            print(p)
+        print(f"host run to {args.milestone} with the SB race: {'ok' if not problems else 'FAIL'}")
+        late = check(args.milestone, args.timeout, None, "sb-race-late", bypass=args.bypass)
+        print(f"control sb-race-late: {len(late)} problems, first: {late[0] if late else '-'}")
+        if not late or any("(void)" in p for p in late):
+            problems.append("control sb-race-late: not caught, or it posted nothing")
+        return 1 if problems else 0
     if args.screen and args.bypass:
         raise SystemExit("--screen and --bypass exclude each other")
     problems = check(args.milestone, args.timeout, args.amiga, None, bypass=args.bypass,
@@ -2530,6 +2582,22 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
         import gzip
         import pickle
         saved = sfx_result(h)
+        # The capture restores the guest's memory, not the runtime's device state: of the
+        # Sound Blaster's (DSP, DMA, the PIC's mask) only ADLIB_W.IMS's stop all's speaker
+        # off (D3h, after its ready poll) is expected, and rt_sfx_prerender restores it.
+        sb = [a for a in h.sfx_ports if a[1] == 0x21 or a[1] < 0x10 or 0x80 <= a[1] < 0x90
+              or 0x220 <= a[1] < 0x230]
+        other = [a for a in sb if a[1] != 0x22C or (a[0] == "out" and a[2] != 0xD3)]
+        offs = sum(a == ("out", 0x22C, 0xD3) for a in sb)
+        print(f"effect capture: {len(h.sfx_ports)} device accesses besides the OPL's; "
+              f"{offs} speaker offs (D3h), speaker {h.sfx_speaker} at the return (1 at the start); "
+              f"{len(other)} other of the Sound Blaster, DMA or the PIC mask"
+              + (": " + ", ".join(f"{d} {p:X}h {v:02X}" for d, p, v in other[:24]) if other else ""))
+        if other:
+            problems.append(f"effect capture: {len(other)} accesses of the Sound Blaster, DMA or "
+                            "the PIC mask besides the speaker off")
+        if offs and h.sfx_speaker != 1:
+            problems.append(f"effect capture: {offs} speaker offs left the speaker off")
         problems += [p for p in (h.irq_lost, h.retrace_bad, h.display_miss) if p]
         problems += h.services.finish(False)
         SFX_SAVE.parent.mkdir(parents=True, exist_ok=True)
@@ -2576,6 +2644,13 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
             k = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), min(len(got), len(want)))
             problems.append(f"SB blocks: block {k}: {got[k] if k < len(got) else None} (linear, length, rate), "
                             f"the reference's {want[k] if k < len(want) else None}")
+        if sabotage in ("sb-race", "sb-race-late"):
+            left = (h.mem(h.syms["rt_irq7_tail"], 1)[0] - h.mem(h.syms["irq7_head"], 1)[0]) & 0xFF
+            print(f"SB race: {h.race_posts} block ends posted after clip pauses, {left} not taken")
+            if not h.race_posts:
+                problems.append("SB race: no clip pause to post at (void)")
+            elif left:
+                problems.append(f"SB race: {h.race_posts} posts after clip pauses, {left} left untaken")
     if h.display_miss:
         problems.append(h.display_miss)
     print("music driver at interrupt level: flight callback "

@@ -60,5 +60,7 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    - Fast RAM in flight, where the measured low-water marks do not reach;
    - the minimum Fast RAM without WHDLoad;
    - save, exit and input scenarios;
+   - speech in flight on the Amiga: blocks from the EMS page frame (m14) are played only
+     by hand, as the Amiga replays refuse Sound Blaster blocks;
    - a real-hardware pass.
    Acceptance: the P9 gate in the port plan.

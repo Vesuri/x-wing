@@ -121,7 +121,10 @@ static uint8_t dsp_in(uint16_t port)
         }
         return dsp_last;
     case 0x22c: v = 0x2a; break;                     /* bit 7 clear: ready for a byte */
-    case 0x22e: v = dsp_out_n ? 0xaa : 0x2a; break;  /* bit 7: data available; acks IRQ 7 */
+    case 0x22e:                                      /* bit 7: data available; acks IRQ 7 */
+        rt_irq7_ack();
+        v = dsp_out_n ? 0xaa : 0x2a;
+        break;
     default: rt_stop("unsupported DSP port in", port, 0);
     }
     return plat_dsp_status(port, v);
@@ -308,7 +311,12 @@ void rt_port_out(uint32_t port, uint32_t value, uint32_t width)
     }
     if (width == 8) {
         switch (port) {
-        case 0x21: pic_mask = v; return;
+        case 0x21:
+            pic_mask = v;
+            if (!(v & 0x80)) {
+                rt_irq7_unmasked();     /* a latched IRQ 7 (runtime.h rt_irq7_ack) */
+            }
+            return;
         case 0x40: case 0x41: case 0x42: pit_data((uint8_t)(port - 0x40), v); return;
         case 0x43: pit_control(v); return;
         case 0x201: return;         /* joystick one-shots: none to fire */

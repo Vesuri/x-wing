@@ -12,6 +12,8 @@
  * memory is saved before and restored before each id and after the last, the
  * CIA tick held meanwhile (game time pauses). The writes go to
  * rt_sfx_capture, not rt_opl. tools/sfx_capture.py is the oracle.
+ * ADLIB_W.IMS's stop all also turns the DSP's speaker off (D3h, MEASURED: one per
+ * id at m12), device state the guest's memory does not hold: it is restored too.
  *
  * In play, rt_sfx_read gives the effect player (fx_play.c) the driver's
  * players and which of them each OPL channel's voice plays, and HLE
@@ -21,22 +23,24 @@
 
 /* ADLIB.IMS load-image offsets (docs/external-surface.md, Music driver interface). */
 #define DRV_ENTRY 0x0000            /* the far command entry */
-#define DRV_TIMER 0x0a1b            /* the INT 08h handler */
-#define DRV_DATA 0x04d0             /* DS, paragraphs above CS (ADLIB.IMS+00BEF) */
-#define DRV_BYTES 0x7760            /* image and minimum allocation (its MZ header) */
-#define DRV_DS_SLOT 0x0911          /* CS word: the handler's DS */
-#define DRV_BIOS_COUNT 0x0910       /* CS byte: ticks to the BIOS chain (ADLIB.IMS+00A2D) */
-#define DRV_TIMER_ACC 0x0678        /* DS word: game-timer accumulator (ADLIB.IMS+00188) */
-#define DRV_SOUNDS 0x06e2           /* DS far pointer: the game's sound table, id * 4 */
-#define DRV_SHADOW 0x0342           /* DS: the driver's OPL register shadow (ADLIB.IMS+04BD2) */
-#define DRV_QUEUE_HEAD 0x0ebe       /* DS words: the request queue's read and write index (+02B7D) */
-#define DRV_QUEUE_TAIL 0x12c0
-#define DRV_PLAYERS 0x06ea          /* DS: 8 players of 12h (ADLIB.IMS+00E8E) */
+/* The driver's layout, generated for the build's driver (runtime.h driver_layout;
+ * ADLIB.IMS's values: TIMER 0A1Bh, DATA 04D0h, BYTES 7760h, ...) */
+#define DRV_TIMER driver_layout[RT_DRV_TIMER]           /* the INT 08h handler */
+#define DRV_DATA driver_layout[RT_DRV_DATA]             /* DS, paragraphs above CS */
+#define DRV_BYTES ((uint32_t)driver_layout[RT_DRV_BYTES]) /* image and minimum allocation */
+#define DRV_DS_SLOT driver_layout[RT_DRV_DS_SLOT]       /* CS word: the handler's DS */
+#define DRV_BIOS_COUNT driver_layout[RT_DRV_BIOS_COUNT] /* CS byte: ticks to the BIOS chain */
+#define DRV_TIMER_ACC driver_layout[RT_DRV_TIMER_ACC]   /* DS word: game-timer accumulator */
+#define DRV_SOUNDS driver_layout[RT_DRV_SOUNDS]         /* DS far pointer: the game's sound table, id * 4 */
+#define DRV_SHADOW driver_layout[RT_DRV_SHADOW]         /* DS: the driver's OPL register shadow */
+#define DRV_QUEUE_HEAD driver_layout[RT_DRV_QUEUE_HEAD] /* DS words: the request queue's read and write index */
+#define DRV_QUEUE_TAIL driver_layout[RT_DRV_QUEUE_TAIL]
+#define DRV_PLAYERS driver_layout[RT_DRV_PLAYERS]       /* DS: 8 players of 12h */
 #define DRV_PLAYER_BYTES 0x12
 #define PLAYER_ACTIVE 0x06           /* byte, 1 while it plays (ADLIB.IMS+01215) */
 #define PLAYER_SOUND 0x08            /* word: the sound id */
 #define PLAYER_VOLUME 0x0e           /* byte: its volume, 0-127 (command 102h) */
-#define DRV_VOICES 0x1ed2           /* DS: 9 voices of 62h (ADLIB.IMS+03F1E) */
+#define DRV_VOICES driver_layout[RT_DRV_VOICES]         /* DS: 9 voices of 62h */
 #define DRV_VOICE_BYTES 0x62
 #define VOICE_PART 0x00             /* word: its part, 0 free; the part's word 0 its player */
 #define VOICE_CHANNEL 0x07          /* byte: its OPL channel */
@@ -140,7 +144,7 @@ void rt_sfx_prerender(void)
     }
     uint32_t table = lin(rd16(lin(ds, DRV_SOUNDS + 2)), rd16(lin(ds, DRV_SOUNDS)));
     uint32_t effects = rt_r.ax;    /* the loader's return: effects registered from id 4 */
-    uint8_t index = rt_opl_index, pair = rt_opl_pair;
+    uint8_t index = rt_opl_index, pair = rt_opl_pair, speaker = rt_sb_speaker;
     memory(cs, save, 0);
     rt_irq0_running = 1;            /* no tick delivered; the CIA's held */
     rt_sfx_capturing = 1;
@@ -183,6 +187,7 @@ void rt_sfx_prerender(void)
     memory(cs, save, 1);
     rt_opl_index = index;
     rt_opl_pair = pair;
+    rt_sb_speaker = speaker;
     plat_free(save);
     driver_cs = cs;
     ++rt_sfx_captures;

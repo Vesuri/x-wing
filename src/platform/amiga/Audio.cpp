@@ -445,11 +445,12 @@ extern "C" void amiga_audio_service(void)
 // Chip block, padded with a zero to an even length, played from the next field.
 extern "C" void amiga_audio_sb_block(uint32_t linear, uint32_t length, uint32_t rate)
 {
-    // the EMS page frame's bytes go through rt_ems_touch (runtime.h rt_frame)
-    if (!sbChip || length > SB_BLOCK_BYTES || linear + length > RT_GUEST_BYTES ||
-            (linear < 0xf0000u && linear + length > 0xe0000u)) {
+    if (!sbChip || length > SB_BLOCK_BYTES || linear + length > RT_GUEST_BYTES) {
         rt_stop("Sound Blaster block outside the speech buffer (linear, length)", linear, length);
     }
+    // In flight the game plays blocks from the EMS page frame (the Sound Blaster
+    // m14 reference: E9741h, 1C09h): its pages are copied in first (runtime.h rt_frame).
+    rt_frame(linear, length);
     int8_t* chip = sbChip + sbNext * SB_BLOCK_BYTES;
     const uint8_t* src = rt_guest - linear;
     for (uint32_t k = 0; k < length; ++k) chip[k] = (int8_t)(*(src - k) ^ 0x80);
