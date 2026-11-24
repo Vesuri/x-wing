@@ -33,8 +33,9 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    cycles, about 61% of that in code bytes (DERIVED from the meter's counts and weights).
    The EMS ES guard ran 1,785,854 times with 861,401 flag saves around it, about 5.5%, and
    `rt_ems_es` takes 6.75%.
-   A second window, not yet a fixture: the intro's full-screen Star Destroyer scene runs at
-   about one frame a second on the 68030 model, the rest of the intro at about seven
+   A second window, the frames fixture's intro scene ([perf method](perf-method.md)): the
+   intro's full-screen Star Destroyer scene runs at about one frame a second on the 68030
+   model, the rest of the intro at about seven
    (MEASURED: 2 presents in a 100-field profile from field 10,000 of the Sound Blaster
    image's intro; poll points 0.7%). Two front-end routines and the runtime calls they make
    take most of it:
@@ -50,8 +51,9 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    cannot resolve a step and the meter decides.
    3. Instruments. The film is re-profiled for the costs only the Amiga has: C2P, the present
       and the FM render. The reference's own frame interval in the film and the intro is
-      the ceiling. An intro frames fixture over the Star Destroyer scene and an intro meter
-      window (which milestone: the owner's choice).
+      the ceiling. An intro meter window (which milestone: the owner's choice); the m02i
+      reference was recorded with other poll points and needs `tools/reference.py --polls`
+      first.
    7. The intro's compare-and-copy, FRONTEND 1A5E:0119: a cheap restart path in the
       REPE CMPSW lowering and the changed word's mark inline.
    8. The intro's sprite decoder, FRONTEND 1B58:007A: a short-count path for REP STOSW and

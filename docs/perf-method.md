@@ -40,14 +40,19 @@ hold the reasons behind them. The steps and their gate are in the
   - **Usage:** `--out A.json` per arm, `--compare A.json B.json` for the deltas per class and
     x86 form. `--plant-check BASE.json [--label L --nops N]` is the meter's control: NOPs at
     one generated label must add exactly their instructions, bytes and cost.
-- **Frames fixture** (`tools/perf_film.py`, `amiga/perf_film.gdb`): the combat film (m17) on
-  the non-release Amiga image, the frame time the owner sees.
-  - **Route:** a `KEYS` script (`src/platform/amiga/amiga_platform.c`) goes from the intro
-    to the film room and loads `COMBAT.CLP`. From P on its steps count published frames
-    (`fN`), so the window starts at the same point of the film in every build.
-  - **Output:** the field at each of the next 60 visits to the frame label `FLT_1B7D2`, then
-    a 100-field instruction profile reported by `tools/profile_report.py`. The capture is
-    deleted after the report.
+- **Frames fixture** (`tools/perf_film.py`, `amiga/perf_film.gdb`): a scene on the
+  non-release Amiga image, the frame time the owner sees.
+  - **Film** (`--scene film`, the default): the combat film (m17). A `KEYS` script
+    (`src/platform/amiga/amiga_platform.c`) goes from the intro to the film room and loads
+    `COMBAT.CLP`. From P on its steps count published frames (`fN`), so the window starts
+    at the same point of the film in every build. The window: the field at each of the
+    next 60 visits to the frame label `FLT_1B7D2`.
+  - **Intro** (`--scene intro`): the intro's full-screen Star Destroyer scene, with no keys.
+    Its start varies by a few frames between runs, so the window is anchored to the
+    scene's load: the first frame interval of more than 60 fields after present 1250, then
+    100 presents on. The window: the field at each of the next 30 `plat_present` calls.
+  - **Output:** the window's frame intervals, then a 100-field instruction profile
+    reported by `tools/profile_report.py`. The capture is deleted after the report.
 - **Profile report** (`tools/profile_report.py CAPTURE ELF`): class, module, guest routine
   and instruction, and runtime shares of a `monitor profile` capture. The cycle-exact 68030
   leaves a few thousand cycles of a field to no record (the intro's capture: 1.17% of one
@@ -80,6 +85,8 @@ production estimate: production has no poll tests.
 | m17 combat film, 59 frame intervals | frames fixture | median 360 ms per frame, mean 351 ms, range 220–440 ms; two runs of the same image, medians 360 and 360 ms, means 351.2 and 351.5 ms |
 | m17 combat film, planted (8 NOPs at `FLT_22E3E`) | frames fixture, profile | the same intervals; `FLT_22E3E` 2.61% → 2.69% with the same 3,459 calls |
 | m17 combat film, 100 fields | profile | generated 64.7%, runtime and platform 29.0% (`rt_ems_es` 13.5%) |
+| intro's Star Destroyer scene, 29 frame intervals (the image at `b5dda4c`, step 6) | frames fixture, `--scene intro` | two runs: medians 520 and 520 ms, means 534.5 and 531.7 ms, range 380–700 ms |
+| intro's Star Destroyer scene, 100 fields (`b5dda4c`) | profile | generated 57.8%, runtime and platform 36.8% (`rt_ems_ds` 9.0%, `rt_ems_es_miss` 8.0%, `vram_span` 5.5%, `guard` 4.2%); FRONTEND+174DA 26.4%, +165D9 24.3% |
 
 Playback against live flight (open-work 1): per frame the film's window costs about twice
 m13's (12.57M against 5.92M model cycles without poll tests), but the two windows show

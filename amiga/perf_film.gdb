@@ -1,9 +1,9 @@
-# P8 frames fixture (docs/perf-method.md): the combat film (m17) on the image that
-# runs, driven by a KEYS script (tools/perf_film.py) that marks the window start
-# with `shot`. From the mark: the PAL field at each of the next FRAMES visits to the
-# flight's frame label FLT_1B7D2 (reference/milestones.csv `frame`), one gdb stop
-# per frame outside any capture, then a 100-field instruction profile.
-# @FRAMES@ and @OUT@ are filled by tools/perf_film.py.
+# P8 frames fixture (docs/perf-method.md): the combat film (m17) or the intro's Star
+# Destroyer scene on the image that runs, driven by a KEYS script (tools/perf_film.py)
+# that marks the window start with `shot`. From the mark: the PAL field at each of the next FRAMES visits to the
+# scene's frame label @LABEL@ (the film: reference/milestones.csv `frame`), one gdb
+# stop per frame outside any capture, then a 100-field instruction profile.
+# @FRAMES@, @LABEL@ and @OUT@ are filled by tools/perf_film.py.
 set pagination off
 set confirm off
 break plat_exit
@@ -28,7 +28,7 @@ break amiga_script_mark
 continue
 delete $bpnum
 printf "WINDOW_MARK field %u presents %u\n", amiga_frames, amiga_presents
-break FLT_1B7D2
+break @LABEL@
 set $n = 0
 while $n < @FRAMES@
   continue
