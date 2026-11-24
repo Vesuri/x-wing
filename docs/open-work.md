@@ -24,15 +24,14 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    on the 68030 model.
    Target: the combat film at 100 ms per frame or less on the 68030 model (owner decision
    2026-11-19, `docs/design.md`). Step 2, the EMS guard's cache, brought the film to 320 ms
+   and step 5, video stores through DS unchecked outside listed code, to 280 ms
    ([perf-method](perf-method.md#steps)). The intro has no target yet (the owner's to set).
    Whether the film's playback costs what the same flight would live is still open: m13's
    window shows another scene.
    Where the film's cost lies, in step 2's m17 meter: generated code 85.4% of the model
    cycles, about 61% of that in code bytes (DERIVED from the meter's counts and weights).
-   In the window the check whether DS is the VGA segment, before every store through DS,
-   ran 3,468,938 times: 7–15% of the meter (DERIVED: 12 to 25.5 model cycles each, inside
-   or outside a cached loop). The EMS ES guard ran 1,785,854 times with 861,401 flag saves
-   around it, about 5.5%, and `rt_ems_es` takes 6.75%.
+   The EMS ES guard ran 1,785,854 times with 861,401 flag saves around it, about 5.5%, and
+   `rt_ems_es` takes 6.75%.
    A second window, not yet a fixture: the intro's full-screen Star Destroyer scene runs at
    about one frame a second on the 68030 model, the rest of the intro at about seven
    (MEASURED: 2 presents in a 100-field profile from field 10,000 of the Sound Blaster
@@ -52,10 +51,6 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
       and the FM render. The reference's own frame interval in the film and the intro is
       the ceiling. An intro frames fixture over the Star Destroyer scene and an intro meter
       window (which milestone: the owner's choice).
-   5. The VGA store check at DS loads: only the routines the traces show storing to VGA
-      through DS keep it per store; elsewhere a DS load of the VGA segment falls back to a
-      counted whole-screen mark. It changes D9 and needs the owner's OK. Controls: an
-      unmarked VGA store and an unlisted VGA DS load are caught.
    6. The EMS guards: the one-entry cache's hit checked inline in generated code, and a
       guard repeated while ES is unchanged dropped with its flag save. Controls:
       `ems_guard_problems` and its sabotages, and a guard dropped across an ES change.
@@ -69,15 +64,17 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    11. Smaller translator items, each priced with `tools/lowering_cost.py` first: the
        reversed index address reused while its register is unchanged (3,803,561
        recomputations in the window), the cell walk (2.9% of the meter), near calls and
-       returns (2.8%).
+       returns (2.8%), and the video store check before stores through SS (8,327 sites in
+       FRONTEND and FLIGHT; no frame store through SS in m01, m02, m12, m13 or m17, MEASURED:
+       `tools/vram_ds_profile.py`), which as step 5 for DS needs the owner's OK.
    12. Hand natives for flight's hot code. The Macintosh survey found no donor for it
        ([Macintosh donors](mac-donors.md)): two counterparts, 1.9% of the film, and the
        Macintosh engine renders other models at 640×480. Each native needs the owner's
        authorization and an `annotations/hle.csv` row with its oracle.
    13. The 68040 check and gate 7.
 
-   Steps 5–11 may bring the film to about 230–260 ms (INFERRED). 100 ms needs about 7
-   model cycles per guest instruction against 14.8 now, so step 12 carries the rest.
+   Steps 6–11 may bring the film to about 200–230 ms (INFERRED). 100 ms needs about 7
+   model cycles per guest instruction against 12.3 now, so step 12 carries the rest.
 2. Postponed (owner decision 2026-11-04) until P8 takes a donor; the survey found none for
    the film's hot code ([Macintosh donors](mac-donors.md)): make the Macintosh reference
    reach named milestones and map its 68k CODE.

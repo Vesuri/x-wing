@@ -2,8 +2,10 @@
  * them: chained mode 13h at A000:0000 (guest RAM) and the DAC
  * (docs/external-surface.md). Copied from Secret Weapons of the Luftwaffe's
  * (manifest/references.tsv) and adapted. Display (D9): every store of
- * FRONTEND and FLIGHT to A000h marks changed rows (rt_vram_mark; X-Wing has
- * no graphics driver to bracket them). The game's mouse poll (INT 33h AX=3) is
+ * FRONTEND and FLIGHT to A000h through ES or SS, and through DS in listed
+ * code (annotations/vram-ds.csv), marks changed rows (rt_vram_mark; X-Wing
+ * has no graphics driver to bracket them); DS at the frame elsewhere marks
+ * the whole frame (rt_vram_ds_on). The game's mouse poll (INT 33h AX=3) is
  * the frame boundary: the changed rows are presented there if a vertical
  * blank is due, else at the next poll after one. While the game does not
  * poll (none within a second of IRQ0 ticks, or none yet), a blank presents
@@ -97,6 +99,21 @@ static void set_mode(void)
 struct vram_row { uint16_t lo, hi; };
 struct vram_row rt_vram_rows[200];
 uint16_t rt_vram_top = 200, rt_vram_bottom = 0;
+/* Video stores through DS (owner decision 2026-11-23): DS was loaded at the
+ * frame outside listed code, or listed code was left with DS there
+ * (rt_vram_ds, rt_entry.s; annotations/vram-ds.csv), so stores through DS go
+ * unmarked: the whole frame is changed at each present until one finds DS off
+ * the frame. Counted. */
+volatile uint8_t rt_vram_ds_on;
+uint32_t rt_vram_ds_falls;
+/* tests/host_run.py's plant (translator/lower.py VRAM_PLANT): ES is unmarked
+ * as DS, so a present keeps the flag while either is at the frame. */
+uint8_t rt_vram_plant_es;
+
+static int at_frame(uint16_t seg)
+{
+    return seg >= 0x9001 && seg <= 0xaf9f;     /* lower.py vram_segment */
+}
 uint16_t rt_vdrv_depth;          /* graphics driver calls (none in X-Wing; the contract's) */
 static uint8_t polled;           /* the game polls the mouse: frames end there */
 static uint8_t dac_changed;      /* the DAC changed since the platform last saw it */
@@ -171,6 +188,9 @@ static void present(void)
 {
     int32_t n = 0;
     palette();
+    if (rt_vram_ds_on) {
+        vram_all();
+    }
     for (int r = rt_vram_top; r < rt_vram_bottom; ++r) {
         RT_FIELD_POINT();
         struct vram_row *row = &rt_vram_rows[r];
@@ -187,6 +207,13 @@ static void present(void)
     }
     rt_vram_top = 200;
     rt_vram_bottom = 0;
+    if (rt_vram_ds_on) {
+        if (at_frame(G_DS) || (rt_vram_plant_es && at_frame(G_ES))) {
+            vram_all();
+        } else {
+            rt_vram_ds_on = 0;
+        }
+    }
     ready = 0;
     rt_present_due = 0;
     if (n && rd8(BDA_MODE) == 0x13) {
@@ -315,6 +342,8 @@ int rt_video_fields(rt_field_fn *f, void *ctx, int saving)
     f(ctx, "video.vram_rows", rt_vram_rows, sizeof rt_vram_rows);
     f(ctx, "video.vram_top", &rt_vram_top, sizeof rt_vram_top);
     f(ctx, "video.vram_bottom", &rt_vram_bottom, sizeof rt_vram_bottom);
+    f(ctx, "video.vram_ds_on", (void *)&rt_vram_ds_on, sizeof rt_vram_ds_on);
+    f(ctx, "video.vram_ds_falls", &rt_vram_ds_falls, sizeof rt_vram_ds_falls);
     f(ctx, "video.vdrv_depth", &rt_vdrv_depth, sizeof rt_vdrv_depth);
     f(ctx, "video.polled", &polled, sizeof polled);
     f(ctx, "video.ready", &ready, sizeof ready);

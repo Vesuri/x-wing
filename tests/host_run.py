@@ -51,6 +51,7 @@ from collections import Counter
 import copy
 import ctypes
 import json
+import os
 import gzip
 import csv
 import pickle
@@ -318,6 +319,29 @@ SABOTAGE = {
     "dsp-status": "the model's 22Eh status reporting no data after the DSP reset (SB build)",
 }
 SPEECH = ("sb-block", "sb-irq", "dsp-status")   # plants of the SB build only
+VRAM_DS_FALLS: list[int] = []   # rt_vram_ds_falls of the last check (vram_ds_plant)
+
+
+def vram_ds_plant(milestone: str, timeout: int) -> int:
+    """The control of the video DS fallback (owner decision 2026-11-23,
+    docs/translator-design.md D9). With XWING_VRAM_PLANT=es the image leaves the
+    game's ES stores unmarked as DS's outside listed code, their segment loads
+    at the frame taking the fallback (translator/lower.py VRAM_PLANT): the run
+    passes with fallbacks counted, and with rt_vram_ds returning at once
+    (sabotage vram-ds) the shown-frame check catches it."""
+    if os.environ.get("XWING_VRAM_PLANT") != "es":
+        raise SystemExit("--vram-ds-plant: run with XWING_VRAM_PLANT=es (the image's plant)")
+    problems = check(milestone, timeout, None, None)
+    print(f"plant, fallback working: {len(problems)} problems, first: {problems[0] if problems else '-'}; "
+          f"{VRAM_DS_FALLS[0] if VRAM_DS_FALLS else 0} fallbacks", flush=True)
+    ok = not problems and VRAM_DS_FALLS and VRAM_DS_FALLS[0] > 0
+    caught = check(milestone, timeout, None, "vram-ds")
+    shown = [p for p in caught if "stored pixels outside" in p or "not marked" in p]
+    print(f"plant, fallback off (rt_vram_ds returns at once): {len(caught)} problems, first: "
+          f"{shown[0] if shown else (caught[0] if caught else '-')}", flush=True)
+    ok = ok and bool(shown)
+    print(f"video DS fallback control: {'ok' if ok else 'FAIL'}")
+    return 0 if ok else 1
 # --sb-race (SB build), on a milestone whose clips are paused (DSP D0h; m08): after each
 # pause, a block end is posted as the Amiga's audio interrupt posts it (rt_irq7_tail) at
 # the write that masks IRQ 7, the race the 68030 lost (MEASURED: "IRQ 7 while the PIC
@@ -438,6 +462,10 @@ class Host:
         e.write(self.syms["rt_present_due"], b"\1")  # a vertical blank is always due
         if sabotage == "vram":
             e.write(self.syms["rt_vram_mark"], b"\x4e\x75")  # rts
+        if os.environ.get("XWING_VRAM_PLANT") == "es":   # translator/lower.py VRAM_PLANT
+            e.write(self.syms["rt_vram_plant_es"], b"\1")
+        if sabotage == "vram-ds":
+            e.write(self.syms["rt_vram_ds"], b"\x4e\x75")  # rts
         if sabotage == "ems-cache":
             e.write(self.syms["rt_ems_cache_clear"], b"\x4e\x75")  # rts
         if sabotage == "ems-cache-irq":
@@ -2091,6 +2119,8 @@ def main(argv=None) -> int:
     ap.add_argument("--sb-race", action="store_true",
                     help="a DSP block end posted at each clip pause must be dropped by the clip "
                          "stop's 22Eh read, lockstep holding (SB build; control: sabotage sb-race-late)")
+    ap.add_argument("--vram-ds-plant", action="store_true",
+                    help="the video DS fallback's control (with XWING_VRAM_PLANT=es; vram_ds_plant)")
     ap.add_argument("--sabotage", action="store_true",
                     help="each planted runtime fault (SABOTAGE) must fail the check")
     ap.add_argument("--dead-sabotage", nargs="*", choices=DEAD_SABOTAGE, metavar="CONTROL",
@@ -2141,6 +2171,8 @@ def main(argv=None) -> int:
     if args.label:
         print(milestone_script(args.milestone)["snapshots"][-1][0])
         return 0
+    if args.vram_ds_plant:
+        return vram_ds_plant(args.milestone, args.timeout)
     if args.sabotage and args.bypass:
         missed = []
         controls = BYPASS_SABOTAGE if args.milestone == BYPASS_MILESTONE else {
@@ -2681,7 +2713,9 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     if unmarked:
         problems.append(f"{len(unmarked)} pixels stored since the last present and not marked, "
                         f"first x={unmarked[0] % 320} y={unmarked[0] // 320}")
-    print(f"frame presents: {h.presents}")
+    falls = int.from_bytes(h.mem(h.syms["rt_vram_ds_falls"], 4), "big")
+    VRAM_DS_FALLS[:] = [falls]
+    print(f"frame presents: {h.presents}, video DS fallbacks: {falls}")
     print(f"hardware interrupts: {h.irq_i} replayed, {len(script['irqs'])} in the reference")
     print(f"VGA status reads: {sum(r[2] for r in h.retrace)} in the reference")
     if h.stopped_at != label:

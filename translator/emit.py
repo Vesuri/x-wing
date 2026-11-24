@@ -49,7 +49,7 @@ TERMINAL = {"jmp", "jmpf", "ret", "retf", "iret", "hlt"}
 RUNTIME = ("rt_int", "rt_irq", "rt_fault", "rt_halt", "rt_trap", "rt_in8", "rt_in16", "rt_out8", "rt_out16",
            "rt_ret_mismatch", "rt_ret_far_mismatch", "rt_dispatch_near", "rt_dispatch_far", "rt_stop_unknown",
            "rt_vram_mark", "rt_vdrv_depth", "rt_vdrv_return", "rt_irq_pending", "rt_ems_es",
-           "rt_ems_seg", "rt_ems_ds", "rt_ems_ds_leave")
+           "rt_ems_seg", "rt_ems_ds", "rt_ems_ds_leave", "rt_vram_ds")
 # G3 native replacements (annotations/hle.csv): runtime service rt_hle_<service>
 # at a range's first instruction; NE skips the range to the instruction after
 # `last`, EQ runs the guest code. `args`: up to two guest word registers, in
@@ -363,6 +363,14 @@ class Program:
                 self.ems_ds.setdefault(r["module"], []).append((first, last, r["kind"]))
             else:
                 raise LowerError(f"ems-ds.csv: kind {r['kind']!r}")
+        # Video stores through DS (owner decision 2026-11-23): code whose DS
+        # stores mark rows (annotations/vram-ds.csv; lower.py vram_mark,
+        # vram_exit, putseg)
+        self.vram_ds: dict[str, list[tuple[int, int]]] = {}   # module: (first, last)
+        for r in image.rows("vram-ds.csv"):
+            if r["kind"] != "mark" or r["module"] not in VRAM_MODULES:
+                raise LowerError(f"vram-ds.csv: {r['module']} {r['first']} kind {r['kind']!r}")
+            self.vram_ds.setdefault(r["module"], []).append((int(r["first"], 16), int(r["last"], 16)))
         self.outline_sites: dict[str, tuple] = {}  # R27, outline_cold
         self.offsets: dict[str, list[int]] = {}   # sorted instruction offsets (outline_cold)
         self.run_last: dict[str, dict[int, int]] = {}  # each run's last offset by its first
@@ -951,6 +959,32 @@ class Program:
     def ems_kind(self, mod: str, off: int) -> str | None:
         return next((k for lo, hi, k in self.ems_ds.get(mod, ()) if lo <= off <= hi), None)
 
+    def vram_listed(self, mod: str, off: int) -> bool:
+        return any(lo <= off <= hi for lo, hi in self.vram_ds.get(mod, ()))
+
+    def vram_ctx(self, mod: str, off: int, i, u, cs) -> tuple[bool, bool, bool]:
+        """(listed, far transfer inside, last of a range) for vram-ds.csv, its
+        ranges shaped as ems-ds.csv's guard ranges: a near RET returns inside,
+        so no near call enters from outside and no direct near transfer leaves;
+        no indirect near transfer; every other way out is checked (lower.py
+        EMS_EXITS, vram_exit)."""
+        listed = self.vram_listed(mod, off)
+        if i.operands and isinstance(i.operands[0], Rel):
+            inside = self.vram_listed(mod, u.off_of(cs, i.operands[0].target, off))
+            if listed and not inside or i.op == "call" and inside and not listed:
+                raise LowerError(f"vram-ds.csv: {mod}+{off:05X} {i} "
+                                 f"{'leaves' if listed else 'enters'} the listed code")
+        if not listed:
+            return False, False, False
+        if i.op in ("jmp", "call") and not isinstance(i.operands[0], Rel):
+            raise LowerError(f"vram-ds.csv: {mod}+{off:05X} indirect {i} in listed code")
+        far_inside = False
+        if i.op in ("callf", "jmpf") and isinstance(i.operands[0], Far) and i.operands[0].seg == cs:
+            t = u.off_of(i.operands[0].seg, i.operands[0].off, off)
+            far_inside = t is not None and self.vram_listed(mod, t)
+        last = any(hi == off for lo, hi in self.vram_ds[mod])
+        return True, far_inside, last
+
     def ctx(self, mod: str, off: int, stats: Counter) -> Ctx:
         u = self.units[mod]
         i = u.insns[off]
@@ -975,6 +1009,7 @@ class Program:
         exit_after = ems_kind == "guard" and any(hi == off for lo, hi, k in self.ems_ds[mod] if k == "guard")
         if ems_kind == "guard" and i.op in ("jmp", "call") and not isinstance(i.operands[0], Rel):
             raise LowerError(f"ems-ds.csv: {mod}+{off:05X} indirect {i} in guarded code")
+        vram_ds, vram_far_inside, vram_exit_after = self.vram_ctx(mod, off, i, u, cs)
 
         def near(ip):
             t = u.off_of(cs, ip, off)
@@ -1033,6 +1068,7 @@ class Program:
                    program=True, vram=mod in VRAM_MODULES, ems=True, atomic_carry=mod == DRIVER,
                    ems_ds=ems_kind == "guard", ems_restore=ems_kind == "restore",
                    ems_far_inside=far_inside, ems_exit_after=exit_after,
+                   vram_ds=vram_ds, vram_far_inside=vram_far_inside, vram_exit_after=vram_exit_after,
                    driver_call=mod == M.ROOT and off in self.driver_jumps, ret_mismatch=RM,
                    far_ret_mismatch=RMF,
                    ret_jump=(u.ip_of(self.ret_jumps[(mod, off)]) if (mod, off) in self.ret_jumps else None),

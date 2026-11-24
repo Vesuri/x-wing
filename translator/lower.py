@@ -30,6 +30,7 @@ three-operand `imul`, shifts by an immediate, `enter`, `leave`) are lowered.
 
 from __future__ import annotations
 
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -45,6 +46,13 @@ HALF = {"al": ("ax", 0), "cl": ("cx", 0), "dl": ("dx", 0), "bl": ("bx", 0),
 MIRROR = frozenset({"sp", "bp"})   # held as offset ^ 7FFFh (D1)
 SEGBASE = {"es": "a1", "ss": "a2", "ds": "a3"}
 SEGSLOT = {"es": "G_ES", "ss": "G_SS", "ds": "G_DS"}
+# Video stores through DS (owner decision 2026-11-23): the segments whose
+# stores outside vram-ds.csv's code go unmarked, their loads of the frame
+# taking the fallback (putseg). XWING_VRAM_PLANT=es, a diagnostic plant of
+# tests/host_run.py (never a release): ES as well, the list ignored, so the
+# fallback carries the game's own ES drawing (`make t-vram-ds-plant`).
+VRAM_PLANT = os.environ.get("XWING_VRAM_PLANT") == "es"
+UNMARKED = ("ds", "es") if VRAM_PLANT else ("ds",)
 SZ = {8: "b", 16: "w"}
 # Transfers that may leave listed EMS code (ems-ds.csv): DS is checked first
 # (ems_exit), but for a direct far one into listed code. A near RET returns
@@ -141,6 +149,9 @@ class Ctx:
     ems_restore: bool = False                 # ems-ds.csv restore: a DS load of the interrupted DS
     ems_far_inside: bool = False              # listed code's far transfer into listed code (a keep RETF too)
     ems_exit_after: bool = False              # a listed range's last instruction: its fall-through leaves
+    vram_ds: bool = False                     # listed code (vram-ds.csv): DS stores mark rows too
+    vram_far_inside: bool = False             # its direct far transfer into listed code
+    vram_exit_after: bool = False             # a vram-ds.csv range's last instruction
     driver_call: bool = False                 # jump into the per-frame graphics call (D9; none yet)
     ret_mismatch: str = "rt_ret_mismatch"     # a return check's mismatch branch (emit.py: local)
     ret_jump: int | None = None               # near RET to a pushed continuation: its IP (ret-jumps.csv)
@@ -347,19 +358,35 @@ class Lowering:
             low = [f"\tcmp.w #{hx(self.c.seg_lo)},{src}", f"\tbcs {back}"] if self.c.seg_lo else []
             self.cold += [f"{cold}:", *low, "\tjsr smc_expose", f"\tbra {back}"]
             self.stats["segment check (cell cache)"] += 1
-        if self.c.ems and s in ("ds", "ss") and not (
-                s == "ds" and (self.c.ems_ds or self.c.ems_restore)):
-            # EMS model: DS and SS accesses are not guarded, so a load whose
-            # window may meet the frame has its pages copied in (rt_ems_seg);
-            # listed code guards its DS accesses instead, and a restore of the
-            # interrupted DS finds its pages live or guarded (ems-ds.csv)
+        ems = self.c.ems and s in ("ds", "ss") and not (
+            s == "ds" and (self.c.ems_ds or self.c.ems_restore))
+        # EMS model: DS and SS accesses are not guarded, so a load whose
+        # window may meet the frame has its pages copied in (rt_ems_seg);
+        # listed code guards its DS accesses instead, and a restore of the
+        # interrupted DS finds its pages live or guarded (ems-ds.csv).
+        # Video stores through DS (owner decision 2026-11-23): outside
+        # vram-ds.csv's code they are not marked, so a DS load whose window
+        # meets the VGA frame (9001h-AF9Fh, vram_segment) marks the whole
+        # frame (rt_vram_ds), in every module: DS may reach listed code's
+        # callers loaded. Both share one compare inline.
+        vram = self.c.ems and s in UNMARKED and not (self.c.vram_ds and not VRAM_PLANT)
+        if ems or vram:
             k = sum(1 for x in self.cold if x.startswith(f"{self.c.label}_es"))
             cold, back = f"{self.c.label}_es{k}", f"{self.c.label}_et{k}"
-            self.e(f"cmp.w #$d001,{src}")
+            self.e(f"cmp.w #${'9001' if vram else 'd001'},{src}")
             self.e(f"bcc {cold}")
             self.at(back)
-            self.cold += [f"{cold}:", "\tjsr rt_ems_seg", f"\tbra {back}"]
-            self.stats["EMS segment check"] += 1
+            lines = [f"{cold}:"]
+            if vram and ems:
+                lines += [f"\tcmp.w #$d001,{src}", f"\tbcc {cold}e"]
+            if vram:
+                lines += [f"\tcmp.w #$afa0,{src}", f"\tbcc {back}", "\tjsr rt_vram_ds", f"\tbra {back}"]
+                self.stats["video DS load check"] += 1
+            if ems:
+                lines += [f"{cold}e:"] if vram else []
+                lines += ["\tjsr rt_ems_seg", f"\tbra {back}"]
+                self.stats["EMS segment check"] += 1
+            self.cold += lines
         self.e(f"lsl.l #4,{src}")
         self.e(f"lea -$7fff(a6),{SEGBASE[s]}")
         self.e(f"suba.l {src},{SEGBASE[s]}")
@@ -535,9 +562,13 @@ class Lowering:
                 self.ems_guard("ds")
                 if op in EMS_EXITS and not self.c.ems_far_inside:
                     self.ems_exit()
+        listed = self.c.vram_ds and not VRAM_PLANT
+        if listed and op in EMS_EXITS and not self.c.vram_far_inside:
+            self.vram_exit()
         if self.c.vram and op not in STRING_OPS:
             for m in mem_dests(i):
-                self.vram_mark(m)
+                if m.seg not in UNMARKED or listed:
+                    self.vram_mark(m)
         fn()
         if "CF" in writes(i)[1] and not self.cf_result:
             self.x_cf = False
@@ -547,6 +578,8 @@ class Lowering:
                     self.code_store(m)
         if self.c.ems_exit_after and op not in ("jmp", "jmpf", "ret", "retf", "iret", "hlt"):
             self.ems_exit(keep=True)
+        if listed and self.c.vram_exit_after and op not in ("jmp", "jmpf", "ret", "retf", "iret", "hlt"):
+            self.vram_exit(keep=True)
         self.out, compact_stats = compact(self.out)
         self.stats.update(compact_stats)
         return self.out
@@ -661,6 +694,28 @@ class Lowering:
         self.cold += [f"{cold}:", "\tmove.w ccr,-(sp)", "\tjsr rt_ems_ds_leave",
                       "\tmove.w (sp)+,ccr", f"\tbra {back}"]
         self.stats["EMS DS exit check"] += 1
+
+    def vram_exit(self, keep: bool = False) -> None:
+        """Before a transfer out of vram-ds.csv's code (EMS_EXITS), and after a
+        range's last instruction where it falls through out of it: DS still at
+        the VGA frame (9001h-AF9Fh) marks the whole frame (rt_vram_ds, a counted
+        fallback), as code outside does not mark its DS stores. Keeps every
+        register, X, and the CCR where flags enter in it (`keep`: always)."""
+        k = sum(1 for x in self.cold if x.startswith(f"{self.c.label}_vy"))
+        cold, back = f"{self.c.label}_vy{k}", f"{self.c.label}_vz{k}"
+        keep = keep or bool(self.c.ccr_in)
+        if keep:
+            self.out.append("\tmove.w ccr,-(sp)")
+        self.out.append("\tcmp.w #$9001,G_DS(a6)")
+        self.out.append(f"\tbcs.s {back}")
+        self.out.append("\tcmp.w #$afa0,G_DS(a6)")
+        self.out.append(f"\tbcs {cold}")
+        self.out.append(f"{back}:")
+        if keep:
+            self.out.append("\tmove.w (sp)+,ccr")
+        self.cold += [f"{cold}:", "\tmove.w ccr,-(sp)", "\tjsr rt_vram_ds",
+                      "\tmove.w (sp)+,ccr", f"\tbra {back}"]
+        self.stats["video DS exit check"] += 1
 
     # -- D3 cell caches: CS stores that may reach a self-modified region -----
     def code_store(self, m: Mem) -> None:
@@ -1798,7 +1853,7 @@ class Lowering:
     def string_body(self, step: int, end: str) -> None:
         i = self.i
         op, w = i.op, i.width
-        if self.c.vram and op in ("movs", "stos"):
+        if self.c.vram and op in ("movs", "stos") and not VRAM_PLANT:
             self.vram_mark_string(step)     # first: it clobbers a0, a CS source's base
         src = self.seg_base(i.seg or "ds") if op in ("movs", "cmps", "lods") else None
         sz = SZ[w]

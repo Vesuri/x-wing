@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 ENV := . amiga/env.sh &&
 
-.PHONY: release-gen help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-configure-sb dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx t-resume-plants t-sab-resume sound-reference sound-fm gates-audio amiga-release whdload test-whdload test-release-workbench test-save-exit install-data test-install-data release release-check release-repro publish
+.PHONY: release-gen help verify-input extract-original-data reference check dos-emulator dos-disks dos-install dos-configure dos-configure-sb dos-reference dos-run dos-play map ghidra test-x86 dos-oracle gen gen-check gen-fresh test-m68k host test-host amiga amiga-sync test-amiga test-amiga-live test-amiga-audio t-sfx-capture t-sab-sfx-capture t-amiga-sfx t-resume-plants t-sab-resume t-vram-ds-plant sound-reference sound-fm gates-audio amiga-release whdload test-whdload test-release-workbench test-save-exit install-data test-install-data release release-check release-repro publish
 help:
 	@echo 'make verify-input           verify the staged demo archive'
 	@echo 'make extract-original-data  extract both forks into tmp/runtime-data'
@@ -28,6 +28,7 @@ help:
 	@echo 'make test-host              gate 5 host: lockstep to m01 against its host reference (tests/host_run.py)'
 	@echo 'make t-resume-M             host lockstep to flight milestone M from its save at the flight start (else from boot, saving)'
 	@echo 'make t-resume-plants        a resume refuses changes to what ran before its save (no host run)'
+	@echo 'make t-vram-ds-plant         the video DS fallback carries m01 planted, caught planted off'
 	@echo 'make t-sab-resume           a resume with an EMS mapping or a file position left out must diverge'
 	@echo 'make amiga                  the A1200 image -> amiga/out/XWing.exe (SYNC=1: amiga-sync)'
 	@echo 'make test-amiga             gate 5: m01 replayed on the 68030 model (A1200 chipset, FS-UAE + GDB capture; AMIGA_CPU)'
@@ -201,6 +202,11 @@ t-host-%:
 	$(call RUN,host-$*,python3 tests/host_run.py --milestone $*)
 test-host: host
 	@$(MAKE) -s -k -j$(JOBS) $(HOST_MILESTONES:%=t-host-%)
+# The video DS fallback's control (owner decision 2026-11-23, translator-design D9):
+# an image leaving the game's ES stores unmarked as DS's, so m01's drawing reaches
+# the screen only through the fallback; caught when the fallback is planted off.
+t-vram-ds-plant: host
+	$(call RUN,vram-ds-plant,XWING_VRAM_PLANT=es python3 tests/host_run.py --milestone m01-logo --vram-ds-plant)
 # The effect capture (src/runtime/sfx.c): host lockstep to its return in the m12
 # flight, compared with tools/sfx_capture.py and the guest as before it; saved for
 # its plants, which run on the saved capture in seconds.

@@ -178,6 +178,8 @@ extern uint8_t rt_dac[768];      /* video.c: 6-bit R, G, B */
 extern volatile uint8_t rt_present_due;
 void rt_video_refresh(void);
 void rt_video_frame(void);      /* INT 33h AX=3: the game's frame boundary */
+extern volatile uint8_t rt_vram_ds_on;   /* DS at the frame outside listed code (video.c) */
+extern uint32_t rt_vram_ds_falls;        /* its counted fallbacks (rt_vram_ds, rt_entry.s) */
 void rt_dac_out(uint16_t port, uint8_t v);   /* ports 3C8h/3C9h (video.c) */
 extern volatile uint32_t rt_fields;   /* vertical blanks, counted by the platform */
 /* Vertical mickeys per platform count (input.c): 2 as DOSBox-X, the

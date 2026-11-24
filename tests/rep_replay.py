@@ -160,6 +160,7 @@ def host_image(labels):
     inputs = [Path(__file__)] + sorted((ROOT / 'translator').glob('*.py')) + \
         sorted((ROOT / 'annotations').glob('*.csv')) + sorted((ROOT / 'build/gen').glob('*.s')) + objects
     digest = hashlib.sha256(('\n'.join(labels)).encode())
+    digest.update(os.environ.get('XWING_VRAM_PLANT', '').encode())   # lower.py VRAM_PLANT
     for p in inputs:
         digest.update(p.name.encode()); digest.update(p.read_bytes())
     final = ROOT / 'tmp/rep-host' / digest.hexdigest()[:20]

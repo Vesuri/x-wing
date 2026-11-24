@@ -94,7 +94,7 @@ settled form at the pinned commit.
 | D6 | Flags | Demand-driven stores; CCR fused with the next reader | Kept |
 | D7 | Indirect transfers | Compare chains over known targets; dispatch table; unknown stops | Kept; table seeds come from X-Wing's overlay manager entries instead of PLINK thunks |
 | D8 | Interrupts | Guest handlers run translated. Production takes IRQ0 at the CIA-B tick when IF is set, proved disjoint by `translator/irq.py`; sync points only in sync builds | Changed: asynchronous delivery from the start, with no production polls. Handlers for every vector the P2 census finds hooked (INT 09h if present; the Sound Blaster IRQ in P10) |
-| D9 | Display | The graphics driver (RTSVGA) translated; its A000h stores mark dirty rows; frame presented at the game's mouse poll (INT 33h AX=3); Kalms c2p into two Chip bitmaps | Changed: the code that writes A000h and X-Wing's per-frame call are found in P2; the frame boundary moves there. The SWOTL-specific mouse scaling and frame cap are re-decided against X-Wing's input |
+| D9 | Display | The graphics driver (RTSVGA) translated; its A000h stores mark dirty rows; frame presented at the game's mouse poll (INT 33h AX=3); Kalms c2p into two Chip bitmaps | Changed: the code that writes A000h and X-Wing's per-frame call are found in P2; the frame boundary moves there. The SWOTL-specific mouse scaling and frame cap are re-decided against X-Wing's input. Stores through DS mark rows only in listed code; a DS load of the frame elsewhere marks the whole frame (owner decision 2026-11-23) |
 | D10 | Sound | SPAZ translated; OPL writes reach `rt_out8`; FM re-hosted to Paula; effects prerendered | Changed: `ADLIB.IMS` translated for music and FM effects (P7); additive channels re-hosted at their operators' levels (Sound); worst-case effect priced first. Sound Blaster PCM through a DSP/DMA/IRQ model in P10 |
 | D11 | Strings | IR loops; REP fast paths when DF and range are provable | Kept |
 | D12 | Translator language | Python | Kept |
@@ -468,14 +468,25 @@ handler reads: sync for the declared span).
   not a matched workload): to m12 5,288 s from boot, 125 s resumed; to m14 11,787 s
   from boot, 2,355 s resumed (13,449 of its 58,737 interrupts after the save); every
   check of the resumed runs equal to their boot runs'.
-- Display (D9 slice): only the graphics driver (`emit.GRAPHICS_DRIVER`,
-  RTSVGA) writes video memory. Before each of its memory stores the
-  lowering checks the segment for A000h and calls `rt_vram_mark` (offset,
-  bytes; `rep stos/movs` once for the whole run), which widens per-row
-  changed columns; a store with no driver call in progress stops. The `jmp
-  far` of each PLINK thunk into the driver is a `jsr` counted in
-  `rt_vdrv_depth`; the outermost return publishes the frame
-  (`rt_vdrv_return`). The game's mouse poll (INT 33h AX=3, after all of a
+- Display (D9 slice): FRONTEND and FLIGHT write video memory
+  (`emit.VRAM_MODULES`). Before each of their stores through ES or SS the
+  lowering checks whether the segment's window meets the frame and calls
+  `rt_vram_mark` (offset, bytes; `rep stos/movs` once for the whole run), which
+  widens per-row changed columns. Stores through DS are checked so only in the
+  routines the traces show storing to the frame through DS
+  (`annotations/vram-ds.csv`, measured by `tools/vram_ds_profile.py`; owner
+  decision 2026-11-23). Its ranges are shaped as `ems-ds.csv`'s guard ranges
+  (`emit.vram_ctx`). Elsewhere, in every module, a DS load of 9001h–AF9Fh, and
+  listed code left with DS there (`lower.vram_exit`), call `rt_vram_ds`: every
+  row is marked, and each present marks the whole frame again until one finds DS
+  off the frame (`rt_vram_ds_on`). The fallback is counted in `rt_vram_ds_falls`. In
+  m01, m02, m12, m13 and m17 no store reaches the frame through DS (MEASURED), so the
+  list holds only routines that load DS at the frame or at a buffer whose window meets
+  it, listed to keep them off the fallback; m13's front-end loaders at 1918:007C and
+  3273:36D5 take it. Control: `make t-vram-ds-plant` (`tests/host_run.py
+  --vram-ds-plant`): an image that leaves ES stores unmarked as well
+  (`XWING_VRAM_PLANT=es`) passes m01 on 124,833 fallbacks, and is caught by the
+  shown-frame check with `rt_vram_ds` returning at once. The game's mouse poll (INT 33h AX=3, after all of a
   frame's drawing) ends a frame (`rt_video_frame`): its changed rows go to
   `plat_present` as 32-pixel-aligned rectangles there if a vertical blank is
   due, otherwise at the next one (`rt_present_due`; Amiga: the field task,

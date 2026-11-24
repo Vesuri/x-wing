@@ -48,6 +48,7 @@ G_DS	equ	1
 	xref	rt_sfx_starts
 	xdef	rt_run_guest
 	xdef	rt_vram_mark
+	xdef	rt_vram_ds
 	xdef	rt_vdrv_return
 	xdef	rt_ems_es
 	xdef	rt_ems_seg
@@ -78,6 +79,8 @@ G_DS	equ	1
 	xref	rt_vram_rows
 	xref	rt_vram_top
 	xref	rt_vram_bottom
+	xref	rt_vram_ds_on
+	xref	rt_vram_ds_falls
 	xref	rt_vdrv_depth
 	xref	rt_video_publish
 	xref	rt_opl
@@ -890,6 +893,27 @@ vram_row:	; row of each 64-byte block of the frame: k / 5
 	dc.b	192,192,192,192,192,193,193,193,193,193,194,194,194,194,194,195,195,195,195,195
 	dc.b	196,196,196,196,196,197,197,197,197,197,198,198,198,198,198,199,199,199,199,199
 	even
+
+; Video stores through DS (owner decision 2026-11-23): a DS load of a
+; segment whose window meets the frame outside listed code
+; (annotations/vram-ds.csv; lower.py putseg), or listed code left with DS there
+; (vram_exit). Stores through DS go unmarked there, so the whole frame is
+; changed at each present until one finds DS off the frame (video.c present).
+; The flag first, then every row whole (video.c vram_all): a present
+; between them still sees the flag. Keeps every register; the CCR is
+; clobbered. Safe at interrupt level.
+rt_vram_ds:
+	st	rt_vram_ds_on
+	movem.l	d0/a0,-(a7)
+	lea	rt_vram_rows,a0
+	move.w	#199,d0
+.all:	move.l	#320,(a0)+		; lo 0, hi 320
+	dbf	d0,.all
+	movem.l	(a7)+,d0/a0
+	clr.w	rt_vram_top
+	move.w	#200,rt_vram_bottom
+	addq.l	#1,rt_vram_ds_falls
+	rts
 
 ; D9 contract (SWOTL's graphics driver thunk; none in X-Wing, video.c stops):
 ; the driver's retf returns here (d7.l = the popped CS:IP for the caller's
