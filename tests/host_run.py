@@ -303,7 +303,8 @@ SABOTAGE = {
     "ax": "AX of the tenth service result off by one",
     "psp": "one PSP byte changed at the guest entry",
     "dac": "one DAC gun off at each DAC change",
-    "vram": "stores to video memory not marked (rt_vram_mark returns at once)",
+    "vram": "stores to video memory not marked (rt_vram_mark and rt_vram_mark_short return at once)",
+    "vram-short": "a byte or word store's mark ends at its byte count less one (rt_vram_mark_short's column end)",
     "far": "every dispatch row near-only (rt_dispatch_far must stop, R14e)",
     "retrace": "one VGA status read answered with bit 3 flipped",
     "irq-stack": "rt_irq_async runs the IRQ0 handler on the interrupted stack (private SS:SP not set, I4)",
@@ -314,6 +315,8 @@ SABOTAGE = {
     "song-requests": "the monitor counts no driver request (song buffer reloads become races)",
     "ems-cache": "the EMS guard caches never emptied (ems.c rt_ems_cache_clear returns at once)",
     "ems-cache-irq": "IRQ0's handler leaves its EMS guard caches (ems.c rt_ems_cache_restore returns at once)",
+    "ems-cache-run": "the EMS guard cache's run of frame pages takes in every page above the access's "
+                     "(rt_entry.s EMS_GUARD .up compares nothing)",
     "sb-block": "the first DSP block's length one byte long (the block oracle; SB build)",
     "sb-irq": "an IRQ 7 posted with the first replayed interrupt, no DSP block playing (SB build)",
     "dsp-status": "the model's 22Eh status reporting no data after the DSP reset (SB build)",
@@ -462,6 +465,12 @@ class Host:
         e.write(self.syms["rt_present_due"], b"\1")  # a vertical blank is always due
         if sabotage == "vram":
             e.write(self.syms["rt_vram_mark"], b"\x4e\x75")  # rts
+            e.write(self.syms["rt_vram_mark_short"], b"\x4e\x75")
+        if sabotage == "vram-short":    # its `add.w a0,d6` (column end) becomes `subq.w #1,d6`
+            code = self.mem(self.syms["rt_vram_mark_short"], 64)
+            at = code.find(b"\xdc\x48")
+            assert at >= 0 and at % 2 == 0 and code.count(b"\xdc\x48") == 1, code.hex()
+            e.write(self.syms["rt_vram_mark_short"] + at, b"\x53\x46")
         if os.environ.get("XWING_VRAM_PLANT") == "es":   # translator/lower.py VRAM_PLANT
             e.write(self.syms["rt_vram_plant_es"], b"\1")
         if sabotage == "vram-ds":
@@ -470,6 +479,14 @@ class Host:
             e.write(self.syms["rt_ems_cache_clear"], b"\x4e\x75")  # rts
         if sabotage == "ems-cache-irq":
             e.write(self.syms["rt_ems_cache_restore"], b"\x4e\x75")  # rts
+        if sabotage == "ems-cache-run":
+            # cmp.l 4(a0,d1.w),d2; bne.s .fill in both guards: the bne.s a nop
+            lo, hi = self.syms["rt_ems_es"], self.syms["rt_ems_ds_leave"]
+            code = e.read(lo, hi - lo)
+            at = [i for i in range(len(code) - 5) if code[i:i + 5] == b"\xb4\xb0\x10\x04\x66"]
+            assert len(at) == 2, at
+            for i in at:
+                e.write(lo + i + 4, b"\x4e\x71")
         if sabotage in ("irq-stack", "irq-state", "irq-sentinel"):
             a = self.syms["rt_irq_async"]
             code = e.read(a, self.syms["rt_irq_async_back"] + 0x40 - a)
@@ -2273,6 +2290,52 @@ def resident_problems(sabotage: str | None = None) -> list[str]:
     return problems
 
 
+def vram_mark_problems(elf: Path, sabotage: str | None = None) -> list[str]:
+    """rt_vram_mark_short (rt_entry.s, a byte or word store's mark) against
+    rt_vram_mark on the run's own image, where the m68k differential has no mark:
+    from the same rows (none marked, or every row's columns 100..200 with rows 50
+    to 149 marked), the same rows, first and end row after both, for offsets at
+    the rows' ends, the frame's ends and the 64 KiB wrap, through segments below,
+    at and above A000h."""
+    problems = []
+    h = Host(INSTALL, elf=elf, sabotage=sabotage)
+    ret = h.syms["plat_exit"]   # stop address, never executed
+    rows, top, bottom = h.syms["rt_vram_rows"], h.syms["rt_vram_top"], h.syms["rt_vram_bottom"]
+    empty = bytes(800), 200, 0
+    some = struct.pack(">2H", 100, 200) * 200, 50, 150
+
+    def run(fn, start, d7, d6, a0):
+        h.e.write(rows, start[0])
+        h.e.write(top, start[1].to_bytes(2, "big"))
+        h.e.write(bottom, start[2].to_bytes(2, "big"))
+        h.e.reg_write(U.M68K["sr"], 0x2700)
+        h.e.reg_write(U.M68K["a7"], STACK_TOP - 8)
+        h.e.write(STACK_TOP - 8, ret.to_bytes(4, "big"))
+        h.e.reg_write(U.M68K["d7"], d7)
+        h.e.reg_write(U.M68K["d6"], d6)
+        h.e.reg_write(U.M68K["a0"], a0 & 0xFFFFFFFF)
+        h.e.start(h.syms[fn], ret, timeout_us=1_000_000)
+        return h.r("pc") == ret, h.mem(rows, 800), h.mem(top, 2), h.mem(bottom, 2)
+
+    offsets = (0, 1, 2, 318, 319, 320, 639, 640, 0x3E7F, 0x7CFF, 63678, 63679, 63998, 63999,
+               64000, 0xFFFE, 0xFFFF)
+    for seg in (0x9001, 0x9FF0, 0xA000, 0xA014, 0xA3E8, 0xAF9F):
+        a0 = (seg - 0xA000) * 16
+        for off in offsets:
+            for n in (1, 2):
+                for start in (empty, some):
+                    want = run("rt_vram_mark", start, off, n, a0)
+                    got = run("rt_vram_mark_short", start, off | 0x5A5A0000, n, a0)
+                    if not got[0] or got != want:
+                        diff = next((y for y in range(200) if got[1][4 * y:4 * y + 4] != want[1][4 * y:4 * y + 4]),
+                                    None)
+                        problems.append(f"rt_vram_mark_short {seg:04X}:{off:04X} {n} bytes from "
+                                        f"{'no rows' if start is empty else 'marked rows'}: "
+                                        + ("no return" if not got[0] else
+                                           f"row {diff} or top/bottom differ from rt_vram_mark"))
+    return problems[:5]
+
+
 def ems_guard_problems(elf: Path, sabotage: str | None = None) -> list[str]:
     """The EMS guard's routing on the run's own image (rt_entry.s EMS_GUARD,
     ems.c guard), where the m68k differential stubs it: frame pages mapped by
@@ -2319,6 +2382,19 @@ def ems_guard_problems(elf: Path, sabotage: str | None = None) -> list[str]:
             if not ok or live != want_live or a != want_a:
                 problems.append(f"EMS guard {name} d7={d7:04x} d6={d6:x} pages {order}: frame pages live {live}, "
                                 f"want {want_live}; base {a:x}, want {want_a:x} (pc={h.r('pc'):x})")
+            # The cache filled for the run of frame pages of the access's displacement:
+            # an access in either page has its own page's base, hit or not.
+            for cd7 in (0x3D00, 0x0100):
+                ok = call(name, 0x40, cd7)
+                p = 0 if cd7 == 0x0100 else 1
+                a = h.r({"rt_ems_es": "a1", "rt_ems_ds": "a3"}[name])
+                live = tuple(h.mem(h.syms["rt_ems_live"], 2))
+                mapped = int.from_bytes(h.mem(h.syms["rt_ems_mapped"] + 2 * p, 2), "big")
+                frame = TOP - (EMS_FRAME + (p + 1) * EMS_PAGE) + 1
+                want_a = plain if live[p] else plain + EMS_STORE + (EMS_STORE_PAGES - mapped) * EMS_PAGE - frame
+                if not ok or a != want_a:
+                    problems.append(f"EMS guard cache {name} pages {order} after d7={d7:04x}: page {p} "
+                                    f"(d7={cd7:04x}) base {a:x}, want {want_a:x} (pc={h.r('pc'):x})")
             if d7 != 0x0100:
                 continue
             # The guard's one-entry cache (EMS_GUARD, ems.c rt_ems_cache_es/ds): another
@@ -2603,6 +2679,7 @@ def check(milestone: str, timeout: int, amiga: Path | None, sabotage: str | None
     script["irqs"], script["releases"] = reference_inputs(trace, exact_releases=True, start=start)
     summary = dict(kv.split("=", 1) for kv in (trace / "summary.txt").read_text().split())
     problems = rearm_problems() + resident_problems(sabotage) + ems_guard_problems(h.elf, sabotage)
+    problems += vram_mark_problems(h.elf, sabotage)
     if int(summary.get("polls", "0"), 16) != fnv(POLLS.read_bytes()):
         problems.append("reference recorded with other poll points: rerun tools/reference.py --polls")
     h.services_source = ServiceSource(trace, start[0])

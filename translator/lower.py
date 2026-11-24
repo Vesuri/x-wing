@@ -838,14 +838,15 @@ class Lowering:
     def vram_mark(self, m: Mem) -> None:
         """Before a store to `m` in FRONTEND or FLIGHT: if its segment's window
         meets the frame, rt_vram_mark widens the changed rows (d7 = offset,
-        d6 = bytes, a0 = the segment's distance from A0000h)."""
+        d6 = bytes, a0 = the segment's distance from A0000h); a byte or word
+        through rt_vram_mark_short, its common case without a call."""
         if m.seg == "cs":
             return
         skip = self.local()
         self.vram_segment(SEGSLOT[m.seg], skip)
         self.offset_d7(m)
         self.e(f"moveq #{m.width // 8},d6")
-        self.e("jsr rt_vram_mark")
+        self.e(f"jsr {'rt_vram_mark_short' if m.width <= 16 else 'rt_vram_mark'}")
         self.at(skip)
         self.stats["video store mark"] += 1
 

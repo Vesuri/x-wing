@@ -48,7 +48,7 @@ RET, UNKNOWN, SMC = "ret", "unknown", "smc"
 TERMINAL = {"jmp", "jmpf", "ret", "retf", "iret", "hlt"}
 RUNTIME = ("rt_int", "rt_irq", "rt_fault", "rt_halt", "rt_trap", "rt_in8", "rt_in16", "rt_out8", "rt_out16",
            "rt_ret_mismatch", "rt_ret_far_mismatch", "rt_dispatch_near", "rt_dispatch_far", "rt_stop_unknown",
-           "rt_vram_mark", "rt_vdrv_depth", "rt_vdrv_return", "rt_irq_pending", "rt_ems_es",
+           "rt_vram_mark", "rt_vram_mark_short", "rt_vdrv_depth", "rt_vdrv_return", "rt_irq_pending", "rt_ems_es",
            "rt_ems_seg", "rt_ems_ds", "rt_ems_ds_leave", "rt_vram_ds",
            "rt_ems_es_miss", "rt_ems_ds_miss", "rt_ems_cache_es", "rt_ems_cache_ds")
 # G3 native replacements (annotations/hle.csv): runtime service rt_hle_<service>

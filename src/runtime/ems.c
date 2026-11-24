@@ -38,8 +38,9 @@ uint16_t rt_ems_mapped[EMS_PHYS];     /* store page + 1, 0: none */
 uint8_t rt_ems_live[EMS_PHYS];        /* the frame page holds the mapped page's bytes */
 int32_t rt_ems_fast[EMS_PHYS];        /* rt_entry.s rt_ems_es: displacement, or 1 (refresh) */
 /* rt_entry.s EMS_GUARD's one-entry caches (ES, DS): the segment (0: empty), the
- * lowest offset and the end of the offsets within the frame page the last
- * displaced access lay in, and the base register's value for them. Emptied by every
+ * lowest offset and the end of the offsets within the run of adjacent frame
+ * pages of one rt_ems_fast displacement the last decided access lay in, and the
+ * base register's value for them. Emptied by every
  * change of rt_ems_fast (refresh). */
 uint32_t rt_ems_cache_es[3], rt_ems_cache_ds[3];
 

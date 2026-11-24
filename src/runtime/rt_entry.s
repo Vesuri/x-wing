@@ -48,6 +48,7 @@ G_DS	equ	1
 	xref	rt_sfx_starts
 	xdef	rt_run_guest
 	xdef	rt_vram_mark
+	xdef	rt_vram_mark_short
 	xdef	rt_vram_ds
 	xdef	rt_vdrv_return
 	xdef	rt_ems_es
@@ -532,14 +533,15 @@ port_out:
 ; access runs on the store page, or on the frame with its pages copied in);
 ; after a DS or SS load, the frame pages its window meets are copied in. Every
 ; other register kept; the callers keep d6, d7 and the CCR.
-; An access within one frame page, or two whose displacements are equal,
-; decides here from rt_ems_fast (ems.c): the store displacement, 0 (live or
-; unmapped: the frame), or 1 (the C path, which copies it in). Whole windows,
-; wraps, accesses that meet the frame from below or span pages that differ take
-; the C path; an access above the frame runs plain.
+; An access within frame pages whose displacements are equal decides here from
+; rt_ems_fast (ems.c): the store displacement, 0 (live or unmapped: the frame),
+; or 1 (the C path, which copies it in), and fills the cache for the run of
+; frame pages around it of that displacement. Whole windows, wraps, accesses
+; that meet the frame from below or span pages that differ take the C path; an
+; access above the frame runs plain.
 EMS_GUARD	macro			; \1 segment slot, \2 base register, \3 C path, \4 cache, \5 miss entry
 	; The cache (ems.c rt_ems_cache_es/ds): the same segment, an access within the
-	; offsets of the frame page the last displaced access lay in: its base. d6 and d7
+	; offsets of the run of frame pages the last decided access lay in: its base. d6 and d7
 	; are the caller's to restore (lower.py ems_guard). Generated code checks the
 	; cache inline for an access that is no string's and enters at \5 on a miss.
 	movea.w	\1(a6),\2		; a segment of D001h or above: never the empty 0
@@ -561,7 +563,7 @@ EMS_GUARD	macro			; \1 segment slot, \2 base register, \3 C path, \4 cache, \5 m
 \5:
 	tst.l	d6			; the whole window
 	beq	.slow\@
-	movem.l	d0-d1/a0,-(a7)
+	movem.l	d0-d2/a0,-(a7)
 	moveq	#0,d1
 	move.w	d7,d1
 	move.l	d1,d0
@@ -585,46 +587,60 @@ EMS_GUARD	macro			; \1 segment slot, \2 base register, \3 C path, \4 cache, \5 m
 	lsr.l	#6,d1
 	cmp.l	#4,d1
 	bcc	.slow2\@		; past the frame's end
-	sub.l	d0,d1
-	beq	.one\@
-	subq.l	#1,d1
-	bne	.slow2\@		; three pages or more: the C path
-	lsl.w	#2,d0			; two pages: one displacement (ems.c store)
-	lea	rt_ems_fast,a0
-	move.l	4(a0,d0.w),d1
-	move.l	(a0,d0.w),d0
-	cmp.l	d0,d1
-	bne	.slow2\@
-	bra	.test\@
-.one\@:
 	lsl.w	#2,d0
+	lsl.w	#2,d1
 	addq.b	#1,rt_irq_mask		; no refresh between the table and the cache
 	lea	rt_ems_fast,a0
-	move.l	(a0,d0.w),d1
-	btst	#0,d1
+	move.l	(a0,d1.w),d2		; the displacement
+	btst	#0,d2
 	bne	.unmask\@
-	; fill the cache: the offsets of frame page k (d0 = 4k) within the segment
-	lsl.l	#8,d0
-	lsl.l	#4,d0			; 4000h * k
-	add.l	#$e0000,d0		; the page's first byte
+.same\@:				; every page of the access: one displacement
+	cmp.w	d0,d1			; (ems.c store), else the C path
+	beq.s	.down\@
+	subq.w	#4,d1
+	cmp.l	(a0,d1.w),d2
+	beq.s	.same\@
+	bra	.unmask\@
+	; fill the cache: the offsets within the segment of the run of frame pages
+	; around the access's that share its displacement (d0 = 4 first, d1 = 4 last)
+.down\@:
+	tst.w	d0
+	beq.s	.up\@
+	cmp.l	-4(a0,d0.w),d2
+	bne.s	.up\@
+	subq.w	#4,d0
+	bra.s	.down\@
+.up\@:
+	cmp.w	#12,d1
+	beq.s	.fill\@
+	cmp.l	4(a0,d1.w),d2		; (host_run.py sabotage ems-cache-run)
+	bne.s	.fill\@
+	addq.w	#4,d1
+	bra.s	.up\@
+.fill\@:
 	moveq	#0,d6
 	move.w	\1(a6),d6
 	lsl.l	#4,d6
+	sub.l	#$e0000,d6		; the segment, frame-relative
+	lsl.l	#8,d0
+	lsl.l	#4,d0			; 4000h * first
 	sub.l	d6,d0			; its offset in the segment (negative: below it)
-	move.l	d0,d6
-	add.l	#$4000,d6		; the page's end
-	cmp.l	#$10000,d6
+	lsl.l	#8,d1
+	lsl.l	#4,d1
+	add.l	#$4000,d1
+	sub.l	d6,d1			; the run's end
+	cmp.l	#$10000,d1
 	bls.s	.end\@
-	move.l	#$10000,d6
+	move.l	#$10000,d1
 .end\@:
-	move.l	d6,\4+4
+	move.l	d1,\4+4
 	tst.l	d0
 	bpl.s	.low\@
 	moveq	#0,d0
 .low\@:
 	move.w	d0,\4+2
-	move.l	d1,d6			; the displacement
-	movem.l	(a7)+,d0-d1/a0
+	move.l	d2,d6			; the displacement
+	movem.l	(a7)+,d0-d2/a0
 	moveq	#0,d7
 	move.w	\1(a6),d7
 	lsl.l	#4,d7
@@ -638,18 +654,12 @@ EMS_GUARD	macro			; \1 segment slot, \2 base register, \3 C path, \4 cache, \5 m
 .unmask\@:
 	subq.b	#1,rt_irq_mask
 	bra	.slow2\@
-.test\@:
-	btst	#0,d0
-	bne	.slow2\@
-	move.l	d0,d6			; the displacement
-	movem.l	(a7)+,d0-d1/a0
-	bra	.base\@
 .plain\@:
-	movem.l	(a7)+,d0-d1/a0
+	movem.l	(a7)+,d0-d2/a0
 	moveq	#0,d6
 	bra	.base\@
 .slow2\@:
-	movem.l	(a7)+,d0-d1/a0
+	movem.l	(a7)+,d0-d2/a0
 .slow\@:
 	movem.l	d0-d1/a0-a1,-(a7)
 	addq.b	#1,rt_irq_mask		; the CIA tick waits (machine.c)
@@ -844,6 +854,62 @@ vram_span:
 .row:	move.l	#320,(a0)+		; lo 0, hi 320
 	dbf	d6,.row
 	rts
+
+; A store of d6 = 1 or 2 bytes (lower.py vram_mark), the inputs as above: the
+; common case without saving a register or calling, a store within one row of
+; the frame whose offset does not wrap; anything else goes on to rt_vram_mark
+; with the same result (host_run.py vram_mark_problems). d6/d7/a0 clobbered.
+rt_vram_mark_short:
+	and.l	#$ffff,d7
+	cmp.w	#$ffff,d7
+	beq	rt_vram_mark		; a word at FFFFh wraps
+	add.l	a0,d7			; the first byte, frame-relative
+	cmp.l	#64000-2,d7
+	bhi	.seg			; below the frame, or at its last bytes
+	movea.l	d7,a0
+	lsr.w	#6,d7
+	move.b	(vram_row,pc,d7.w),d7
+	and.w	#$ff,d7			; the row
+	lsl.w	#6,d7			; d7's upper word is 0
+	suba.l	d7,a0
+	lsl.w	#2,d7
+	suba.l	d7,a0			; the first column; d7 = row * 256
+	add.w	a0,d6			; the column end (host_run.py sabotage vram-short)
+	cmp.w	#320,d6
+	bhi	.rows			; a word across two rows
+	lsr.w	#8,d7
+	cmp.w	rt_vram_top,d7
+	bhs.s	.top
+	move.w	d7,rt_vram_top
+.top:	addq.w	#1,d7
+	cmp.w	rt_vram_bottom,d7
+	bls.s	.bottom
+	move.w	d7,rt_vram_bottom
+.bottom:
+	subq.w	#1,d7
+	lsl.w	#2,d7			; the row entry: lo.w, hi.w
+	tst.w	(rt_vram_rows+2,d7.w)
+	beq.s	.new
+	cmpa.w	(rt_vram_rows,d7.w),a0
+	bhs.s	.lo
+	move.w	a0,(rt_vram_rows,d7.w)
+.lo:	cmp.w	(rt_vram_rows+2,d7.w),d6
+	bls.s	.done
+	move.w	d6,(rt_vram_rows+2,d7.w)
+.done:	rts
+.new:	move.w	a0,(rt_vram_rows,d7.w)
+	move.w	d6,(rt_vram_rows+2,d7.w)
+	rts
+.seg:	sub.l	a0,d7			; the offset again
+	bra	rt_vram_mark
+.rows:	lsr.w	#8,d7			; frame byte = row * 320 + column
+	mulu.w	#320,d7
+	add.l	a0,d7
+	sub.w	a0,d6			; the bytes
+	and.l	#$ffff,d6
+	suba.l	a0,a0			; frame-relative: distance 0
+	bra	rt_vram_mark
+
 
 vram_row:	; row of each 64-byte block of the frame: k / 5
 	dc.b	0,0,0,0,0,1,1,1,1,1,2,2,2,2,2,3,3,3,3,3

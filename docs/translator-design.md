@@ -65,7 +65,7 @@ P5 adapted the rest to the first vertical slice:
 - `emit.py`: one section per module (`.text.<module>`) so vasm's branch optimisation
   converges; dispatch rows sorted by absolute CS.
 - `cfg.py`: a ret-jump RET seeds its target; any other non-plain RET raises.
-- `tests/m68k_blocks.py`, `m68k_diff.py`: `rt_vram_mark` returns (the host lockstep
+- `tests/m68k_blocks.py`, `m68k_diff.py`: `rt_vram_mark` and `rt_vram_mark_short` return (the host lockstep
   checks the marks); a ret-jump RET that pops another IP must stop at `rt_ret_mismatch`.
   The cell-cache cases address a region through each store site's own CS (its
   `code_regions` delta), plant RETs only at cell starts inside the region (X-Wing's runs
@@ -282,8 +282,9 @@ diffs directly); relocated words in instructions are emitted as
   displaced onto it; store slots are reversed as guest memory is, so consecutive
   pages share one displacement); anything else copies its pages in and runs on
   the frame with the plain base. A one-entry cache per segment register
-  (`EMS_GUARD`, `ems.c`) holds the last displaced segment, the offsets of its frame
-  page and the base, emptied at every change of the store mapping; the out-of-line
+  (`EMS_GUARD`, `ems.c`) holds the last decided segment, the offsets of the run of
+  adjacent frame pages around its access that share its displacement, and the
+  base, emptied at every change of the store mapping; the out-of-line
   path checks it inline for an operand's access and calls `rt_ems_es_miss` only
   on a miss (a string calls `rt_ems_es`, which checks it itself). So a1 is the
   plain ES base only below D001h, and every access at or above runs right after
@@ -321,7 +322,9 @@ diffs directly); relocated words in instructions are emitted as
   count, the inline hit's three compares, a guard held across an ES change or a
   write of its offset's register), by `tests/host_run.py`'s routing check on the
   run's own image (`ems_guard_problems`: a range within a page, across
-  consecutive and across other store pages), and by the host lockstep; host
+  consecutive and across other store pages, then an access in each page through
+  the cache; sabotage `ems-cache-run` takes every page above into the run), and
+  by the host lockstep; host
   captures and Amiga dumps show non-live pages from the store.
 - Returns: a `ret` continues at the return sites of the calls whose targets
   reach it without entering a call (the divide-error edge is not flow);
@@ -486,7 +489,10 @@ handler reads: sync for the declared span).
   (`emit.VRAM_MODULES`). Before each of their stores through ES or SS the
   lowering checks whether the segment's window meets the frame and calls
   `rt_vram_mark` (offset, bytes; `rep stos/movs` once for the whole run), which
-  widens per-row changed columns. Stores through DS are checked so only in the
+  widens per-row changed columns; a byte or word store calls `rt_vram_mark_short`,
+  which marks one within a row without saving a register or calling and passes
+  any other to `rt_vram_mark` (`tests/host_run.py` `vram_mark_problems` compares
+  the two over row, frame and offset edges; sabotage `vram-short`). Stores through DS are checked so only in the
   routines the traces show storing to the frame through DS
   (`annotations/vram-ds.csv`, measured by `tools/vram_ds_profile.py`; owner
   decision 2026-11-23). Its ranges are shaped as `ems-ds.csv`'s guard ranges
