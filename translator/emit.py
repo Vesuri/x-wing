@@ -49,7 +49,8 @@ TERMINAL = {"jmp", "jmpf", "ret", "retf", "iret", "hlt"}
 RUNTIME = ("rt_int", "rt_irq", "rt_fault", "rt_halt", "rt_trap", "rt_in8", "rt_in16", "rt_out8", "rt_out16",
            "rt_ret_mismatch", "rt_ret_far_mismatch", "rt_dispatch_near", "rt_dispatch_far", "rt_stop_unknown",
            "rt_vram_mark", "rt_vdrv_depth", "rt_vdrv_return", "rt_irq_pending", "rt_ems_es",
-           "rt_ems_seg", "rt_ems_ds", "rt_ems_ds_leave", "rt_vram_ds")
+           "rt_ems_seg", "rt_ems_ds", "rt_ems_ds_leave", "rt_vram_ds",
+           "rt_ems_es_miss", "rt_ems_ds_miss", "rt_ems_cache_es", "rt_ems_cache_ds")
 # G3 native replacements (annotations/hle.csv): runtime service rt_hle_<service>
 # at a range's first instruction; NE skips the range to the instruction after
 # `last`, EQ runs the guest code. `args`: up to two guest word registers, in
@@ -1135,8 +1136,10 @@ class Program:
         fences = {k + 1 for k, o in enumerate(run)
                   if (comp is None and (mod, o) in self.guard_at)
                   or (comp is not None and u.insns[o].op in region.REGUARD)}
+        hooks = {k for k, o in enumerate(run) if (mod, o) in self.diagnostic_hooks or (mod, o) in self.hle
+                 or (mod, o) in self.hle_resumes or (mod, o) in self.entry_of}
         try:
-            lws = plan(insns, lives, leaders, ctx, program=True, fences=fences, taken=taken)
+            lws = plan(insns, lives, leaders, ctx, program=True, fences=fences, taken=taken, hooks=hooks)
         except LowerError as e:
             raise LowerError(f"{mod}+{run[0]:05X} run: {e}") from None
         lab = label if comp is None else copy_label

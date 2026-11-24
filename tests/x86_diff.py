@@ -377,8 +377,30 @@ def form_key(n) -> tuple:
     return (n.op, n.width, n.cc, n.rep, n.seg is not None, tuple(kind(o) for o in n.operands))
 
 
+def ems_hold_cases(h: Harness) -> None:
+    """lower.ems_held (m68k_diff: the EMS model's runtime calls over the block):
+    two accesses of one ES operand, the second held unless what comes between
+    changes ES (to another value or the same), the offset's register, the
+    operand or its width; ES at or above D001h, and below."""
+    ld, st, ldb = bytes.fromhex("268b07"), bytes.fromhex("268907"), bytes.fromhex("268a07")
+    middles = {"none": b"", "other register": bytes.fromhex("40"), "es changed": bytes.fromhex("8ec2"),
+               "offset register": bytes.fromhex("43"), "offset byte": bytes.fromhex("b3ff"),
+               "two": bytes.fromhex("4049")}
+    for es in (0xE030, 0xD000, 0xEFFF):
+        for dx in (0xE430, es):
+            for name, mid in middles.items():
+                for first, second in ((ld, st), (ldb, st), (ld, bytes.fromhex("268807")),
+                                      (ld, bytes.fromhex("268b4702"))):
+                    code = first + mid + second
+                    n = 2 + {"none": 0, "two": 2}.get(name, 1)
+                    h.case(code + b"\x9c", f"b:ems-hold:{name}:{es:x}:{dx:x}", n=n + 1, block=True,
+                           overrides={"regs": dict(cs=0x2000, ds=0x5000, ss=0x7000, sp=0xfffe, es=es,
+                                                   dx=dx, bx=0x3ffe), "ip": 0x100})
+
+
 def boundary(h: Harness) -> None:
     rng = h.rng
+    ems_hold_cases(h)
     # Shifts and rotates by CL: every op, both widths, counts around the widths.
     for w, opc in ((8, 0xD2), (16, 0xD3)):
         for reg in range(8):

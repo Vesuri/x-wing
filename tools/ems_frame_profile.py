@@ -78,7 +78,7 @@ def main() -> None:
         self.e.hook_range(H.U.HOOK_MEM_READ | H.U.HOOK_MEM_WRITE, hook, lo, hi)
 
         cause = ["?"]
-        entries = {self.syms[n]: n for n in ("rt_ems_es", "rt_ems_ds", "rt_ems_ds_leave", "rt_ems_seg", "rt_int67", "rt_int_c",
+        entries = {self.syms[n]: n for n in ("rt_ems_es", "rt_ems_ds", "rt_ems_es_miss", "rt_ems_ds_miss", "rt_ems_ds_leave", "rt_ems_seg", "rt_int67", "rt_int_c",
                                              "rt_ems_touch", "rt_ems_sync", "rt_irq0_take")
                    if n in self.syms}
 

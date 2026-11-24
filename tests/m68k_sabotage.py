@@ -40,6 +40,7 @@ real_muldiv_source = L.Lowering.muldiv_source
 real_written = U.written
 real_op_jcc = L.Lowering.op_jcc
 real_plan = F.plan
+real_ems_held = F.ems_held
 real_reuse = U.reuse
 real_fold = U.fold
 real_guard_lines = U.guard_lines
@@ -624,6 +625,22 @@ STACK_PLANTS = {
 }
 
 
+def ems_held_line(old, new):
+    """lower.ems_held (as flags.plan calls it) with one source line changed."""
+    source = inspect.getsource(real_ems_held)
+    assert source.count(old) == 1, old
+    scope = dict(L.__dict__)
+    exec(source.replace(old, new), scope)
+    return scope["ems_held"]
+
+
+EMS_HOLD_PLANTS = {
+    "ems hold es": ('or any(isinstance(o, Reg) and o.name in ("es", "ds", "ss", "cs") for o in i.operands)',
+                    'or False'),
+    "ems hold register": ("or name in {cur[0], cur[1]} - {None}:", "or False:"),
+}
+
+
 def wide_bp_range(insns):
     """R6: the region guard admits BP one past each end of its range."""
     r = real_bp_range(insns)
@@ -650,6 +667,11 @@ SABOTAGE = [
     ("EMS DS guard misses D001h in listed code", ems_ds_edge("dx"), "boundary"),
     ("EMS DS exit check misses D001h", ems_ds_edge("dy"), "boundary"),
     ("EMS string guard ignores CX", ems_string_one, "boundary"),
+    ("EMS inline cache hit ignores the segment", sub(r"^\tbne\.s (\w+_[ed]x\d+m)$", "\tnop"), "boundary"),
+    ("EMS inline cache hit ignores the first offset", sub(r"^\tbcs\.s (\w+_[ed]x\d+m)$", "\tnop"), "boundary"),
+    ("EMS guard held across an ES change", "ems hold es", "boundary"),
+    ("EMS guard held across a write of its offset's register", "ems hold register", "boundary"),
+    ("EMS inline cache hit ignores the end", sub(r"^\tbhi\.s (\w+_[ed]x\d+s)$", "\tnop"), "boundary"),
     ("REP fast path without wrap guard", no_wrap_guard, "boundary"),
     ("REPE/REPNE run-out leaves CX FFFFh", no_runout_fix, "boundary"),
     ("carry X trusted across EA clobber", trust_x_across_ea, "boundary"),
@@ -849,6 +871,8 @@ def plant(k: int, clean: str | None = None) -> tuple[int, int, int, int]:
         R.bp_range = wide_bp_range
     elif fn in BP_PLANTS:           # reuse.bp_native (R25)
         U.bp_native = bp_native_line(*BP_PLANTS[fn])
+    elif fn in EMS_HOLD_PLANTS:     # lower.ems_held
+        F.ems_held = ems_held_line(*EMS_HOLD_PLANTS[fn])
     elif fn in STACK_PLANTS:        # reuse.stack_runs (R31)
         U.stack_runs = stack_runs_line(*STACK_PLANTS[fn])
     elif fn == "stack leaders":     # reuse.stack_runs (R31)
@@ -952,6 +976,7 @@ def plant(k: int, clean: str | None = None) -> tuple[int, int, int, int]:
         U.stack_runs = real_stack_runs
         L.Lowering.op_jcc = real_op_jcc
         F.plan = real_plan
+        F.ems_held = real_ems_held
 
 
 def slow_first(k: int) -> tuple:

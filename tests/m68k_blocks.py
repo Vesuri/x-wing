@@ -51,6 +51,8 @@ SEG0 = {m: DRVSEG if m == emit.DRIVER else LOADSEG for m in emit.TAG}  # what li
 STUBS = emit.RUNTIME + emit.HLE_SERVICES + ("T_RET",)
 STUB_AT = {n: D.STUB + 4 * k for k, n in enumerate(STUBS)}
 STUB_AT["rt_irq_pending"] = D.PENDING  # data, clear (no interrupt posted)
+for _s, _a in D.CACHE.items():          # data, empty (every guard misses)
+    STUB_AT[f"rt_ems_cache_{_s}"] = _a
 TRANSFER = {"jmp", "jmpf", "jcc", "call", "callf", "ret", "retf", "iret", "int", "int3", "into",
             "loop", "loope", "loopne", "jcxz", "hlt"}
 

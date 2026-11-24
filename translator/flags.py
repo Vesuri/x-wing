@@ -17,7 +17,7 @@ import re
 from . import reglive, reuse
 from .decode import Reg
 from .ir import STATUS
-from .lower import (CCR_OK, GREG, HALF, MIRROR, SZ, Ctx, LowerError, Lowering, fuse_reader,
+from .lower import (CCR_OK, GREG, HALF, MIRROR, SZ, Ctx, LowerError, Lowering, ems_held, fuse_reader,
                     lower, reads, writes)
 
 ALL = frozenset(STATUS)
@@ -109,22 +109,26 @@ def jump_chain(insns, k, leaders, ccr: set, program: bool) -> int:
 
 
 def plan(insns, lives, leaders, ctx_for, program: bool = False, fences=(),
-         taken=None) -> list[Lowering]:
+         taken=None, hooks=()) -> list[Lowering]:
     """Lower a run of instructions in fall-through order. `lives[k]`: live-out of
     insns[k]; `leaders`: indices that other control flow reaches; `ctx_for(k)`: a
     fresh Ctx for insns[k]; `fences`: indices with other code placed before them
     (region guards), where no register value carries over (reuse, R13);
     `taken[k]`: live-in of a conditional jump's target (None: its live-out).
     Each lowering's `ccr_only`: flags live at its entry that only the CCR holds
-    (R14d, for the block differential)."""
+    (R14d, for the block differential). `hooks`: indices with code placed
+    before them that may reach the runtime (HLE and replay hooks), where no ES
+    guard is held over (lower.ems_held)."""
     taken = taken or [None] * len(insns)
     contexts = [ctx_for(k) for k in range(len(insns))]
     dead_dx = reglive.dead_dx(insns, leaders, contexts)
+    held = ems_held(insns, set(leaders) | set(fences) | set(hooks), contexts)
     original_ctx_for = ctx_for
 
     def ctx_for(k):
         c = original_ctx_for(k)
         c.dead_dx = dead_dx[k]
+        c.ems_held = held[k]
         return c
 
     def plain(m):

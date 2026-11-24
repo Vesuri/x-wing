@@ -281,8 +281,18 @@ diffs directly); relocated words in instructions are emitted as
   consecutive store pages, whose pages have no live copy runs on the store (a1
   displaced onto it; store slots are reversed as guest memory is, so consecutive
   pages share one displacement); anything else copies its pages in and runs on
-  the frame with the plain base. So a1 is the plain ES base only below D001h, and
-  every access at or above runs right after its guard. DS and SS accesses are
+  the frame with the plain base. A one-entry cache per segment register
+  (`EMS_GUARD`, `ems.c`) holds the last displaced segment, the offsets of its frame
+  page and the base, emptied at every change of the store mapping; the out-of-line
+  path checks it inline for an operand's access and calls `rt_ems_es_miss` only
+  on a miss (a string calls `rt_ems_es`, which checks it itself). So a1 is the
+  plain ES base only below D001h, and every access at or above runs right after
+  its guard or after an earlier instruction's guard of the same operand, held
+  (`lower.ems_held`): in one run, with no leader, region guard or hook between,
+  the earlier access at least as wide, and every instruction from it on a plain
+  one (`HOLD_OPS`) that writes neither ES nor the operand's registers and guards
+  nothing else; nothing then reaches the EMS state, so the guard would return the
+  same base. DS and SS accesses are
   not guarded, so a DS or SS load of D001h or above calls `rt_ems_seg` and the
   pages their window meets are copied in, as at service returns. Listed code
   (`annotations/ems-ds.csv` guard, owner decision in [design](design.md)) guards
@@ -304,8 +314,12 @@ diffs directly); relocated words in instructions are emitted as
   remapped. Live copies of a page mapped at two frame pages equal the store when
   the second is made and are merged at the next map call; a byte written
   differently through two is a stop. Checked by the 68020 differential's `ems`
-  and `emsds` cases at the D001h edges and their sabotage plants (the guards, the
-  exit check, a string's count), by `tests/host_run.py`'s routing check on the
+  and `emsds` cases at the D001h edges, with the cache empty, covering the access
+  or missing it by its first byte, its last or the segment, the `emshold` blocks
+  (each access at D001h or above guarded or within the last guard's bytes at the
+  same ES), and their sabotage plants (the guards, the exit check, a string's
+  count, the inline hit's three compares, a guard held across an ES change or a
+  write of its offset's register), by `tests/host_run.py`'s routing check on the
   run's own image (`ems_guard_problems`: a range within a page, across
   consecutive and across other store pages), and by the host lockstep; host
   captures and Amiga dumps show non-live pages from the store.

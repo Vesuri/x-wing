@@ -24,7 +24,8 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    on the 68030 model.
    Target: the combat film at 100 ms per frame or less on the 68030 model (owner decision
    2026-11-19, `docs/design.md`). Step 2, the EMS guard's cache, brought the film to 320 ms
-   and step 5, video stores through DS unchecked outside listed code, to 280 ms
+   step 5, video stores through DS unchecked outside listed code, to 280 ms, and step 6,
+   the EMS guard's cache hit checked inline, to 260 ms
    ([perf-method](perf-method.md#steps)). The intro has no target yet (the owner's to set).
    Whether the film's playback costs what the same flight would live is still open: m13's
    window shows another scene.
@@ -51,9 +52,6 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
       and the FM render. The reference's own frame interval in the film and the intro is
       the ceiling. An intro frames fixture over the Star Destroyer scene and an intro meter
       window (which milestone: the owner's choice).
-   6. The EMS guards: the one-entry cache's hit checked inline in generated code, and a
-      guard repeated while ES is unchanged dropped with its flag save. Controls:
-      `ems_guard_problems` and its sabotages, and a guard dropped across an ES change.
    7. The intro's compare-and-copy, FRONTEND 1A5E:0119: a cheap restart path in the
       REPE CMPSW lowering and the changed word's mark inline.
    8. The intro's sprite decoder, FRONTEND 1B58:007A: a short-count path for REP STOSW and

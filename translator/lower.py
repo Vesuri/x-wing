@@ -152,6 +152,7 @@ class Ctx:
     vram_ds: bool = False                     # listed code (vram-ds.csv): DS stores mark rows too
     vram_far_inside: bool = False             # its direct far transfer into listed code
     vram_exit_after: bool = False             # a vram-ds.csv range's last instruction
+    ems_held: bool = False                    # its ES guard is held from an earlier one (ems_held)
     driver_call: bool = False                 # jump into the per-frame graphics call (D9; none yet)
     ret_mismatch: str = "rt_ret_mismatch"     # a return check's mismatch branch (emit.py: local)
     ret_jump: int | None = None               # near RET to a pushed continuation: its IP (ret-jumps.csv)
@@ -604,6 +605,9 @@ class Lowering:
         i = self.i
         if i.op in ("lea", "nop"):
             return
+        if seg == "es" and self.c.ems_held:
+            self.stats["EMS guard held"] += 1
+            return
         mems = [o for o in i.operands if isinstance(o, Mem) and o.seg == seg]
         # the string operands through seg: ES:DI, and [SI] in seg (its override)
         index = [r for r, on in (("a4", i.op in ("movs", "cmps", "lods") and (i.seg or "ds") == seg),
@@ -626,7 +630,48 @@ class Lowering:
         if keep:
             self.out.append("\tmove.w (sp)+,ccr")
         hot, x_cf, self.out = self.out, self.x_cf, [f"{cold}:"]
-        self.e("move.w ccr,-(sp)")
+        reg = "a1" if seg == "es" else "a3"
+        cache = f"rt_ems_cache_{seg}"
+        if not keep:                      # X (the hot path saved a live CCR)
+            self.e("move.w ccr,-(sp)")
+        if not string:
+            # The one-entry cache's hit inline (rt_entry.s EMS_GUARD, ems.c
+            # rt_ems_cache_es/ds): the same segment and the access's bytes
+            # within the cached offsets give the cached base; d6 untouched.
+            n = 1 if xlat else max(1, mems[0].width // 8)   # a far pointer: 4
+            self.e("move.l d7,-(sp)")
+            if xlat:
+                self.e("moveq #0,d7")
+                self.e("move.b d0,d7")
+                self.e("add.w d3,d7")
+            else:
+                self.offset_d7_zx(mems[0])
+            self.e(f"movea.w {SEGSLOT[seg]}(a6),{reg}")
+            self.e(f"cmpa.w {cache},{reg}")
+            self.e(f"bne.s {cold}m")
+            self.e(f"cmp.w {cache}+2,d7")
+            self.e(f"bcs.s {cold}m")
+            self.e(f"addq.l #{n},d7")
+            self.e(f"cmp.l {cache}+4,d7")
+            self.e(f"bhi.s {cold}s")
+            self.e(f"movea.l {cache}+8,{reg}")
+            self.e(f"bra.s {cold}d")
+            self.out.append(f"{cold}s:")
+            self.e(f"subq.l #{n},d7")
+            self.out.append(f"{cold}m:")
+            self.e("move.l d6,-(sp)")
+            self.e(f"moveq #{n},d6")
+            self.e(f"jsr {'rt_ems_es_miss' if seg == 'es' else 'rt_ems_ds_miss'}")
+            self.e("move.l (sp)+,d6")
+            self.out.append(f"{cold}d:")
+            self.e("move.l (sp)+,d7")
+            if not keep:
+                self.e("move.w (sp)+,ccr")
+            self.e(f"bra {back}")
+            self.cold += self.out
+            self.out, self.x_cf = hot, x_cf
+            self.stats["EMS guard" if seg == "es" else "EMS DS guard"] += 1
+            return
         self.e("movem.l d6-d7,-(sp)")
         if string:
             # d7 the lowest offset, d6 the bytes from it: one operand's size
@@ -657,18 +702,10 @@ class Lowering:
             else:
                 self.e(f"addq.l #{w},d6")
             self.out.append(f"{cold}w:")
-        elif xlat:
-            self.e("moveq #0,d7")
-            self.e("move.b d0,d7")
-            self.e("add.w d3,d7")
-            self.e("moveq #1,d6")
-        else:
-            m = mems[0]
-            self.offset_d7(m)
-            self.e(f"moveq #{max(1, m.width // 8)},d6")   # a far pointer: 4
         self.e(f"jsr {'rt_ems_es' if seg == 'es' else 'rt_ems_ds'}")
         self.e("movem.l (sp)+,d6-d7")
-        self.e("move.w (sp)+,ccr")
+        if not keep:
+            self.e("move.w (sp)+,ccr")
         self.e(f"bra {back}")
         self.cold += self.out
         self.out, self.x_cf = hot, x_cf
@@ -1562,6 +1599,22 @@ class Lowering:
             self.e(f"move.l #{hx(m.disp)},d7")
             return
         self.getreg(regs[0], "d7")
+        if len(regs) == 2:
+            self.e(f"add.w {GREG[regs[1]]},d7")
+        if m.disp:
+            self.e(f"add.w #{hx(m.disp)},d7")
+
+    def offset_d7_zx(self, m: Mem) -> None:
+        """d7 := the operand's offset, zero-extended (word arithmetic keeps the
+        upper word clear)."""
+        regs = [x for x in (m.base, m.index) if x]
+        if not regs:
+            self.e(f"move.l #{hx(m.disp & 0xFFFF)},d7")
+            return
+        self.e("moveq #0,d7")
+        self.e(f"move.w {GREG[regs[0]]},d7")
+        if regs[0] in MIRROR:
+            self.e("eori.w #$7fff,d7")
         if len(regs) == 2:
             self.e(f"add.w {GREG[regs[1]]},d7")
         if m.disp:
@@ -2543,6 +2596,58 @@ def reads(i: Insn, program: bool = False) -> set:
 
 
 STRING_OPS = ("movs", "cmps", "stos", "lods", "scas")
+# ems_held: instructions that change neither ES, nor the EMS model's state, nor
+# a register beyond their destination (and SP for push and pop), and call nothing
+HOLD_OPS = frozenset(("mov", "add", "adc", "sub", "sbb", "and", "or", "xor", "cmp", "test", "inc",
+                      "dec", "neg", "not", "rol", "ror", "rcl", "rcr", "shl", "shr", "sar", "jcc",
+                      "lea", "nop", "clc", "stc", "cmc", "cld", "std", "cbw", "cwd", "push", "pop"))
+ADDRESS_REGS = frozenset(("bx", "bp", "si", "di"))
+
+
+def es_access(i: Insn) -> tuple | None:
+    """The access ems_guard checks through ES when it is an operand's (no string's
+    or XLAT's): (base, index, offset, bytes)."""
+    if i.op in ("lea", "nop") or i.op in STRING_OPS or i.op == "xlat":
+        return None
+    m = next((o for o in i.operands if isinstance(o, Mem) and o.seg == "es"), None)
+    return m and (m.base, m.index, m.disp & 0xFFFF, max(1, m.width // 8))
+
+
+def ems_held(insns: list, resets: set, contexts: list) -> list[bool]:
+    """Which ES guards in a run (flags.plan) may be dropped: the guard before an
+    earlier instruction's access of the same operand, at least as wide, left
+    ES's base register (a1) as the guard would leave it again, when every
+    instruction from that one on is in HOLD_OPS, writes neither ES nor the
+    operand's registers, guards nothing else (DS in ems-ds.csv's code, another
+    ES operand: a1 its base) and is no listed range's exit, and no other
+    control flow or code (`resets`: leaders, region guards, hooks) comes
+    between. Nothing then reaches the runtime's EMS state, the guard's result
+    is a function of ES, the access and that state, and IRQ0's handler,
+    delivered between instructions as between a guard and its access, leaves
+    a1 and the guard caches (EMS_GUARD) as it found them."""
+    held, cur = [False] * len(insns), None
+    for k, i in enumerate(insns):
+        c = contexts[k]
+        if k in resets or not c.ems or c.ems_ds:
+            cur = None
+        a = es_access(i)
+        if a is not None:
+            if cur and cur[:3] == a[:3] and a[3] <= cur[3]:
+                held[k] = True
+            else:
+                cur = a
+        elif i.op in STRING_OPS or i.op == "xlat":
+            cur = None
+        if cur is None:
+            continue
+        dest = i.operands[0] if i.operands else None
+        name = HALF.get(getattr(dest, "name", None), (getattr(dest, "name", None),))[0] \
+            if isinstance(dest, Reg) and i.op not in ("cmp", "test", "push") else None
+        if i.op not in HOLD_OPS or c.ems_ds or c.ems_exit_after or c.vram_exit_after \
+                or any(isinstance(o, Reg) and o.name in ("es", "ds", "ss", "cs") for o in i.operands) \
+                or name in {cur[0], cur[1]} - {None}:
+            cur = None
+    return held
 DEST_WRITERS = ("mov", "add", "adc", "sub", "sbb", "and", "or", "xor", "inc", "dec", "neg", "not",
                 "rol", "ror", "rcl", "rcr", "shl", "shr", "sar", "pop")
 

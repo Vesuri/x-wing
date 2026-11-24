@@ -51,8 +51,10 @@ G_DS	equ	1
 	xdef	rt_vram_ds
 	xdef	rt_vdrv_return
 	xdef	rt_ems_es
+	xdef	rt_ems_es_miss
 	xdef	rt_ems_seg
 	xdef	rt_ems_ds
+	xdef	rt_ems_ds_miss
 	xdef	rt_ems_ds_leave
 
 	xref	rt_r
@@ -535,10 +537,11 @@ port_out:
 ; unmapped: the frame), or 1 (the C path, which copies it in). Whole windows,
 ; wraps, accesses that meet the frame from below or span pages that differ take
 ; the C path; an access above the frame runs plain.
-EMS_GUARD	macro			; \1 segment slot, \2 base register, \3 C path, \4 cache
+EMS_GUARD	macro			; \1 segment slot, \2 base register, \3 C path, \4 cache, \5 miss entry
 	; The cache (ems.c rt_ems_cache_es/ds): the same segment, an access within the
 	; offsets of the frame page the last displaced access lay in: its base. d6 and d7
-	; are the caller's to restore (lower.py ems_guard).
+	; are the caller's to restore (lower.py ems_guard). Generated code checks the
+	; cache inline for an access that is no string's and enters at \5 on a miss.
 	movea.w	\1(a6),\2		; a segment of D001h or above: never the empty 0
 	cmpa.w	\4,\2
 	bne.s	.miss\@
@@ -555,6 +558,7 @@ EMS_GUARD	macro			; \1 segment slot, \2 base register, \3 C path, \4 cache
 .miss2\@:
 	sub.l	d7,d6
 .miss\@:
+\5:
 	tst.l	d6			; the whole window
 	beq	.slow\@
 	movem.l	d0-d1/a0,-(a7)
@@ -666,9 +670,9 @@ EMS_GUARD	macro			; \1 segment slot, \2 base register, \3 C path, \4 cache
 	rts
 	endm
 rt_ems_es:
-	EMS_GUARD	G_ES,a1,rt_ems_es_c,rt_ems_cache_es
+	EMS_GUARD	G_ES,a1,rt_ems_es_c,rt_ems_cache_es,rt_ems_es_miss
 rt_ems_ds:
-	EMS_GUARD	G_DS,a3,rt_ems_ds_c,rt_ems_cache_ds
+	EMS_GUARD	G_DS,a3,rt_ems_ds_c,rt_ems_cache_ds,rt_ems_ds_miss
 ; Listed code left with DS at D001h or above (lower.py ems_exit): its frame
 ; pages copied in, a3 the plain DS base. Every other register kept.
 rt_ems_ds_leave:

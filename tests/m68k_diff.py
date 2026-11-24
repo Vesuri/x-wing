@@ -46,7 +46,7 @@ from translator import flags as F, region  # noqa: E402
 from translator.decode import DecodeError, decode  # noqa: E402
 from translator.interp import State, UndefinedFlag, step  # noqa: E402
 from translator.ir import FLAG_BIT, FLAGS, STATUS  # noqa: E402
-from translator.lower import Ctx, LowerError, hx  # noqa: E402
+from translator.lower import Ctx, LowerError, es_access, hx  # noqa: E402
 from translator.support import HELPERS, equates  # noqa: E402
 
 VASM = Path(os.environ.get("VASM") or Path.home() / ".local/vasmm68k_mot")
@@ -57,17 +57,21 @@ CODE = 0x400000
 STUB = 0x300000
 STACK = 0x380000
 PENDING = STATE + 0x800     # rt_irq_pending
+# ems.c rt_ems_cache_es/ds (segment, lowest offset; end; base), set per case
+CACHE = {"es": STATE + 0x810, "ds": STATE + 0x81C}
+EMS_CACHE = ("empty", "hit", "end", "low", "segment")   # the cases' cache states, cycling
 STUBS = ("T_JUMP", "T_CALL", "T_JUMPF", "T_CALLF", "T_INT", "T_FAULT", "T_HALT", "T_END",
          "rt_in8", "rt_in16", "rt_out8", "rt_out16", "T_RET", "T_TRAP", "rt_ems_es", "rt_ems_seg",
-         "rt_ems_ds", "rt_ems_ds_leave")
+         "rt_ems_ds", "rt_ems_ds_leave", "rt_ems_es_miss", "rt_ems_ds_miss", "rt_vram_ds")
 STUB_AT = {n: STUB + 4 * k for k, n in enumerate(STUBS)}
 REGS = ("ax", "bx", "cx", "dx", "sp", "bp", "si", "di")
 MIRROR = {"sp": 0x7FFF, "bp": 0x7FFF}   # held as offset ^ 7FFFh
 M68 = {"ax": "d0", "cx": "d1", "dx": "d2", "bx": "d3", "sp": "d4", "bp": "d5", "si": "a4",
        "di": "a5"}
 BATCH = 1500
-# EMS model (lower.py ems_guard, putseg): the edges of the guard's D001h compare
-EMS_EDGES = (0xD000, 0xD001, 0xDFFF, 0xE000, 0xEFFF, 0xF000, 0xFFFF)
+# EMS model (lower.py ems_guard, putseg): the edges of the guard's D001h compare,
+# and of the VGA frame's window at a DS load (9001h-AF9Fh, rt_vram_ds, D9)
+EMS_EDGES = (0xD000, 0xD001, 0xDFFF, 0xE000, 0xEFFF, 0xF000, 0xFFFF, 0x9000, 0x9001, 0xAF9F, 0xAFA0)
 REPLAY: Path | None = None   # set by m68k_sabotage
 
 
@@ -193,23 +197,26 @@ def ems_want(i, seg: str, regs: dict, flags: dict) -> tuple[int, int | None]:
     return max(1, m.width // 8), (m.disp + sum(regs[r] for r in (m.base, m.index) if r)) & 0xFFFF
 
 
-def ems_diffs(i, regs: dict, flags: dict, out: dict, calls: list, stop, ds_mode: bool) -> list[str]:
+def ems_diffs(i, regs: dict, flags: dict, out: dict, calls: list, stop, ds_mode: bool,
+              hit: set = frozenset()) -> list[str]:
     """The guards' runtime calls (copied from Wing Commander 2, the string range
     and the listed-code DS mode X-Wing's): rt_ems_es before an ES access iff ES
-    >= D001h, with the access's offset and size; in listed code (ds_mode)
+    >= D001h, with the access's offset and size, but for a segment in `hit`
+    (the one-entry cache covers the access: no call, the cached base); in
+    listed code (ds_mode)
     rt_ems_ds the same for DS, no rt_ems_seg at a DS load, and rt_ems_ds_leave
     before an exit iff DS >= D001h; elsewhere rt_ems_seg after a DS or SS load
     iff the value loaded is D001h or above."""
     diffs = []
     by = {n: [c for c in calls if c[0] == n] for n in ("rt_ems_es", "rt_ems_ds", "rt_ems_seg",
-                                                        "rt_ems_ds_leave")}
+                                                        "rt_ems_ds_leave", "rt_vram_ds")}
     for seg, n, has in (("es", "rt_ems_es", ems_es(i)), ("ds", "rt_ems_ds", ds_mode and ems_ds(i))):
         got = by[n]
         if not has:
             if got:
                 diffs.append(f"{n} called without a {seg} access")
             continue
-        want = regs[seg] >= 0xD001
+        want = regs[seg] >= 0xD001 and seg not in hit
         if want != bool(got):
             diffs.append(f"{n} {'missing' if want else 'called'} at {seg}={regs[seg]:04x}")
         elif got:
@@ -230,6 +237,10 @@ def ems_diffs(i, regs: dict, flags: dict, out: dict, calls: list, stop, ds_mode:
     if want != bool(seg_calls):
         diffs.append(f"rt_ems_seg {'missing' if want else 'called'} at "
                      + " ".join(f"{s}={out[s]:04x}" for s in loaded))
+    # D9: a DS load whose window meets the VGA frame marks it all (rt_vram_ds)
+    want = "ds" in loaded and 0x9001 <= out["ds"] <= 0xAF9F and stop not in ("T_FAULT", "T_INT")
+    if want != bool(by["rt_vram_ds"]):
+        diffs.append(f"rt_vram_ds {'missing' if want else 'called'} at ds={out['ds']:04x}")
     return diffs
 
 
@@ -270,6 +281,7 @@ class M68k:
         self.budget = 4_000_000     # 68k instructions per case (m68k_blocks: more per REP)
         self.irq_keep = False
         self.ems_calls: list = []   # (stub, d6, d7, G_ES, G_DS) of the EMS entries
+        self.cache = bytes(24)       # CACHE's contents for the next run
 
         @U.MEM_CB
         def write(h, kind, addr, size, value, user):
@@ -305,10 +317,14 @@ class M68k:
                 d6 = self.r("d6")
                 self.e.reg_write(U.M68K["d6"], d6 & ~(0xFF if w == 8 else 0xFFFF) | v)
                 self.e.reg_write(U.M68K["pc"], addr + 2)
-            elif n in ("rt_ems_es", "rt_ems_seg", "rt_ems_ds", "rt_ems_ds_leave"):
+            elif n in ("rt_ems_es", "rt_ems_seg", "rt_ems_ds", "rt_ems_ds_leave", "rt_ems_es_miss",
+                       "rt_ems_ds_miss", "rt_vram_ds"):
                 st = self.e.read(STATE, 16)
-                self.ems_calls.append((n, self.r("d6"), self.r("d7"), int.from_bytes(st[4:6], "big"),
-                                       int.from_bytes(st[0:2], "big")))
+                es, ds = int.from_bytes(st[4:6], "big"), int.from_bytes(st[0:2], "big")
+                self.ems_calls.append((n.removesuffix("_miss"), self.r("d6"), self.r("d7"), es, ds))
+                if n.endswith("_miss"):     # the runtime's base: plain, as below the frame
+                    a, v = ("a1", es) if n == "rt_ems_es_miss" else ("a3", ds)
+                    self.e.reg_write(U.M68K[a], TOP - v * 16 - 0x7FFF)
                 self.e.reg_write(U.M68K["pc"], addr + 2)
             elif n in ("rt_out8", "rt_out16"):
                 w = 8 if n == "rt_out8" else 16
@@ -375,6 +391,8 @@ class M68k:
         if posted:
             pending = st[16 - 8] = 1
         e.write(PENDING, bytes([pending]))
+        e.write(CACHE["es"], self.cache)
+        self.cache = bytes(24)
         e.write(STATE, bytes(st))
         sp = STACK - 0x100
         e.write(sp, self.stub_at["T_RET"].to_bytes(4, "big"))
@@ -532,6 +550,16 @@ class Harness(X.Harness):
             self.lowered.update(st)
             self.pending.append((label + " atomic-carry", code, case, undef, oracle, text,
                                  regs, flags, insns[-1].op))
+        if label.startswith("b:ems-hold:"):     # lower.ems_held over the block
+            tag = f"c{len(self.pending)}"
+            try:
+                text, st = lower_case(insns, cs, tag, insns[-1].next_ip, ems=True)
+            except LowerError as e:
+                self.bad.append(f"{label} emshold {code.hex()}: lowering: {e}")
+                return
+            self.lowered.update(st)
+            self.pending.append((label + " emshold", code, case, undef, oracle, text,
+                                 regs, flags, insns[-1].op))
         if n == 1 and ems_case(insns[0]):
             self.ems_variant(code, label, insns, case, overrides)
         if n == 1 and ems_ds_case(insns[0]):
@@ -622,6 +650,7 @@ class Harness(X.Harness):
         src = [equates()]
         src += [f"{n}\tequ\t${a:x}" for n, a in STUB_AT.items()]
         src.append(f"rt_irq_pending\tequ\t${PENDING:x}")
+        src += [f"rt_ems_cache_{s}\tequ\t${a:x}" for s, a in CACHE.items()]
         src.append(f"\torg\t${CODE:x}")
         src.append("table:")
         src += [f"\tdc.l\tc{k}" for k in range(len(self.pending))]
@@ -649,8 +678,78 @@ class Harness(X.Harness):
                 d.rmdir()
         Harness.dirs.clear()
 
+    def ems_hold_diffs(self, code: bytes, case, calls: list) -> list[str]:
+        """lower.ems_held: every access through ES at D001h or above (the IR run
+        of the block gives ES and the offset) has its rt_ems_es call, in order,
+        or is within the last call's bytes at the same ES value (the guard's
+        result, a1, held); nothing else calls the EMS model here."""
+        regs, flags, flagsx, ip, patches = case
+        s = State(dict(regs, flagsx=flagsx), dict(flags), self.mem, ip)
+        for a, data in patches:
+            self.mem[a:a + len(data)] = data
+        need = []
+        try:
+            while s.ip < ip + len(code) - 1:    # the PUSHF that ends the block aside
+                i = decode(bytes(self.mem[regs["cs"] * 16 + s.ip:][:16]), s.ip, 0)
+                a = es_access(i)
+                if a is not None and s.regs["es"] >= 0xD001:
+                    off = (a[2] + sum(s.regs[r] for r in a[:2] if r)) & 0xFFFF
+                    need.append((s.regs["es"], off, a[3], str(i)))
+                step(s)
+        finally:
+            self.reset(patches, s.writes, set())
+        diffs, held, got = [], None, [c for c in calls if c[0] == "rt_ems_es"]
+        if len(got) != len(calls):
+            diffs.append(f"other EMS calls {[c[0] for c in calls]}")
+        for es, off, n, text in need:
+            if got and (got[0][3], got[0][2] & 0xFFFF, got[0][1]) == (es, off, n):
+                held = (es, off, n)
+                got.pop(0)
+            elif not (held and held[0] == es and held[1] <= off and off + n <= held[1] + held[2]):
+                diffs.append(f"{text} at es={es:04x} offset {off:04x}: neither guarded nor held")
+        if got:
+            diffs.append(f"rt_ems_es calls beyond the accesses: {got}")
+        return diffs
+
+    def ems_cache(self, i, regs: dict, flags: dict) -> set:
+        """The guard caches for an EMS case (EMS_CACHE, cycling): empty, covering
+        the access exactly with the plain base (lower.py ems_guard's inline hit:
+        no runtime call), or missing it by its last byte, its first byte or the
+        segment, with another base (a wrong hit shows in the base). Strings call
+        the runtime, which checks the cache itself (host_run ems_guard_problems).
+        Returns the segments expected to hit."""
+        state = EMS_CACHE[self.lowered["ems cache"] % len(EMS_CACHE)]
+        self.lowered["ems cache"] += 1
+        cache, hit = bytearray(24), set()
+        for k, seg in enumerate(("es", "ds")):
+            if state == "empty" or i.op in ("movs", "cmps", "stos", "lods", "scas") or \
+                    not (ems_es(i) if seg == "es" else ems_ds(i)):
+                continue
+            n, lo = ems_want(i, seg, regs, flags)
+            plain = TOP - regs[seg] * 16 - 0x7FFF
+            v, low, end, base = regs[seg], lo, lo + n, plain
+            if state == "end":
+                end -= 1
+            elif state == "low":
+                low += 1
+            elif state == "segment":
+                v = (v + 1) & 0xFFFF
+            if state == "hit":
+                hit.add(seg)
+            else:
+                base += 0x10
+            if low > 0xFFFF:
+                continue
+            cache[12 * k:12 * k + 12] = (v.to_bytes(2, "big") + low.to_bytes(2, "big") + end.to_bytes(4, "big")
+                                         + base.to_bytes(4, "big"))
+        self.m.cache = bytes(cache)
+        return hit
+
     def compare(self, label, code, case, undef, oracle, entry, regs, flags, last) -> None:
         err, out, fl, umem, ints, outs = oracle
+        hit = set()
+        if label.endswith((" ems", " emsds")):
+            hit = self.ems_cache(decode(code, case[3], 0), regs, flags)
         mo, mf, mfx, mmem, mouts, mwrites, info = self.m.run(entry, case, self.rng)
         diffs = []
         if err:
@@ -719,9 +818,11 @@ class Harness(X.Harness):
             diffs.append(f"out 68k={mouts} x86={outs}")
         if stop in (None,) and not info["err"]:
             diffs.append("no exit (instruction limit)")
-        if label.endswith((" ems", " emsds")):
+        if label.endswith(" emshold"):
+            diffs += self.ems_hold_diffs(code, case, info["ems"])
+        elif label.endswith((" ems", " emsds")):
             diffs += ems_diffs(decode(code, case[3], 0), regs, flags, out, info["ems"], stop,
-                               label.endswith(" emsds"))
+                               label.endswith(" emsds"), hit)
         elif info["ems"]:
             diffs.append(f"EMS runtime calls without the model: {info['ems']}")
         self.count[label] += 1
