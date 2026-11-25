@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Source-level debug the Amiga build via FS-UAE's GDB stub.
 #   ./debug.sh [path-to-kickstart] [fixture.gdb] [executable]
-# AMIGA_CPU picks the CPU (68030: the minimum target model). XWING_ARGS: the Shell
+# The machine is AmigaXDev's shared preset, as in run.sh: a1200-030 (the minimum target
+# model) for AMIGA_CPU unset or 68030, a1200-040 / a1200-060 for 68040 / 68060; AMIGA_SETUP
+# names another, and another AMIGA_CPU or AMIGA_SETUP=none boots the bare A1200 with that
+# CPU. EXTRA_ARGS (a replay's Zorro III board) beat the preset. XWING_ARGS: the Shell
 # arguments. Without a fixture: interactive gdb; `continue` runs the program.
 # XWING_WORKBENCH=DRAWER: an installed X-Wing drawer (tools/test_release_installer.py
 # --keep) started by Workbench from its X-Wing.info (SYS:WBStartup), instead of the Shell;
@@ -66,6 +69,16 @@ else
   cp -f "${3:-out/XWing.exe}" "$DH0/c/XWing" || exit 1
 fi
 rm -f "$RUN"/state/*.uss
+
+case "${AMIGA_SETUP:-}" in
+  none) unset AMIGA_SETUP ;;
+  "") case "${AMIGA_CPU:-68030}" in
+        68040) AMIGA_SETUP=a1200-040 ;;
+        68060) AMIGA_SETUP=a1200-060 ;;
+        68030) AMIGA_SETUP=a1200-030 ;;
+      esac
+      [ -n "${AMIGA_SETUP:-}" ] && export AMIGA_SETUP ;;
+esac
 
 fsuae_claim_port || exit 1
 # Quiet debug run (no sound, window behind the others): fsuae_options in $FSUAE_COMMON.
