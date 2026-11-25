@@ -38,6 +38,7 @@ from package_release import PREFIX, members  # noqa: E402
 AMIGA = Path.home() / '.local/share/amiga'
 WORKBENCH = Path(os.environ.get('WORKBENCH_ADF', AMIGA / 'Workbenchv2.04rev37.67Workbench.adf'))
 INSTALLER = Path(os.environ.get('INSTALLER43', AMIGA / 'Installer43/Installer'))
+SETPATCH = Path(os.environ.get('SETPATCH', AMIGA / 'SetPatch'))
 WHDLOAD = Path(os.environ.get('WHDLOAD', AMIGA / 'WHDLoad')) / 'C/WHDLoad'
 KICK = Path(os.environ.get('KICKSTART_A1200', AMIGA / 'Kickstarts/kick40068.A1200'))
 SCRIPT = os.environ.get('INSTALL_SCRIPT')  # sabotage override of the package's Install
@@ -139,8 +140,10 @@ def fixture(mode, base):
             (data / DAMAGED).write_bytes(b'damaged')
         (data.parent / 'old-marker').touch()
     (out / 'unrelated').write_text('keep')
+    (boot / 'c').mkdir(exist_ok=True)
+    shutil.copyfile(SETPATCH, boot / 'c/SetPatch')
     (boot / 's/startup-sequence').write_text(
-        'CD DH0:\nStack 16384\nDF0:C/Assign C: DF0:C\nDF0:C/Assign LIBS: DF0:Libs\n'
+        'DH0:c/SetPatch QUIET\nCD DH0:\nStack 16384\nDF0:C/Assign C: DF0:C\nDF0:C/Assign LIBS: DF0:Libs\n'
         'DF0:C/Assign DEVS: DH0:devs\nDF0:C/Assign ENV: RAM:\nDF0:C/Assign ENVARC: DH0:env\n'
         'Copy ENVARC:WHDLInstPath ENV:WHDLInstPath\nDF0:C/Assign T: RAM:\nPath DH0: ADD\nC:LoadWB\n'
         'Installer SCRIPT DH0:Install APPNAME X-Wing MINUSER NOVICE DEFUSER NOVICE '

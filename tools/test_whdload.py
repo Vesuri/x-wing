@@ -22,11 +22,13 @@ VBR of a 68020) ends it with COREDUMP and the dump is judged:
     otherwise the instruction cache alone.
 The MemFree slave's low-water marks (Chip, Fast) are read from its $100 slot.
 --installed runs an installed X-Wing drawer as it is (slave, data/X-Wing, data).
---setup a1200-040: full 68040 with its MMU and FPU, JIT off, on $FSUAE_MMU;
-the report must show TC=8000 (translation on; AmigaXDev whdload-mmu.md).
---setup a1200-030: full 68030 with its MMU on $FSUAE_MMU; WHDLoad uses the MMU
-only with its MMU option (--whdload-mmu). --setup a1200-060: as the 68040, TC=8000 too.
-These setups emulate the data cache.
+--setup a1200-030, a1200-040 and a1200-060 are AmigaXDev's shared presets of those
+names (fsuae_common.sh fsuae_setup: the CPU with its MMU, clock, cycle-exactness and
+data cache), on $FSUAE_MMU; --fast and --z3, when given, replace the preset's memory.
+On the 68040 and 68060 the report must show TC=8000 (translation on; AmigaXDev
+whdload-mmu.md). WHDLoad uses the 68030's MMU only with its MMU option (--whdload-mmu).
+--setup a1200 is a 68020 A1200 with 8 MiB of Fast RAM.
+The startup-sequence runs SetPatch ($SETPATCH) before WHDLoad.
 
 Inputs are local, never shipped: Kickstart 3.1 A1200 + RTB, WHDLoad, the
 Workbench floppy and the configured DOS install (tmp/dos/configured-sb/XWING,
@@ -48,12 +50,24 @@ KICKSTARTS = AMIGA / 'Kickstarts'
 WHDLOAD = Path(os.environ.get('WHDLOAD', AMIGA / 'WHDLoad')) / 'C/WHDLoad'
 WORKBENCH = Path(os.environ.get('WORKBENCH_ADF', AMIGA / 'Workbenchv2.04rev37.67Workbench.adf'))
 KICK31 = Path(os.environ.get('KICKSTART_A1200', KICKSTARTS / 'kick40068.A1200'))
+SETPATCH = Path(os.environ.get('SETPATCH', AMIGA / 'SetPatch'))
+FSUAE_COMMON = Path(os.environ.get('FSUAE_COMMON', AMIGA / 'fsuae_common.sh'))
 SLAVES = {'smoke': 'Smoke.slave', 'boot': 'BootTest.slave', 'load': 'LoadTest.slave', 'run': 'XWing.slave'}
 
 
 def blocks(data, size=64):
     return [data[a:a + size] for a in range(0, len(data) - size + 1, size)
             if len(set(data[a:a + size])) > 8]
+
+
+def preset_args(setup):
+    """FS-UAE's arguments of the shared preset SETUP (fsuae_common.sh fsuae_setup)."""
+    out = subprocess.run(['/bin/bash', '-c', '. "$0" >/dev/null && AMIGA_SETUP="$1" fsuae_setup && '
+                          'printf "%s\\n" "${FSUAE_SETUP_ARGS[@]}"', str(FSUAE_COMMON), setup],
+                         capture_output=True, text=True, check=True)
+    args = out.stdout.split('\n')[:-1]
+    assert args and any(a.startswith('--cpu=') for a in args), f'no preset {setup}: {out.stderr}'
+    return args
 
 
 def main():
@@ -67,8 +81,10 @@ def main():
     p.add_argument('--setup', choices=('a1200', 'a1200-030', 'a1200-040', 'a1200-060'), default='a1200-030')
     p.add_argument('--whdload-mmu', action='store_true', help="WHDLoad's MMU option (68030)")
     p.add_argument('--rom', type=Path, default=KICK31)
-    p.add_argument('--fast', type=int, default=8192, help='host Zorro II Fast RAM in KiB (8192 at most)')
-    p.add_argument('--z3', type=int, default=0, help='host Zorro III Fast RAM in KiB (32-bit setups)')
+    p.add_argument('--fast', type=int, help="host Zorro II Fast RAM in KiB (8192 at most; "
+                   "default: the preset's, 8192 on a1200)")
+    p.add_argument('--z3', type=int, help="host Zorro III Fast RAM in KiB (32-bit setups; "
+                   "default: the preset's)")
     p.add_argument('--cpu', default='68020')
     p.add_argument('--ticks', type=int, default=3000, help='WHDLoad TIMEOUT in PAL fields (run)')
     p.add_argument('--no-preload', action='store_true')
@@ -81,7 +97,9 @@ def main():
     if mmu:
         args.cpu = '68' + args.setup[-3:]
     assert not args.whdload_mmu or args.cpu == '68030', '--whdload-mmu is for --setup a1200-030'
-    assert args.fast <= 8192 and (not args.z3 or mmu), 'Zorro II holds 8 MiB; Zorro III needs a 32-bit setup'
+    if not mmu and args.fast is None:
+        args.fast = 8192
+    assert (args.fast or 0) <= 8192 and (not args.z3 or mmu), 'Zorro II holds 8 MiB; Zorro III needs a 32-bit setup'
     # Where WHDLoad uses the MMU, the slave's CACHE policy holds (data cache on).
     dcache = args.cpu in ('68040', '68060') or args.whdload_mmu
 
@@ -114,7 +132,10 @@ def main():
     command = 'WHDLoad X-Wing.slave ' + ' '.join(options)
     print('Command:', command, flush=True)
     (boot / 's/WHDLoad.prefs').write_text('Expert\nReadDelay=0\n')
+    (boot / 'c').mkdir(exist_ok=True)
+    shutil.copyfile(SETPATCH, boot / 'c/SetPatch')
     (boot / 's/startup-sequence').write_text(
+        'DH0:c/SetPatch QUIET\n'
         'DF0:C/Assign C: DF0:C\nDF0:C/Assign LIBS: DF0:Libs\n'
         'DF0:C/Assign DEVS: DH0:devs\nStack 16384\nFailAt 999\n'
         f'CD DH1:\n{command} >DH0:result\n'
@@ -123,18 +144,15 @@ def main():
     fsuae = os.environ.get('FSUAE_MMU' if mmu else 'FSUAE', 'fs-uae')
     # Data-cache emulation needs the compatible core and, with directory drives, the
     # indirect UAE board (AmigaXDev headless-fsuae.md); otherwise FS-UAE drops it.
-    cpu = {'68030': ['--uae_mmu_model=68030'],
-           '68040': ['--uae_mmu_model=68040', '--uae_fpu_model=68040'],
-           '68060': ['--uae_mmu_model=68060', '--uae_fpu_model=68060']}.get(args.cpu, []) if mmu else []
-    if mmu:
-        cpu += ['--uae_cpu_24bit_addressing=false', '--uae_cpu_compatible=true', '--uae_cpu_data_cache=true',
-                '--uae_uaeboard=full+indirect']
+    # FS-UAE keeps an option's first occurrence: --fast and --z3 given here come before
+    # the preset; the preset's machine comes before this script's own defaults.
+    memory = ([f'--fast_memory={args.fast}'] if args.fast is not None else []) + \
+        ([f'--zorro_iii_memory={args.z3}'] if args.z3 is not None else [])
+    machine = [*preset_args(args.setup), '--uae_cpu_24bit_addressing=false'] if mmu else \
+        ['--amiga_model=A1200', '--cpu=' + args.cpu, '--uae_cpu_model=' + args.cpu, '--jit_compiler=0',
+         '--chip_memory=2048', '--kickstart_file=' + str(KICK31)]
     with (base / 'emulator.log').open('w') as log:
-        emu = subprocess.Popen([fsuae, '--amiga_model=A1200', '--cpu=' + args.cpu,
-            '--uae_cpu_model=' + args.cpu, *cpu, '--jit_compiler=0',
-            '--chip_memory=2048', '--fast_memory=' + str(args.fast),
-            *(['--zorro_iii_memory=' + str(args.z3)] if args.z3 else []),
-            '--kickstart_file=' + str(KICK31),
+        emu = subprocess.Popen([fsuae, *memory, *machine,
             '--hard_drive_0=' + str(boot), '--hard_drive_0_priority=10', '--hard_drive_1=' + str(game),
             '--floppy_drive_0=' + str(WORKBENCH), '--audio_driver=dummy',
             '--joystick_port_0=mouse', '--joystick_port_1=nothing', '--warp_mode=1', '--fullscreen=0',
