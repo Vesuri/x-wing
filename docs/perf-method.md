@@ -61,6 +61,12 @@ hold the reasons behind them. The steps and their gate are in the
   (owner decision 2026-11-23). It knows the Sound Blaster build's label prefix `AW`.
 - **Lowering cost** (`tools/lowering_cost.py`) and **call tree** (`tools/profile_tree.py`):
   per x86 form and per routine, inclusive.
+- **Overhead census** (`tools/overhead_census.py`): a meter result's generated cycles by
+  role, each executed 68k instruction classed from the shapes the translator emits (the
+  reversed address build, the EMS check and its out-of-line path, the video check and mark,
+  the return check, flags, the sync image's poll tests, the guest's own work). Each label's
+  model cycles are shared among its instructions by the cost model's weights, so the role
+  totals are DERIVED; per label they equal the meter's.
 
 ## Cost model
 
