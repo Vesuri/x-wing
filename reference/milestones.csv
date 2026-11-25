@@ -2,6 +2,7 @@ name,after,time_limit,keys,snapshots,resident,vga_mode,frame,files,bypass
 m00-entry,,30,,XWING.EXE+460a,XWING.EXE,,,,
 m01-logo,,60,,menu#600000 menu#100000,FRONTEND.OVL ADLIB.IMS,13,,,
 m02-title,,60,,menu#2000000 menu#100000,FRONTEND.OVL ADLIB.IMS,13,,,
+m02i-intro-played,,600,,FRONTEND.OVL+1c82,FRONTEND.OVL ADLIB.IMS,13,,,
 m03-question,,120,menu#400000=enter menu#2000000=enter,menu#1000000,FRONTEND.OVL,13,,,
 m03c-wrong-answer,m03-question,160,menu#200000=m menu#200000=a menu#200000=s menu#200000=s menu#200000=a menu#200000=s menu#200000=s menu#200000=i menu#200000=enter,menu#1000000,FRONTEND.OVL,13,=m03-question@100 108 192 124,,
 m03p-protection-passed,m03-question,160,menu#200000=b menu#200000=r menu#200000=i menu#200000=g menu#200000=g menu#200000=i menu#200000=a menu#200000=enter,FRONTEND.OVL+79843,FRONTEND.OVL,13,,,
