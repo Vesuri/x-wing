@@ -174,6 +174,7 @@ class Lowering:
         self.x_cf = ctx.x_in
         self.cf_result = False
         self.af = insn.op in ("add", "adc", "sub", "sbb", "cmp", "inc", "dec", "neg")
+        self.es_folded = False     # its ES video checks taken by the ES guard (ems_guard)
 
     # -- emission ---------------------------------------------------------
     def e(self, line: str) -> None:
@@ -559,18 +560,25 @@ class Lowering:
                 raise LowerError(f"no lowering for {i}")
         if op not in ("mov", "push", "callf", "jmpf"):
             self.check_reloc(set())
+        # an ES store's video check rides on the ES guard where there is one
+        # (a store's, and a STOS or MOVS element's without REP: "di")
+        es_marks = [] if not self.c.vram or VRAM_PLANT else \
+            ["di"] if op in ("movs", "stos") and not i.rep else \
+            [m for m in mem_dests(i) if m.seg == "es"] if op not in STRING_OPS else []
+        folded = False
         if self.c.ems:
-            self.ems_guard("es")
+            folded = self.ems_guard("es", es_marks)
             if self.c.ems_ds:
                 self.ems_guard("ds")
                 if op in EMS_EXITS and not self.c.ems_far_inside:
                     self.ems_exit()
+        self.es_folded = folded
         listed = self.c.vram_ds and not VRAM_PLANT
         if listed and op in EMS_EXITS and not self.c.vram_far_inside:
             self.vram_exit()
         if self.c.vram and op not in STRING_OPS:
             for m in mem_dests(i):
-                if m.seg != "ss" and (m.seg not in UNMARKED or listed):
+                if m.seg != "ss" and (m.seg not in UNMARKED or listed) and not (folded and m.seg == "es"):
                     self.vram_mark(m)
         fn()
         if "CF" in writes(i)[1] and not self.cf_result:
@@ -596,7 +604,7 @@ class Lowering:
         must, _ = writes(self.i)
         return bool(self.c.ccr_in & (reads(self.i, self.c.program) | (set(self.c.live) - must)))
 
-    def ems_guard(self, seg: str) -> None:
+    def ems_guard(self, seg: str, marks: list | None = None) -> bool:
         """Before an instruction that accesses memory through `seg` (ES; DS in
         listed code, Ctx.ems_ds): when it is D001h or above (its window may meet
         the frame E0000h-EFFFFh), the runtime sets the segment's base register
@@ -617,13 +625,20 @@ class Lowering:
         (Ctx.x_in), and the CCR where a flag in it is still read
         (ccr_live_in). Elsewhere DS
         and SS are checked at their loads instead (putseg). Copied from Wing
-        Commander 2 (c31004f); the string range and the DS guard are X-Wing's."""
+        Commander 2 (c31004f); the string range and the DS guard are X-Wing's.
+        `marks`: the instruction's stores through ES to check against the VGA
+        frame (D9). The guard then compares with 9001h instead: below, neither
+        the guard nor the video check applies (one compare and an untaken branch
+        on the main path); at or above, out of line, D001h or above takes the
+        guard (no window there meets the frame) and 9001h-AF9Fh marks the
+        stores (vram_mark's call, X kept as the guard keeps it). Returns
+        whether it took the marks."""
         i = self.i
         if i.op in ("lea", "nop"):
-            return
+            return False
         if seg == "es" and self.c.ems_held:
             self.stats["EMS guard held"] += 1
-            return
+            return False
         mems = [o for o in i.operands if isinstance(o, Mem) and o.seg == seg]
         # the string operands through seg: ES:DI, and [SI] in seg (its override)
         index = [r for r, on in (("a4", i.op in ("movs", "cmps", "lods") and (i.seg or "ds") == seg),
@@ -633,7 +648,8 @@ class Lowering:
         single = string and not i.rep and len(index) == 1   # its bytes at the index
         xlat = i.op == "xlat" and (i.seg or "ds") == seg
         if not mems and not string and not xlat:
-            return
+            return False
+        marks = marks if seg == "es" else []
         tag = "ex" if seg == "es" else "dx"
         k = sum(1 for x in self.cold if x.startswith(f"{self.c.label}_{tag}"))
         cold, back = f"{self.c.label}_{tag}{k}", f"{self.c.label}_{tag[0]}r{k}"
@@ -648,12 +664,41 @@ class Lowering:
         # cmp and bcc keep X; emitted directly (the X whitelist has no branches)
         if keep:
             self.out.append("\tmove.w ccr,-(sp)")
-        self.out.append(f"\tcmp.w #$d001,{SEGSLOT[seg]}(a6)")
-        self.out.append(f"\tbcc {cold}")
+        self.out.append(f"\tcmp.w #${'9001' if marks else 'd001'},{SEGSLOT[seg]}(a6)")
+        self.out.append(f"\tbcc {cold}{'v' if marks else ''}")
         self.out.append(f"{back}:")
         if keep:
             self.out.append("\tmove.w (sp)+,ccr")
-        hot, x_cf, self.out = self.out, self.x_cf, [f"{cold}:"]
+        hot, x_cf = self.out, self.x_cf
+        if marks:
+            # ES at 9001h or above: the guard from D001h, else the frame's stores
+            self.out = [f"{cold}v:", f"\tcmp.w #$d001,{SEGSLOT[seg]}(a6)", f"\tbcc {cold}"]
+            if save:
+                self.e("move.w ccr,-(sp)")
+            self.e(f"cmp.w #$afa0,{SEGSLOT[seg]}(a6)")
+            self.e(f"bcc {cold}vs")
+            for m in marks:
+                self.e(f"move.w {SEGSLOT[seg]}(a6),d7")
+                self.e("sub.w #$a000,d7")
+                self.e("ext.l d7")
+                self.e("lsl.l #4,d7")
+                self.e("movea.l d7,a0")
+                if m == "di":       # one element at ES:DI, whatever DF (vram_mark_string)
+                    self.e(f"moveq #{i.width // 8},d6")
+                    self.e("move.l a5,d7")
+                    self.e("jsr rt_vram_mark")
+                else:
+                    self.offset_d7(m)
+                    self.e(f"moveq #{m.width // 8},d6")
+                    self.e(f"jsr {'rt_vram_mark_short' if m.width <= 16 else 'rt_vram_mark'}")
+                self.stats["video store mark"] += 1
+                self.stats["video store mark behind the ES guard"] += 1
+            self.out.append(f"{cold}vs:")
+            if save:
+                self.e("move.w (sp)+,ccr")
+            self.e(f"bra {back}")
+            self.cold += self.out
+        self.out = [f"{cold}:"]
         reg = "a1" if seg == "es" else "a3"
         cache = f"rt_ems_cache_{seg}"
         if save:
@@ -700,7 +745,7 @@ class Lowering:
             self.cold += self.out
             self.out, self.x_cf = hot, x_cf
             self.stats["EMS guard" if seg == "es" else "EMS DS guard"] += 1
-            return
+            return bool(marks)
         self.e("movem.l d6-d7,-(sp)")
         if string:
             # d7 the lowest offset, d6 the bytes from it: one operand's size
@@ -739,6 +784,7 @@ class Lowering:
         self.cold += self.out
         self.out, self.x_cf = hot, x_cf
         self.stats["EMS guard" if seg == "es" else "EMS DS guard"] += 1
+        return bool(marks)
 
     def ems_exit(self, keep: bool = False) -> None:
         """Before a transfer out of listed code (EMS_EXITS), and after a listed
@@ -868,7 +914,8 @@ class Lowering:
         """Before a store to `m` in FRONTEND or FLIGHT: if its segment's window
         meets the frame, rt_vram_mark widens the changed rows (d7 = offset,
         d6 = bytes, a0 = the segment's distance from A0000h); a byte or word
-        through rt_vram_mark_short, its common case without a call."""
+        through rt_vram_mark_short, its common case without a call. A store
+        through ES behind its guard is checked there instead (ems_guard)."""
         if m.seg == "cs":
             return
         skip = self.local()
@@ -1936,7 +1983,7 @@ class Lowering:
     def string_body(self, step: int, end: str) -> None:
         i = self.i
         op, w = i.op, i.width
-        if self.c.vram and op in ("movs", "stos") and not VRAM_PLANT:
+        if self.c.vram and op in ("movs", "stos") and not VRAM_PLANT and not self.es_folded:
             self.vram_mark_string(step)     # first: it clobbers a0, a CS source's base
         src = self.seg_base(i.seg or "ds") if op in ("movs", "cmps", "lods") else None
         sz = SZ[w]

@@ -46,7 +46,7 @@ from translator import flags as F, region  # noqa: E402
 from translator.decode import DecodeError, decode  # noqa: E402
 from translator.interp import State, UndefinedFlag, step  # noqa: E402
 from translator.ir import FLAG_BIT, FLAGS, STATUS  # noqa: E402
-from translator.lower import Ctx, LowerError, es_access, hx  # noqa: E402
+from translator.lower import Ctx, LowerError, es_access, hx, mem_dests  # noqa: E402
 from translator.support import HELPERS, equates  # noqa: E402
 
 VASM = Path(os.environ.get("VASM") or Path.home() / ".local/vasmm68k_mot")
@@ -62,7 +62,8 @@ CACHE = {"es": STATE + 0x810, "ds": STATE + 0x81C}
 EMS_CACHE = ("empty", "hit", "end", "low", "segment")   # the cases' cache states, cycling
 STUBS = ("T_JUMP", "T_CALL", "T_JUMPF", "T_CALLF", "T_INT", "T_FAULT", "T_HALT", "T_END",
          "rt_in8", "rt_in16", "rt_out8", "rt_out16", "T_RET", "T_TRAP", "rt_ems_es", "rt_ems_seg",
-         "rt_ems_ds", "rt_ems_ds_leave", "rt_ems_es_miss", "rt_ems_ds_miss", "rt_vram_ds")
+         "rt_ems_ds", "rt_ems_ds_leave", "rt_ems_es_miss", "rt_ems_ds_miss", "rt_vram_ds",
+         "rt_vram_mark", "rt_vram_mark_short")
 STUB_AT = {n: STUB + 4 * k for k, n in enumerate(STUBS)}
 REGS = ("ax", "bx", "cx", "dx", "sp", "bp", "si", "di")
 MIRROR = {"sp": 0x7FFF, "bp": 0x7FFF}   # held as offset ^ 7FFFh
@@ -244,10 +245,43 @@ def ems_diffs(i, regs: dict, flags: dict, out: dict, calls: list, stop, ds_mode:
     if want != bool(seg_calls):
         diffs.append(f"rt_ems_seg {'missing' if want else 'called'} at "
                      + " ".join(f"{s}={out[s]:04x}" for s in loaded))
-    # D9: a DS load whose window meets the VGA frame marks it all (rt_vram_ds)
-    want = "ds" in loaded and 0x9001 <= out["ds"] <= 0xAF9F and stop not in ("T_FAULT", "T_INT")
+    # D9: a DS or SS load whose window meets the VGA frame marks it all (rt_vram_ds)
+    want = any(0x9001 <= out[s] <= 0xAF9F for s in loaded) and stop not in ("T_FAULT", "T_INT")
     if want != bool(by["rt_vram_ds"]):
-        diffs.append(f"rt_vram_ds {'missing' if want else 'called'} at ds={out['ds']:04x}")
+        diffs.append(f"rt_vram_ds {'missing' if want else 'called'} at "
+                     + (" ".join(f"{s}={out[s]:04x}" for s in loaded) or f"ds={out['ds']:04x}"))
+    if not ds_mode:
+        diffs += vram_diffs(i, regs, calls)
+    return diffs
+
+
+def vram_diffs(i, regs: dict, calls: list) -> list[str]:
+    """D9 (the EMS cases are lowered for FRONTEND and FLIGHT, Ctx.vram): a store
+    through ES marks its bytes (rt_vram_mark or rt_vram_mark_short: d7 the
+    offset, d6 the bytes, a0 the segment's distance from A0000h) iff ES's window
+    meets the frame (9001h-AF9Fh), once; a REP STOS or MOVS with CX 0 marks
+    nothing, and its bytes and start are left to host_run."""
+    marks = [c for c in calls if c[0] in ("rt_vram_mark", "rt_vram_mark_short")]
+    es = regs["es"]
+    frame = 0x9001 <= es <= 0xAF9F
+    if i.op in ("movs", "stos"):
+        n = i.width // 8
+        want = [(n, regs["di"])] if not i.rep else [None] if regs["cx"] & 0xFFFF else []
+    elif i.op in ("cmps", "scas", "lods", "ins", "outs"):
+        want = []
+    else:
+        want = [(max(1, m.width // 8), (m.disp + sum(regs[r] for r in (m.base, m.index) if r)) & 0xFFFF)
+                for m in mem_dests(i) if m.seg == "es"]
+    want = want if frame else []
+    if len(marks) != len(want):
+        return [f"video marks {[(c[0], c[1], c[2] & 0xFFFF) for c in marks]} at es={es:04x}, "
+                f"want {len(want)}"]
+    diffs = []
+    for (_, d6, d7, a0, _), w in zip(marks, want):
+        dist = (((es - 0xA000) & 0xFFFF ^ 0x8000) - 0x8000) * 16 & 0xFFFFFFFF
+        if a0 != dist or w is not None and (d6 != w[0] or d7 & 0xFFFF != w[1]):
+            diffs.append(f"video mark d6={d6:x} d7={d7 & 0xFFFF:04x} a0={a0:08x}, want "
+                         f"a0={dist:08x}" + (f" d6={w[0]:x} d7={w[1]:04x}" if w else ""))
     return diffs
 
 
@@ -346,7 +380,11 @@ class M68k:
                 self.e.reg_write(U.M68K['d7'], 0)
                 self.e.reg_write(U.M68K['pc'], addr + 2)
             elif n in ("rt_vram_mark", "rt_vram_mark_short"):  # D9 changed rows: no guest state (d6, d7, a0
-                self.e.reg_write(U.M68K["pc"], addr + 2)   # scratch); host_run checks it
+                # scratch); host_run checks the rows, the EMS cases the call (ems_diffs)
+                self.ems_calls.append((n, self.r("d6"), self.r("d7"), self.r("a0"), 0))
+                # the callers keep the CCR (lower.ems_guard): X N Z V C come back inverted
+                self.e.reg_write(U.M68K["sr"], self.r("sr") ^ 0x1F)
+                self.e.reg_write(U.M68K["pc"], addr + 2)
             elif n.startswith("rt_hle_"):  # EQ: the guest code runs (as x86)
                 self.e.reg_write(U.M68K["sr"], self.r("sr") | 4)
                 self.e.reg_write(U.M68K["pc"], addr + 2)
@@ -565,7 +603,7 @@ class Harness(X.Harness):
         if label.startswith("b:ems-hold:"):     # lower.ems_held over the block
             tag = f"c{len(self.pending)}"
             try:
-                text, st = lower_case(insns, cs, tag, insns[-1].next_ip, ems=True)
+                text, st = lower_case(insns, cs, tag, insns[-1].next_ip, ems=True, vram=True)
             except LowerError as e:
                 self.bad.append(f"{label} emshold {code.hex()}: lowering: {e}")
                 return
@@ -588,13 +626,17 @@ class Harness(X.Harness):
         exit (X-Wing's)."""
         regs, flags, flagsx, ip, patches = case
         i = insns[0]
-        edge = EMS_EDGES[self.lowered["ems case"] % len(EMS_EDGES)]
         src = i.operands[1] if len(i.operands) > 1 else None
-        if ds and (ems_ds(i) or i.op in EMS_EXITS):
+        # each kind of case cycles through the edges on its own, so that cases
+        # added to the corpus do not move another kind off an edge
+        kind = "ds" if ds and (ems_ds(i) or i.op in EMS_EXITS) else "es" if ems_es(i) else \
+            "load" if i.op == "mov" and getattr(src, "name", None) in REGS else "other"
+        edge = EMS_EDGES[self.lowered[f"ems case ({kind}{' listed' if ds else ''})"] % len(EMS_EDGES)]
+        if kind == "ds":
             regs2 = dict(regs, ds=edge)
-        elif ems_es(i):
+        elif kind == "es":
             regs2 = dict(regs, es=edge)
-        elif i.op == "mov" and getattr(src, "name", None) in REGS:
+        elif kind == "load":
             regs2 = dict(regs, **{src.name: edge})
         else:
             regs2 = dict(regs)
@@ -609,12 +651,14 @@ class Harness(X.Harness):
         _, undef, (err, out, fl, mem, ints, outs) = side
         tag = f"c{len(self.pending)}"
         try:
-            text, st = lower_case(insns, regs2["cs"], tag, insns[-1].next_ip, ems=True, ems_ds=ds)
+            text, st = lower_case(insns, regs2["cs"], tag, insns[-1].next_ip, ems=True, ems_ds=ds,
+                                  vram=not ds)
         except LowerError as e:
             self.bad.append(f"{label} ems {code.hex()}: lowering: {e}")
             return
         self.lowered.update(st)
         self.lowered["ems case"] += 1
+        self.lowered[f"ems case ({kind}{' listed' if ds else ''})"] += 1
         self.pending.append((label + (" emsds" if ds else " ems"), code, case2, undef, (err, out, fl, unruns(mem), ints, outs),
                              text, regs2, flags, insns[-1].op))
 
@@ -710,6 +754,8 @@ class Harness(X.Harness):
                 step(s)
         finally:
             self.reset(patches, s.writes, set())
+        # the video marks of the blocks lowered as FRONTEND's and FLIGHT's: vram_diffs
+        calls = [c for c in calls if c[0] not in ("rt_vram_mark", "rt_vram_mark_short")]
         diffs, held, got = [], None, [c for c in calls if c[0] == "rt_ems_es"]
         if len(got) != len(calls):
             diffs.append(f"other EMS calls {[c[0] for c in calls]}")

@@ -13,8 +13,11 @@ one role from the shapes the translator emits (translator/lower.py):
   on d7, and a wrap check `cmp.w #n,d7` with its branch between them);
 - ems check: the EMS guard's `cmpi.w #$d001,SEG(a6)` and its branch, the CCR saved
   around it, and the out-of-line `_ex` path (the inline cache hit and the miss call);
+  before a video store through ES, the guard's `cmpi.w #$9001,5(a6)` and its branch;
 - video check / video mark: lower.vram_segment's test of the segment against the
-  frame, and the mark's setup and call when the window meets it;
+  frame, and the mark's setup and call when the window meets it; behind the ES guard
+  (lower.ems_guard's marks), its out-of-line `cmpi.w #$afa0,5(a6)` and branch, and the
+  mark from `move.w 5(a6),d7; sub.w #$a000,d7` to its call;
 - return check: `cmp #ip,d7` / `cmp.l #cs:ip,d7` and its branch to a mismatch stub;
 - flags: reads and writes of the guest flag bytes (G_FL..G_TF) and CCR moves that are
   not an EMS guard's;
@@ -42,7 +45,9 @@ GUEST = re.compile(r"^(R|FE|FLT|AD|AW)_[0-9A-F]{5}")
 FLAG_SLOTS = {"10(a6)", "11(a6)", "12(a6)", "13(a6)", "14(a6)", "15(a6)"}
 SEG_SLOTS = {"1(a6)", "3(a6)", "5(a6)"}
 D001 = "#-12287"            # $d001 as the disassembler prints the word
-VRAM_LO = "#-28671"         # $a000-$0fff, lower.vram_segment
+VRAM_LO = "#-28671"         # $a000-$0fff, lower.vram_segment; $9001, lower.ems_guard
+VRAM_HI = "#-20576"         # $afa0, lower.ems_guard
+A000 = "#-24576"            # $a000
 BRANCH = re.compile(r"^b(?!tst|chg|clr|set)[a-z]{2,3}(\.[bsw])?$")
 D7_WRITERS = ("move.w", "move.l", "moveq", "sub.w", "add.w", "eori.w", "addq.w", "subq.w",
               "addq.l", "subq.l", "neg.w", "ext.l", "addi.w", "subi.w")
@@ -77,7 +82,8 @@ def classify(rows: list[list]) -> list[str]:
             roles[k] = "poll (sync only)"
             if k + 1 < len(rows) and BRANCH.match(ops[k + 1]):
                 roles[k + 1] = "poll (sync only)"
-        elif ops[k] == "cmpi.w" and opr[k].startswith(D001 + ",") and dest(opr[k]) in SEG_SLOTS:
+        elif ops[k] == "cmpi.w" and opr[k].startswith((D001 + ",", VRAM_LO + ",")) and \
+                dest(opr[k]) in SEG_SLOTS:
             roles[k] = "ems check"
             if k + 1 < len(rows) and BRANCH.match(ops[k + 1]):
                 roles[k + 1] = "ems check"
@@ -95,6 +101,18 @@ def classify(rows: list[list]) -> list[str]:
             # jumps past it: the next executed row is then the guest's own work)
             if j < len(rows) and not (ops[j] == "sub.w" and opr[j] == "#4095,d7"):
                 continue
+            while j < len(rows):
+                roles[j] = "video mark"
+                if ops[j] == "jsr":
+                    break
+                j += 1
+        elif ops[k] == "cmpi.w" and opr[k] == VRAM_HI + ",5(a6)":
+            roles[k] = "video check"
+            if k + 1 < len(rows) and BRANCH.match(ops[k + 1]):
+                roles[k + 1] = "video check"
+        elif ops[k] == "sub.w" and opr[k] == A000 + ",d7" and k and \
+                ops[k - 1] == "move.w" and source(opr[k - 1]) == "5(a6)":
+            j = k - 1
             while j < len(rows):
                 roles[j] = "video mark"
                 if ops[j] == "jsr":

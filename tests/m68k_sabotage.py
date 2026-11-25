@@ -160,7 +160,22 @@ def ems_cold_x(self, out):
     for k, x in enumerate(out):
         if x == "\tmove.w ccr,-(sp)" and k and re.match(r"^\w+_[ed]x\d+:$", out[k - 1]):
             continue
-        if x == "\tmove.w (sp)+,ccr" and k + 1 < len(out) and re.match(r"^\tbra \w+_[ed]r\d+$", out[k + 1]):
+        if x == "\tmove.w (sp)+,ccr" and k + 1 < len(out) and re.match(r"^\tbra \w+_[ed]r\d+$", out[k + 1]) \
+                and not re.match(r"^\w+_ex\d+vs:$", out[k - 1]):
+            continue
+        res.append(x)
+    return res
+
+
+def vram_cold_x(self, out):
+    """The video check behind the ES guard (its stores' marks at 9001h-AF9Fh, out
+    of line) neither saves nor restores the CCR, so it loses X where X carries
+    the guest CF into the instruction."""
+    res = []
+    for k, x in enumerate(out):
+        if x == "\tmove.w ccr,-(sp)" and k and re.match(r"^\tbcc \w+_ex\d+$", out[k - 1]):
+            continue
+        if x == "\tmove.w (sp)+,ccr" and k and re.match(r"^\w+_ex\d+vs:$", out[k - 1]):
             continue
         res.append(x)
     return res
@@ -681,6 +696,11 @@ SABOTAGE = [
     ("EMS DS exit check misses D001h", ems_ds_edge("dy"), "boundary"),
     ("EMS string guard ignores CX", ems_string_one, "boundary"),
     ("EMS guard's out-of-line path loses X", ems_cold_x, "boundary"),
+    ("ES guard's video check misses 9001h", sub(r"^\tcmp\.w #\$9001,G_ES\(a6\)$", "\tcmp.w #$9002,G_ES(a6)"),
+     "boundary"),
+    ("ES guard's video check takes AFA0h", sub(r"^\tcmp\.w #\$afa0,G_ES\(a6\)$", "\tcmp.w #$afa1,G_ES(a6)"),
+     "boundary"),
+    ("ES guard's video check loses X", vram_cold_x, "boundary"),
     ("EMS inline cache hit ignores the segment", sub(r"^\tbne\.s (\w+_[ed]x\d+m)$", "\tnop"), "boundary"),
     ("EMS inline cache hit ignores the first offset", sub(r"^\tbcs\.s (\w+_[ed]x\d+m)$", "\tnop"), "boundary"),
     ("EMS guard held across an ES change", "ems hold es", "boundary"),

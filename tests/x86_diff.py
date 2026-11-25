@@ -402,9 +402,18 @@ def ems_flag_cases(h: Harness) -> None:
     """An EMS guard between a flag setter and its reader (lower.ccr_live_in): a
     CMP's flags in the CCR across an ES access to the JNE that reads them, and an
     ADD's CF in X across the guard of an ADC's ES operand (Ctx.x_in); the cache
-    empty, so the out-of-line path runs to the runtime, which keeps no CCR."""
+    empty, so the out-of-line path runs to the runtime, which keeps no CCR. And
+    an ADD's CF in X across the video check behind the guard of an ADC's store
+    through ES in the VGA frame (lower.ems_guard's marks, D9), whose mark keeps
+    no CCR either."""
     cmp_jne = bytes.fromhex("39d8") + bytes.fromhex("268b0f") + bytes.fromhex("7502")
     add_adc = bytes.fromhex("01d8") + bytes.fromhex("26130f")
+    add_adc_store = bytes.fromhex("01d8") + bytes.fromhex("26110f")
+    for es in (0x9001, 0xA000, 0xAF9F):
+        for ax, bx in ((1, 1), (1, 2), (0xFFFF, 1), (0x8000, 0x8000)):
+            regs = dict(cs=0x2000, ds=0x5000, ss=0x7000, sp=0xfffe, es=es, ax=ax, bx=bx, cx=0x1234)
+            h.case(add_adc_store + b"\x9c", f"b:ems-hold:carry in X to a video store:{es:x}", n=3,
+                   block=True, overrides={"regs": regs, "ip": 0x100})
     for es in (0xE030, 0xD000, 0xEFFF):
         for ax, bx in ((1, 1), (1, 2), (0xFFFF, 1), (0x8000, 0x8000)):
             regs = dict(cs=0x2000, ds=0x5000, ss=0x7000, sp=0xfffe, es=es, ax=ax, bx=bx)

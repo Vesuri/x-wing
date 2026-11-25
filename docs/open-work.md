@@ -24,9 +24,9 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    on the 68030 model.
    Target: the combat film at 100 ms per frame or less on the 68030 model (owner decision
    2026-11-19, `docs/design.md`). Step 2, the EMS guard's cache, brought the film to 320 ms
-   step 5, video stores through DS unchecked outside listed code, to 280 ms, and step 6,
-   the EMS guard's cache hit checked inline, to 260 ms
-   ([perf-method](perf-method.md#steps)). The intro has no target yet (the owner's to set).
+   step 5, video stores through DS unchecked outside listed code, to 280 ms, step 6,
+   the EMS guard's cache hit checked inline, to 260 ms, and step 11, video stores through
+   SS unchecked, to 240 ms ([perf-method](perf-method.md#steps)). The intro has no target yet (the owner's to set).
    Whether the film's playback costs what the same flight would live is still open: m13's
    window shows another scene.
    Where the film's cost lies, in step 2's m17 meter: generated code 85.4% of the model
@@ -53,7 +53,7 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    3. Instruments. The film is re-profiled for the costs only the Amiga has: C2P, the present
       and the FM render. The reference's own frame interval in the film and the intro is
       the ceiling. An intro meter window (which milestone: the owner's choice).
-   10. The EMS guard's cache hit for ES on the main path, deferred behind steps 11 and 12
+   10. The EMS guard's cache hit for ES on the main path, deferred behind step 12
        (owner 2026-11-25): a hit still leaves the main path for the out-of-line check
        (`_ex`), whose labels take 7.3% of m17's generated model cycles (31.5M, about 59 per
        entry; MEASURED per label by the meter), and the inline D001h check with its CCR
@@ -62,8 +62,6 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
        and the cache in the state block about 8 bytes per hit, 4.5M (1.0%) (DERIVED from
        the cost model's weights and the meter's counts per site; every one of m17's 154
        sites always sees an EMS segment), before the larger loops' cost.
-   11. Video checks through ES: decided once at each ES load and skipped after an EMS cache
-       hit; 475,059 checks in m17, 33,051 of them marking (DERIVED, as above).
    12. Smaller translator items, each priced with `tools/overhead_census.py` or
        `tools/lowering_cost.py` first: the cell walk's reset (1.44%: 97 resets, each
        clearing 7,711 longs); the reversed index address reused while its
@@ -86,7 +84,7 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
        `buildPalette` 1.0%) and C2P.
    15. The 68040 check and gate 7.
 
-   Steps 10–12 may bring the film to about 200 ms: the census puts about 28% of its
+   Steps 10 and 12 may bring the film to about 200 ms: the census puts about 28% of its
    generated model cycles in translation overhead (DERIVED). 100 ms needs the natives.
 2. Postponed (owner decision 2026-11-04) until P8 takes a donor; the survey found none for
    the film's hot code ([Macintosh donors](mac-donors.md)): make the Macintosh reference

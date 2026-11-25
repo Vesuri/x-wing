@@ -277,7 +277,8 @@ diffs directly); relocated words in instructions are emitted as
 - EMS model (Wing Commander 2's lazy frame pages, `ems.c`): a map copies no page
   in; a frame page holds its mapped page's bytes only while it is live. Before
   every instruction that accesses memory through ES, `cmp.w #$d001,G_ES(a6)` and,
-  at or above, `rt_ems_es` out of line (d7 the lowest offset, d6 the bytes from
+  at or above, `rt_ems_es` out of line (before a video store through ES, D9, the
+  compare is with 9001h and D001h's out of line) (d7 the lowest offset, d6 the bytes from
   it; a string passes the range of its operands in ES, ES:DI and an ES-overridden
   [SI], its size times CX plus their distance, or 0 with DF set: the whole
   window). A range within one frame page, or across frame pages that map
@@ -500,7 +501,13 @@ handler reads: sync for the declared span).
   (`emit.VRAM_MODULES`). Before each of their stores through ES the
   lowering checks whether the segment's window meets the frame and calls
   `rt_vram_mark` (offset, bytes; `rep stos/movs` once for the whole run), which
-  widens per-row changed columns; a byte or word store calls `rt_vram_mark_short`,
+  widens per-row changed columns. A store, or a STOS or MOVS element without REP,
+  behind an ES guard (the EMS model) is checked by the guard: its main path
+  compares ES with 9001h, and below it neither the guard nor the mark applies;
+  out of line, D001h or above takes the guard (no such window meets the frame) and
+  9001h–AF9Fh the mark (`lower.ems_guard`'s marks; the m68k differential's EMS
+  cases check the mark's call, offset, bytes and distance at the edges,
+  `vram_diffs`; sabotage of 9001h, AFA0h and X); a byte or word store calls `rt_vram_mark_short`,
   which marks one within a row without saving a register or calling and passes
   any other to `rt_vram_mark` (`tests/host_run.py` `vram_mark_problems` compares
   the two over row, frame and offset edges; sabotage `vram-short`). Stores through DS are checked so only in the
