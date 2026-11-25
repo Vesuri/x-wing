@@ -53,17 +53,17 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    3. Instruments. The film is re-profiled for the costs only the Amiga has: C2P, the present
       and the FM render. The reference's own frame interval in the film and the intro is
       the ceiling. An intro meter window (which milestone: the owner's choice).
-   10. The EMS guard's cache hit for ES on the main path: a hit still leaves the main path
-       for the out-of-line check (`_ex`), whose labels take 7.3% of m17's generated model
-       cycles (31.5M, about 59 per entry; MEASURED per label by the meter), and the inline
-       D001h check with its CCR saves another 6.2% (DERIVED: `tools/overhead_census.py` on
-       step 10's meter). The cache moved into the state block, or the hit tested on the
-       main path at the sites that take it most: the edge setup (FLIGHT.OVL+21E61), the
-       vertex transform (+20D5F) and the intro's compare-and-copy.
-   11. Video checks: stores through SS unchecked (owner decision 2026-11-25, `docs/design.md`),
-       and the ES check decided once at each ES load and skipped after an EMS cache hit. The
-       check is 7.8% of m17's generated model cycles: 662,484 checks through SS, none of
-       them marking, and 475,059 through ES, 33,051 of them marking (DERIVED, as above).
+   10. The EMS guard's cache hit for ES on the main path, deferred behind steps 11 and 12
+       (owner 2026-11-25): a hit still leaves the main path for the out-of-line check
+       (`_ex`), whose labels take 7.3% of m17's generated model cycles (31.5M, about 59 per
+       entry; MEASURED per label by the meter), and the inline D001h check with its CCR
+       saves another 6.2% (DERIVED: `tools/overhead_census.py` on step 10's meter). The
+       hit on the main path would save about 21 model cycles per hit, 11.2M (2.4%) in m17,
+       and the cache in the state block about 8 bytes per hit, 4.5M (1.0%) (DERIVED from
+       the cost model's weights and the meter's counts per site; every one of m17's 154
+       sites always sees an EMS segment), before the larger loops' cost.
+   11. Video checks through ES: decided once at each ES load and skipped after an EMS cache
+       hit; 475,059 checks in m17, 33,051 of them marking (DERIVED, as above).
    12. Smaller translator items, each priced with `tools/overhead_census.py` or
        `tools/lowering_cost.py` first: the cell walk's reset (1.44%: 97 resets, each
        clearing 7,711 longs); the reversed index address reused while its

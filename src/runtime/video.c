@@ -2,10 +2,11 @@
  * them: chained mode 13h at A000:0000 (guest RAM) and the DAC
  * (docs/external-surface.md). Copied from Secret Weapons of the Luftwaffe's
  * (manifest/references.tsv) and adapted. Display (D9): every store of
- * FRONTEND and FLIGHT to A000h through ES or SS, and through DS in listed
- * code (annotations/vram-ds.csv), marks changed rows (rt_vram_mark; X-Wing
- * has no graphics driver to bracket them); DS at the frame elsewhere marks
- * the whole frame (rt_vram_ds_on). The game's mouse poll (INT 33h AX=3) is
+ * FRONTEND and FLIGHT to A000h through ES, and through DS in listed code
+ * (annotations/vram-ds.csv), marks changed rows (rt_vram_mark; X-Wing has no
+ * graphics driver to bracket them); DS at the frame elsewhere, and SS at the
+ * frame anywhere (owner decision 2026-11-25), marks the whole frame
+ * (rt_vram_ds_on). The game's mouse poll (INT 33h AX=3) is
  * the frame boundary: the changed rows are presented there if a vertical
  * blank is due, else at the next poll after one. While the game does not
  * poll (none within a second of IRQ0 ticks, or none yet), a blank presents
@@ -208,7 +209,7 @@ static void present(void)
     rt_vram_top = 200;
     rt_vram_bottom = 0;
     if (rt_vram_ds_on) {
-        if (at_frame(G_DS) || (rt_vram_plant_es && at_frame(G_ES))) {
+        if (at_frame(G_DS) || at_frame(G_SS) || (rt_vram_plant_es && at_frame(G_ES))) {
             vram_all();
         } else {
             rt_vram_ds_on = 0;

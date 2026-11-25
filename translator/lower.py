@@ -370,7 +370,9 @@ class Lowering:
         # meets the VGA frame (9001h-AF9Fh, vram_segment) marks the whole
         # frame (rt_vram_ds), in every module: DS may reach listed code's
         # callers loaded. Both share one compare inline.
-        vram = self.c.ems and s in UNMARKED and not (self.c.vram_ds and not VRAM_PLANT)
+        # Video stores through SS (owner decision 2026-11-25) are never marked:
+        # an SS load whose window meets the frame marks it whole, in all code.
+        vram = self.c.ems and (s == "ss" or s in UNMARKED and not (self.c.vram_ds and not VRAM_PLANT))
         if ems or vram:
             k = sum(1 for x in self.cold if x.startswith(f"{self.c.label}_es"))
             cold, back = f"{self.c.label}_es{k}", f"{self.c.label}_et{k}"
@@ -382,7 +384,7 @@ class Lowering:
                 lines += [f"\tcmp.w #$d001,{src}", f"\tbcc {cold}e"]
             if vram:
                 lines += [f"\tcmp.w #$afa0,{src}", f"\tbcc {back}", "\tjsr rt_vram_ds", f"\tbra {back}"]
-                self.stats["video DS load check"] += 1
+                self.stats[f"video {s.upper()} load check"] += 1
             if ems:
                 lines += [f"{cold}e:"] if vram else []
                 lines += ["\tjsr rt_ems_seg", f"\tbra {back}"]
@@ -568,7 +570,7 @@ class Lowering:
             self.vram_exit()
         if self.c.vram and op not in STRING_OPS:
             for m in mem_dests(i):
-                if m.seg not in UNMARKED or listed:
+                if m.seg != "ss" and (m.seg not in UNMARKED or listed):
                     self.vram_mark(m)
         fn()
         if "CF" in writes(i)[1] and not self.cf_result:

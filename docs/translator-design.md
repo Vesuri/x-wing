@@ -497,7 +497,7 @@ handler reads: sync for the declared span).
   from boot, 2,355 s resumed (13,449 of its 58,737 interrupts after the save); every
   check of the resumed runs equal to their boot runs'.
 - Display (D9 slice): FRONTEND and FLIGHT write video memory
-  (`emit.VRAM_MODULES`). Before each of their stores through ES or SS the
+  (`emit.VRAM_MODULES`). Before each of their stores through ES the
   lowering checks whether the segment's window meets the frame and calls
   `rt_vram_mark` (offset, bytes; `rep stos/movs` once for the whole run), which
   widens per-row changed columns; a byte or word store calls `rt_vram_mark_short`,
@@ -510,7 +510,11 @@ handler reads: sync for the declared span).
   (`emit.vram_ctx`). Elsewhere, in every module, a DS load of 9001h–AF9Fh, and
   listed code left with DS there (`lower.vram_exit`), call `rt_vram_ds`: every
   row is marked, and each present marks the whole frame again until one finds DS
-  off the frame (`rt_vram_ds_on`). The fallback is counted in `rt_vram_ds_falls`. In
+  off the frame (`rt_vram_ds_on`). Stores through SS are never checked (owner
+  decision 2026-11-25): an SS load of 9001h–AF9Fh, in any code, calls `rt_vram_ds`
+  as well, and the presents keep marking the whole frame while DS or SS is there.
+  In m01, m02, m12, m13 and m17 no store reaches the frame through SS (MEASURED by
+  `tools/vram_ds_profile.py`). The fallback is counted in `rt_vram_ds_falls`. In
   m01, m02, m12, m13 and m17 no store reaches the frame through DS (MEASURED), so the
   list holds only routines that load DS at the frame or at a buffer whose window meets
   it, listed to keep them off the fallback; m13's front-end loaders at 1918:007C and

@@ -966,9 +966,10 @@ vram_row:	; row of each 64-byte block of the frame: k / 5
 
 ; Video stores through DS (owner decision 2026-11-23): a DS load of a
 ; segment whose window meets the frame outside listed code
-; (annotations/vram-ds.csv; lower.py putseg), or listed code left with DS there
-; (vram_exit). Stores through DS go unmarked there, so the whole frame is
-; changed at each present until one finds DS off the frame (video.c present).
+; (annotations/vram-ds.csv; lower.py putseg), listed code left with DS there
+; (vram_exit), or an SS load there in any code (owner decision 2026-11-25).
+; Stores through DS and SS go unmarked there, so the whole frame is changed
+; at each present until one finds DS and SS off the frame (video.c present).
 ; The flag first, then every row whole (video.c vram_all): a present
 ; between them still sees the flag. Keeps every register; the CCR is
 ; clobbered. Safe at interrupt level.
