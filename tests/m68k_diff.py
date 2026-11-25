@@ -177,14 +177,21 @@ def ems_ds_case(i) -> bool:
         loads_segment(i) and getattr(i.operands[0], "name", None) == "ds"
 
 
+def ems_index(i, seg: str) -> list[str]:
+    """A string's operands through `seg` (lower.py ems_guard): SI in its segment, ES:DI."""
+    return [r for r, on in (("si", i.op in ("movs", "cmps", "lods") and (i.seg or "ds") == seg),
+                            ("di", seg == "es" and i.op in ("movs", "cmps", "stos", "scas"))) if on]
+
+
 def ems_want(i, seg: str, regs: dict, flags: dict) -> tuple[int, int | None]:
     """The guard's (d6 bytes, d7 offset or None: not compared) for its access
     through `seg`: from the lowest of a string's operands in it (ES:DI, [SI] in
     its segment), its size times CX (REP; CX 0: one) plus the distance between
-    the two, or 0 with DF set (the whole window); xlat's byte at BX+AL; else
-    the operand."""
-    idx = [r for r, on in (("si", i.op in ("movs", "cmps", "lods") and (i.seg or "ds") == seg),
-                           ("di", seg == "es" and i.op in ("movs", "cmps", "stos", "scas"))) if on]
+    the two, or 0 with DF set (the whole window); one element through one
+    operand (no REP): its own bytes; xlat's byte at BX+AL; else the operand."""
+    idx = ems_index(i, seg)
+    if idx and not i.rep and len(idx) == 1:
+        return i.width // 8, regs[idx[0]]
     if idx:
         if flags.get("DF"):
             return 0, None
@@ -715,14 +722,16 @@ class Harness(X.Harness):
         """The guard caches for an EMS case (EMS_CACHE, cycling): empty, covering
         the access exactly with the plain base (lower.py ems_guard's inline hit:
         no runtime call), or missing it by its last byte, its first byte or the
-        segment, with another base (a wrong hit shows in the base). Strings call
+        segment, with another base (a wrong hit shows in the base). One string
+        element through one operand checks it inline too; other strings call
         the runtime, which checks the cache itself (host_run ems_guard_problems).
         Returns the segments expected to hit."""
         state = EMS_CACHE[self.lowered["ems cache"] % len(EMS_CACHE)]
         self.lowered["ems cache"] += 1
         cache, hit = bytearray(24), set()
         for k, seg in enumerate(("es", "ds")):
-            if state == "empty" or i.op in ("movs", "cmps", "stos", "lods", "scas") or \
+            idx = ems_index(i, seg)
+            if state == "empty" or (idx and (i.rep or len(idx) != 1)) or \
                     not (ems_es(i) if seg == "es" else ems_ds(i)):
                 continue
             n, lo = ems_want(i, seg, regs, flags)

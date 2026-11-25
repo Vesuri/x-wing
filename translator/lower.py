@@ -596,7 +596,10 @@ class Lowering:
         the lowest of its operands through the segment (ES:DI, [SI] in its
         segment) and the bytes from there to the last one's end (its size times
         CX, REP, CX 0: one element, plus the distance between the two), or 0
-        with DF set: the whole window. So the base is plain only while the
+        with DF set: the whole window; one element through one operand
+        (LODS, STOS, SCAS, a MOVS or CMPS operand alone in the segment, no REP)
+        passes its own bytes, as an operand's access does, and checks the cache
+        inline whatever DF is. So the base is plain only while the
         segment is below D001h; every access at or above runs right after its
         guard (a label: no formation carries over it, reuse.py). Keeps every
         other register, X, and the CCR where flags enter in it. Elsewhere DS
@@ -614,6 +617,7 @@ class Lowering:
                                  ("a5", seg == "es" and i.op in ("movs", "cmps", "stos", "scas")))
                  if on]
         string = bool(index)
+        single = string and not i.rep and len(index) == 1   # its bytes at the index
         xlat = i.op == "xlat" and (i.seg or "ds") == seg
         if not mems and not string and not xlat:
             return
@@ -634,13 +638,16 @@ class Lowering:
         cache = f"rt_ems_cache_{seg}"
         if not keep:                      # X (the hot path saved a live CCR)
             self.e("move.w ccr,-(sp)")
-        if not string:
+        if not string or single:
             # The one-entry cache's hit inline (rt_entry.s EMS_GUARD, ems.c
             # rt_ems_cache_es/ds): the same segment and the access's bytes
             # within the cached offsets give the cached base; d6 untouched.
-            n = 1 if xlat else max(1, mems[0].width // 8)   # a far pointer: 4
+            n = i.width // 8 if single else 1 if xlat else max(1, mems[0].width // 8)   # far: 4
             self.e("move.l d7,-(sp)")
-            if xlat:
+            if single:
+                self.e("moveq #0,d7")
+                self.e(f"move.w {index[0]},d7")
+            elif xlat:
                 self.e("moveq #0,d7")
                 self.e("move.b d0,d7")
                 self.e("add.w d3,d7")
@@ -1951,7 +1958,8 @@ class Lowering:
     def string_fast(self, src: str | None, slow: str, end: str) -> None:
         """REP with DF = 0 and CX != 0 (D11): taken when no SI/DI range reaches
         10000h (offset + size * CX < 10000h: no access wraps and SI/DI end
-        without wrapping), else `slow` (the element body).
+        without wrapping) and, for MOVS and STOS, CX is above REP_SHORT, else
+        `slow` (the element body).
         SI/DI are host pointers in the loop (base + 8000h - offset: just above
         the element, which forward order meets descending) and offsets again
         after it; the loop goes element by element in the x86 order
@@ -1962,6 +1970,14 @@ class Lowering:
         op, w = i.op, i.width
         sz, n = SZ[w], w // 8
         uses_si = op in ("movs", "cmps")
+        if op in ("movs", "stos"):
+            # A short count runs the element body: below the fast path's fixed cost
+            # (REP MOVSW about 36 instructions and 2 per element against the body's
+            # 11, REP STOSW about 38 against 8, REP STOSB about 20 and 2 against 7:
+            # break-even 3.6 to 5 elements, DERIVED from the emitted code).
+            self.e(f"cmp.w #{REP_SHORT},d1")
+            self.e(f"bls {slow}")
+            self.stats["string short count"] += 1
         self.e("moveq #0,d7")
         self.e("move.w d1,d7")
         if n == 2:
@@ -2597,6 +2613,7 @@ def reads(i: Insn, program: bool = False) -> set:
 
 
 STRING_OPS = ("movs", "cmps", "stos", "lods", "scas")
+REP_SHORT = 3   # lower.string_fast: REP MOVS/STOS counts up to this run the element body
 # ems_held: instructions that change neither ES, nor the EMS model's state, nor
 # a register beyond their destination (and SP for push and pop), and call nothing
 HOLD_OPS = frozenset(("mov", "add", "adc", "sub", "sbb", "and", "or", "xor", "cmp", "test", "inc",

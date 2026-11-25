@@ -231,8 +231,11 @@ diffs directly); relocated words in instructions are emitted as
   recomputed. REP STOSW and REPE CMPSW move or compare two words per
   `move.l`/`cmp.l` (speed-plan R12: an odd element alone, a mismatching
   long's guest-first word first), eight longs per pass (R24: STOSW stores
-  a first word to long-align; R26). Checked by the boundary corpus (guard and
-  stop edges, overlap) and sabotage plants.
+  a first word to long-align; R26). REP MOVS and REP STOS with CX at most
+  `REP_SHORT` (3) run the element body instead: below the fast path's fixed
+  cost (break-even 3.6 to 5 elements, DERIVED from the emitted code; the intro's
+  sprite runs). Checked by the boundary corpus (guard and stop edges, overlap)
+  and sabotage plants.
 - Calls (D1): the guest stack stays byte-exact; a guest call is `jsr` and
   returns with `rts`. Near returns carry IP in d7.w; RETF and IRET carry
   CS:IP in d7.l (R33). RETF pops one long after a word SP step guarded by
@@ -285,8 +288,10 @@ diffs directly); relocated words in instructions are emitted as
   (`EMS_GUARD`, `ems.c`) holds the last decided segment, the offsets of the run of
   adjacent frame pages around its access that share its displacement, and the
   base, emptied at every change of the store mapping; the out-of-line
-  path checks it inline for an operand's access and calls `rt_ems_es_miss` only
-  on a miss (a string calls `rt_ems_es`, which checks it itself). So a1 is the
+  path checks it inline for an operand's access, and for one string element
+  through one operand (LODS, STOS, SCAS, a MOVS or CMPS operand alone in its
+  segment, no REP: its own bytes, whatever DF is), and calls `rt_ems_es_miss` only
+  on a miss (any other string calls `rt_ems_es`, which checks it itself). So a1 is the
   plain ES base only below D001h, and every access at or above runs right after
   its guard or after an earlier instruction's guard of the same operand, held
   (`lower.ems_held`): in one run, with no leader, region guard or hook between,

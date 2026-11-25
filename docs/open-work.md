@@ -57,8 +57,6 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    7. The intro's compare-and-copy, FRONTEND 1A5E:0119: a cheap restart path in the
       REPE CMPSW lowering, and the changed word's mark (`rt_vram_mark_short`, 7.0% of the
       scene's intro fixture profile, MEASURED) inline.
-   8. The intro's sprite decoder, FRONTEND 1B58:007A: a short-count path for REP STOSW and
-      REP MOVSW.
    9. Checkpoint: the film, the intro and a first 68040 run; the later steps re-ranked.
    10. The Amiga platform's costs, where step 3's profile shows them large: the FM render
        and C2P.
