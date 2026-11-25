@@ -7,5 +7,5 @@
 | Keep the date hardcoded so identical source trees produce identical builds.
 	.section .rodata.version,"aR"
 	.balign 2
-	.asciz "$VER: X-Wing 0.2 (23.11.2026)"
+	.asciz "$VER: X-Wing 0.3 (25.11.2026)"
 	.balign 2

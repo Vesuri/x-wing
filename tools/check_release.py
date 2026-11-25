@@ -18,8 +18,8 @@ import subprocess
 from pathlib import Path
 from package_release import ORIGINAL_HASHES, PREFIX, ROOT, crc16, members
 
-DATE = '23.11.2026'
-STAMP = (((2026 - 1980) << 9) | (11 << 5) | 23) << 16
+DATE = '25.11.2026'
+STAMP = (((2026 - 1980) << 9) | (11 << 5) | 25) << 16
 INSTALL = Path(os.environ.get('XWING_REFERENCE', ROOT / 'tmp/dos/configured-sb/XWING'))
 IMAGES = Path(os.environ.get('XWING_IMAGES', ROOT / 'tmp/dos/disks'))
 SIZE = 64
@@ -91,7 +91,7 @@ def main():
         assert b'$VER: ' + name.encode() + b' ' + version + b' (' + DATE.encode() + b')' in payloads[name], 'version: ' + name
     assert b'$VER: Install ' + version + b' (' + DATE.encode() + b')' in payloads['Install']
     assert b'version ' + version + b' (' + DATE.encode() + b'):' in payloads['ReadMe']
-    for heading in (b'EARLY ALPHA', b'not\n optimized', b'What to expect:', b'Requirements:', b'Starting:', b'Installation:', b'Playing:',
+    for heading in (b'EARLY ALPHA', b'partly\n optimized', b'What to expect:', b'Requirements:', b'Starting:', b'Installation:', b'Playing:',
                     b'History:', b'Contact:', b'Credits:', b'https://github.com/Vesuri/x-wing'):
         assert heading in payloads['ReadMe'], heading
     # WHDLoadSlave header, whdload.i: flags +14, BaseMem +16, keyexit +31, ExpMem +32.

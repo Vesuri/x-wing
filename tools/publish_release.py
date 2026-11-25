@@ -5,7 +5,7 @@
 
 Adapted from the WHDLoad project's common/tools/publish_release.py. From VERSION and the
 release date it derives:
-  tag      the version (0.2), a lightweight tag on HEAD, the commit whose build outputs
+  tag      the version (0.3), a lightweight tag on HEAD, the commit whose build outputs
            the archive was just checked against (make publish)
   title    X-Wing <version> (dd.mm.yyyy)
   notes    the early-alpha notice and the change points of the version's history entry in
@@ -78,7 +78,8 @@ def notes_of(archive, version):
             sys.exit(f'unexpected line in the version {version} entry: {line!r}')
     if not items:
         sys.exit(f'the version {version} entry lists no changes')
-    notice = ('**Early alpha, completely unoptimized.** Expect it to be slow and to stop on '
+    notice = ('**Early alpha, partly optimized.** Expect the intro to be slow, flight to be much '
+              'faster than in 0.2, and the game to stop on '
               'paths the tests have not reached; it needs more than 8 MB Fast RAM under '
               f'WHDLoad. Read [what to expect]({README}) before installing.\n\n')
     return notice + ''.join(f'- {i}\n' for i in items) + (

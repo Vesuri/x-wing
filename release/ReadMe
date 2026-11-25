@@ -10,8 +10,8 @@
  This install applies to "X-Wing" 1.0, an unofficial Amiga port of the 1993
  PC game by LucasArts and Totally Games.
 
- THIS IS AN EARLY ALPHA. The port runs the whole game, but it is not
- optimized yet. Please read "What to expect" before installing.
+ THIS IS AN EARLY ALPHA. The port runs the whole game and is partly
+ optimized. Please read "What to expect" before installing.
 
 
  What to expect:
@@ -27,9 +27,10 @@
  matched the original.
 
  What to expect when playing:
- - Speed: nothing has been optimized yet, and the speed has not been
-   measured. Expect the game to run slowly, flight above all. Making it
-   faster is the next step of the port.
+ - Speed: the port is partly optimized. Expect the intro to run slowly
+   on a 68030, its Star Destroyer scene above all. Flight is much faster
+   than in 0.2, though busy scenes with many ships still slow down. Making
+   it faster is still the port's current step.
  - Unsupported paths: the port stops rather than guessing when the game
    does something it does not support yet. The tests cover the paths
    above, not every mission or menu choice. Under WHDLoad a stop shows the
@@ -118,6 +119,11 @@
 
  History:
  --------
+ version 0.3 (25.11.2026):
+ - faster: the translated code is partly optimized; on a 68030 a busy
+   combat film plays at 240 ms per frame, 320 ms in 0.2, and flight is
+   much faster; the intro is still slow
+
  version 0.2 (23.11.2026):
  - digitized speech: the voices of the PC version with a Sound Blaster
    now play, in the intro, the menus and the Tour of Duty

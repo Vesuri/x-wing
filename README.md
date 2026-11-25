@@ -11,12 +11,12 @@ original's VGA version (320×200, 256 colours) on AGA, set up as on a PC with a 
 Blaster: its AdLib music and sound effects are resynthesised on Paula, and its digitized
 speech plays on Paula.
 
-Current Amiga release: **0.2 (23.11.2026), an early alpha**.
+Current Amiga release: **0.3 (25.11.2026), an early alpha**.
 
-## What to expect from 0.2
+## What to expect from 0.3
 
-0.2 runs the whole game, with speech, but nothing has been optimized yet. It is for people who
-want to try the port early and report what they find.
+0.3 runs the whole game, with speech, and is partly optimized. It is for people who want to
+try the port early and report what they find.
 
 - **Checked against the original:** the port was run on an emulated A1200 with a 68030
   and compared step by step with the PC original under DOSBox-X. At each of these points
@@ -27,8 +27,10 @@ want to try the port early and report what they find.
   - a training flight, a mission flight and a Tour of Duty battle;
   - the film room and film playback, including a combat film;
   - the exit to DOS.
-- **Speed:** not optimized and not yet measured. Expect it to be slow, above all in
-  flight. Speed is the next step of the port.
+- **Speed:** partly optimized. Expect the intro to be slow on a 68030, above all its Star
+  Destroyer scene. Flight is much faster than in 0.2, though busy scenes with many ships
+  still slow down: a busy combat film plays at 240 ms per frame on a 68030, against 320 ms
+  in 0.2. Speed is still the port's current step.
 - **Unsupported paths stop the game:** where the game does something the port does not
   support yet, it stops rather than guessing, and the tests do not cover every mission
   or menu choice.
@@ -61,7 +63,7 @@ want to try the port early and report what they find.
   and `READ.ME` from disk 1. Other releases, such as the CD-ROM editions, are not
   supported.
 
-Extract `X-Wing-0.2.lha`, open its **X-Wing Install** drawer and run **Install**. Select
+Extract `X-Wing-0.3.lha`, open its **X-Wing Install** drawer and run **Install**. Select
 the destination and the drawer with the disks. Every file is checked, and damaged or
 other disks are refused. The game is installed as the original installer sets it up for
 a Sound Blaster, with digitized speech. Updating keeps pilots and films. 0.1 installed

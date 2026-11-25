@@ -1,7 +1,7 @@
 ; X-Wing WHDLoad installation. Commodore Installer V43 or newer.
 ; Copied from Secret Weapons of the Luftwaffe's (manifest/references.tsv) and adapted.
 ; File-install flow with WHDLoad Install Template / RAY Pokeri conventions.
-; $VER: Install 0.2 (23.11.2026)
+; $VER: Install 0.3 (25.11.2026)
 (set @app-name "X-Wing")
 (set #prefix "X-Wing")
 (if (< @installer-version (* 43 65536))
