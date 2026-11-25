@@ -153,6 +153,19 @@ def ems_ds_edge(kind):
     return f
 
 
+def ems_cold_x(self, out):
+    """An EMS guard's out-of-line path neither saves nor restores the CCR, so it
+    loses X where X carries the guest CF into the instruction."""
+    res = []
+    for k, x in enumerate(out):
+        if x == "\tmove.w ccr,-(sp)" and k and re.match(r"^\w+_[ed]x\d+:$", out[k - 1]):
+            continue
+        if x == "\tmove.w (sp)+,ccr" and k + 1 < len(out) and re.match(r"^\tbra \w+_[ed]r\d+$", out[k + 1]):
+            continue
+        res.append(x)
+    return res
+
+
 def ems_string_one(self, out):
     """An EMS guard leaves a REP string's count out of its bytes (CX ignored)."""
     return [x for x in out if x != "\tadd.l d1,d6"]
@@ -667,6 +680,7 @@ SABOTAGE = [
     ("EMS DS guard misses D001h in listed code", ems_ds_edge("dx"), "boundary"),
     ("EMS DS exit check misses D001h", ems_ds_edge("dy"), "boundary"),
     ("EMS string guard ignores CX", ems_string_one, "boundary"),
+    ("EMS guard's out-of-line path loses X", ems_cold_x, "boundary"),
     ("EMS inline cache hit ignores the segment", sub(r"^\tbne\.s (\w+_[ed]x\d+m)$", "\tnop"), "boundary"),
     ("EMS inline cache hit ignores the first offset", sub(r"^\tbcs\.s (\w+_[ed]x\d+m)$", "\tnop"), "boundary"),
     ("EMS guard held across an ES change", "ems hold es", "boundary"),

@@ -586,6 +586,14 @@ class Lowering:
         return self.out
 
     # -- EMS model: the frame's pages are copied in on first access (ems.c) --
+    def ccr_live_in(self) -> bool:
+        """Whether a flag valid in the CCR at this instruction's entry is still
+        read: by the instruction itself, or live after it (Ctx.live) and not
+        certainly written by it. Code run before the instruction's own lowering
+        (a guard) must keep the CCR only then."""
+        must, _ = writes(self.i)
+        return bool(self.c.ccr_in & (reads(self.i, self.c.program) | (set(self.c.live) - must)))
+
     def ems_guard(self, seg: str) -> None:
         """Before an instruction that accesses memory through `seg` (ES; DS in
         listed code, Ctx.ems_ds): when it is D001h or above (its window may meet
@@ -602,7 +610,10 @@ class Lowering:
         inline whatever DF is. So the base is plain only while the
         segment is below D001h; every access at or above runs right after its
         guard (a label: no formation carries over it, reuse.py). Keeps every
-        other register, X, and the CCR where flags enter in it. Elsewhere DS
+        other register but d7 (free: the guard opens the instruction, and a
+        REP string's path still saves it), X where it carries the guest CF in
+        (Ctx.x_in), and the CCR where a flag in it is still read
+        (ccr_live_in). Elsewhere DS
         and SS are checked at their loads instead (putseg). Copied from Wing
         Commander 2 (c31004f); the string range and the DS guard are X-Wing's."""
         i = self.i
@@ -624,7 +635,14 @@ class Lowering:
         tag = "ex" if seg == "es" else "dx"
         k = sum(1 for x in self.cold if x.startswith(f"{self.c.label}_{tag}"))
         cold, back = f"{self.c.label}_{tag}{k}", f"{self.c.label}_{tag[0]}r{k}"
-        keep = bool(self.c.ccr_in)
+        # The CCR is saved around the guard only when a flag valid in it at entry
+        # is still read: by this instruction, or live after it and not written
+        # by it (flags.py: a jump chain's or provenance reader's flags are live).
+        keep = self.ccr_live_in()
+        # X (not guest state) matters only when it carries the guest CF into
+        # this instruction (Ctx.x_in); the out-of-line path's arithmetic and the
+        # runtime call change it, the hot path's cmp and bcc do not.
+        save = not keep and self.c.x_in
         # cmp and bcc keep X; emitted directly (the X whitelist has no branches)
         if keep:
             self.out.append("\tmove.w ccr,-(sp)")
@@ -636,14 +654,16 @@ class Lowering:
         hot, x_cf, self.out = self.out, self.x_cf, [f"{cold}:"]
         reg = "a1" if seg == "es" else "a3"
         cache = f"rt_ems_cache_{seg}"
-        if not keep:                      # X (the hot path saved a live CCR)
+        if save:
             self.e("move.w ccr,-(sp)")
         if not string or single:
             # The one-entry cache's hit inline (rt_entry.s EMS_GUARD, ems.c
             # rt_ems_cache_es/ds): the same segment and the access's bytes
             # within the cached offsets give the cached base; d6 untouched.
+            # d7 is free: the guard opens the instruction's lowering (Lowering.run)
+            # and its label ends any formation held in d7 (reuse.py), so the
+            # access's own formation follows the label.
             n = i.width // 8 if single else 1 if xlat else max(1, mems[0].width // 8)   # far: 4
-            self.e("move.l d7,-(sp)")
             if single:
                 self.e("moveq #0,d7")
                 self.e(f"move.w {index[0]},d7")
@@ -662,7 +682,9 @@ class Lowering:
             self.e(f"cmp.l {cache}+4,d7")
             self.e(f"bhi.s {cold}s")
             self.e(f"movea.l {cache}+8,{reg}")
-            self.e(f"bra.s {cold}d")
+            if save:
+                self.e("move.w (sp)+,ccr")
+            self.e(f"bra {back}")         # the hit returns at once
             self.out.append(f"{cold}s:")
             self.e(f"subq.l #{n},d7")
             self.out.append(f"{cold}m:")
@@ -670,9 +692,7 @@ class Lowering:
             self.e(f"moveq #{n},d6")
             self.e(f"jsr {'rt_ems_es_miss' if seg == 'es' else 'rt_ems_ds_miss'}")
             self.e("move.l (sp)+,d6")
-            self.out.append(f"{cold}d:")
-            self.e("move.l (sp)+,d7")
-            if not keep:
+            if save:
                 self.e("move.w (sp)+,ccr")
             self.e(f"bra {back}")
             self.cold += self.out
@@ -711,7 +731,7 @@ class Lowering:
             self.out.append(f"{cold}w:")
         self.e(f"jsr {'rt_ems_es' if seg == 'es' else 'rt_ems_ds'}")
         self.e("movem.l (sp)+,d6-d7")
-        if not keep:
+        if save:
             self.e("move.w (sp)+,ccr")
         self.e(f"bra {back}")
         self.cold += self.out

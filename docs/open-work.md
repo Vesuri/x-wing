@@ -53,24 +53,24 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
    3. Instruments. The film is re-profiled for the costs only the Amiga has: C2P, the present
       and the FM render. The reference's own frame interval in the film and the intro is
       the ceiling. An intro meter window (which milestone: the owner's choice).
-   9. The EMS guard's cache hit for ES on the main path: a cache hit leaves the main path
-      for the out-of-line check (`_ex`), about 90 model cycles per hit; 534,386 entries and
-      518 misses in m17's window, 11.1% of its generated model cycles, and the inline D001h
-      check another 6.3% (DERIVED: `tools/overhead_census.py` on step 7's meter). The edge
-      setup (FLIGHT.OVL+21E61), the vertex transform (+20D5F) and the intro's compare-and-copy
-      take it.
-   10. Video checks: stores through SS unchecked (owner decision 2026-11-25, `docs/design.md`),
+   10. The EMS guard's cache hit for ES on the main path: a hit still leaves the main path
+       for the out-of-line check (`_ex`), whose labels take 7.3% of m17's generated model
+       cycles (31.5M, about 59 per entry; MEASURED per label by the meter), and the inline
+       D001h check with its CCR saves another 6.2% (DERIVED: `tools/overhead_census.py` on
+       step 10's meter). The cache moved into the state block, or the hit tested on the
+       main path at the sites that take it most: the edge setup (FLIGHT.OVL+21E61), the
+       vertex transform (+20D5F) and the intro's compare-and-copy.
+   11. Video checks: stores through SS unchecked (owner decision 2026-11-25, `docs/design.md`),
        and the ES check decided once at each ES load and skipped after an EMS cache hit. The
        check is 7.8% of m17's generated model cycles: 662,484 checks through SS, none of
        them marking, and 475,059 through ES, 33,051 of them marking (DERIVED, as above).
-   11. Smaller translator items, each priced with `tools/overhead_census.py` or
-       `tools/lowering_cost.py` first: the CCR saved around a guard only when a flag it holds
-       is live (849,525 saves in m17, at most about 2%); the cell walk's reset (1.44%: 97
-       resets, each clearing 7,711 longs); the reversed index address reused while its
+   12. Smaller translator items, each priced with `tools/overhead_census.py` or
+       `tools/lowering_cost.py` first: the cell walk's reset (1.44%: 97 resets, each
+       clearing 7,711 longs); the reversed index address reused while its
        register is unchanged (the address build is 10.9%); string flags through `G_FL` and
        the DF test per string instruction; REP's fixed setup at short counts; near calls
        and returns.
-   12. Hand natives (owner decision 2026-11-25, `docs/design.md`), each with its
+   13. Hand natives (owner decision 2026-11-25, `docs/design.md`), each with its
        `annotations/hle.csv` row and oracle, the intro's first:
        - the intro's compare-and-copy, FRONTEND 1A5E:0119 (about 39% of the scene with
          its runtime calls): longs compared, changed rows marked once;
@@ -81,12 +81,12 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
          the scaled sprite draw with its planted fill (+235FE and +24A4F, 7.4%) and the
          starfield (+1B0C8, 2.5%).
        The Macintosh survey found no donor for them ([Macintosh donors](mac-donors.md)).
-   13. The Amiga platform's costs, where the film's profile shows them: the FM render
+   14. The Amiga platform's costs, where the film's profile shows them: the FM render
        (`render` 2.6%, `fm_field` 1.7%), the palette (`setPalette24Bit` 1.3%,
        `buildPalette` 1.0%) and C2P.
-   14. The 68040 check and gate 7.
+   15. The 68040 check and gate 7.
 
-   Steps 9–11 may bring the film to about 200 ms: the census puts about 28% of its
+   Steps 10–12 may bring the film to about 200 ms: the census puts about 28% of its
    generated model cycles in translation overhead (DERIVED). 100 ms needs the natives.
 2. Postponed (owner decision 2026-11-04) until P8 takes a donor; the survey found none for
    the film's hot code ([Macintosh donors](mac-donors.md)): make the Macintosh reference

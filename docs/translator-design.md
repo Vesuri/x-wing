@@ -288,7 +288,10 @@ diffs directly); relocated words in instructions are emitted as
   (`EMS_GUARD`, `ems.c`) holds the last decided segment, the offsets of the run of
   adjacent frame pages around its access that share its displacement, and the
   base, emptied at every change of the store mapping; the out-of-line
-  path checks it inline for an operand's access, and for one string element
+  path (out of line, the CCR saved around the main path's check only when a flag
+  valid in it is still read, `lower.ccr_live_in`, and X kept out of line only where
+  it carries the guest CF in; a hit returns at once, d7 free as the guard opens
+  the instruction) checks it inline for an operand's access, and for one string element
   through one operand (LODS, STOS, SCAS, a MOVS or CMPS operand alone in its
   segment, no REP: its own bytes, whatever DF is), and calls `rt_ems_es_miss` only
   on a miss (any other string calls `rt_ems_es`, which checks it itself). So a1 is the
@@ -323,9 +326,12 @@ diffs directly); relocated words in instructions are emitted as
   and `emsds` cases at the D001h edges, with the cache empty, covering the access
   or missing it by its first byte, its last or the segment, the `emshold` blocks
   (each access at D001h or above guarded or within the last guard's bytes at the
-  same ES), and their sabotage plants (the guards, the exit check, a string's
-  count, the inline hit's three compares, a guard held across an ES change or a
-  write of its offset's register), by `tests/host_run.py`'s routing check on the
+  same ES; a CMP's flags across an ES access to their JNE, an ADD's CF in X across
+  an ADC's guard, the stub of the EMS calls returning the CCR inverted as the
+  runtime keeps none), and their sabotage plants (the guards, the exit check, a
+  string's count, the inline hit's three compares, a guard held across an ES
+  change or a write of its offset's register, an out-of-line path losing X), by
+  `tests/host_run.py`'s routing check on the
   run's own image (`ems_guard_problems`: a range within a page, across
   consecutive and across other store pages, then an access in each page through
   the cache; sabotage `ems-cache-run` takes every page above into the run), and

@@ -332,6 +332,11 @@ class M68k:
                 if n.endswith("_miss"):     # the runtime's base: plain, as below the frame
                     a, v = ("a1", es) if n == "rt_ems_es_miss" else ("a3", ds)
                     self.e.reg_write(U.M68K[a], TOP - v * 16 - 0x7FFF)
+                if n in ("rt_ems_es", "rt_ems_ds", "rt_ems_es_miss", "rt_ems_ds_miss"):
+                    # rt_entry.s EMS_GUARD keeps no CCR ("the callers keep d6, d7 and
+                    # the CCR"): X N Z V C come back inverted, so a caller that needs
+                    # them and did not save them shows
+                    self.e.reg_write(U.M68K["sr"], self.r("sr") ^ 0x1F)
                 self.e.reg_write(U.M68K["pc"], addr + 2)
             elif n in ("rt_out8", "rt_out16"):
                 w = 8 if n == "rt_out8" else 16
