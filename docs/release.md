@@ -150,6 +150,20 @@ equal to `871ea0a`'s:
 | `X-Wing.slave` | `47a42c876410566e6785955bd09c7578a3a50af62e0b80caa4ee182eed55801f` |
 | `X-WingInstallData` | `183256f446bf994ce293fdba069cd7eaf8b7eaac10fa66e64eec35cd06e9f112` |
 
+### 0.3
+
+P8 to step 11, partly optimized (`docs/design.md`, "Release 0.3"), on 0.2's gate:
+`make release-repro`, `make test-whdload` (on the a1200-030 preset), the installer's
+seven modes and `make test-release-workbench`. Built by `make release` on 25.11.2026, the
+source equal to `aff4f24`'s:
+
+| Artifact | SHA-256 |
+|---|---|
+| `X-Wing-0.3.lha`, 1,472,568 bytes | `a08309f83cf71708652ed5fea6e17b44d446ff96ae7e0c27a304ba42310b2b7f` |
+| `X-Wing` (exe) | `ebfd06e0e4c2d95debd458c591e9c1de7fa5080f62dcc833cc873e76821b4780` |
+| `X-Wing.slave` | `96c93b424a8ab6a6abbb6804c831f5d85cfa4be7ed4ce8b923f28227d644a378` |
+| `X-WingInstallData` | `115af9814ad76f04d35bc6eab99f08151f30fdb5fdcb9214e03c935f49f3a5ed` |
+
 ## Original data
 
 The floppies' files are pinned in `manifest/dos-disks.sha256` and their tree in
