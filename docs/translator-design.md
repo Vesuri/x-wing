@@ -696,7 +696,8 @@ handler reads: sync for the declared span).
   value a segment holds changes nothing, R30), and so does a
   runtime store into a region (`rt_wrote`; bounds and segment limit from the
   program). A dropped cache is cleared at the next walk with no segment
-  reaching a region; until then walks are exact, and so is the rest of a walk
+  reaching a region, only from the lowest to the highest offset decoded since
+  the last clear; until then walks are exact, and so is the rest of a walk
   whose reload loads such a DS. Bytes not covered are read when reached: a
   RET returns, other cells are decoded or walked exactly. Unresolved
   near indirect transfers range-check every walk in their module and CS,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The generated code's cycles by role, from a cost meter result (docs/perf-method.md).
 
-  overhead_census.py METER.json [--top N] [--role ROLE] [--json OUT]
+  overhead_census.py METER.json [--top N] [--role ROLE] [--match REGEX ...] [--json OUT]
 
 Input: a tools/cost_meter.py result (`instruction_counts`: every executed generated 68k
 instruction with its label, offset, mnemonic, operands and executions; `labels`: each
@@ -31,6 +31,10 @@ features: one instruction, its bytes (from the offsets, the last from the label'
 a read for a memory source operand, a write for a memory destination, and its taken
 transfers (`taken_counts`). Per role the totals are therefore DERIVED, not measured;
 per label they equal the meter's.
+
+--match REGEX (repeatable): also the executions and cycles of the generated
+instructions whose `mnemonic operands` text matches, each with the instruction
+that follows it (`+next`, e.g. a test's branch), for pricing a lowering's piece.
 """
 from __future__ import annotations
 
@@ -150,6 +154,7 @@ def main() -> int:
     ap.add_argument("meter", type=Path)
     ap.add_argument("--top", type=int, default=12)
     ap.add_argument("--role", help="also list the guest routines' labels of this role")
+    ap.add_argument("--match", action="append", default=[], type=re.compile)
     ap.add_argument("--json", type=Path)
     args = ap.parse_args()
     d = json.loads(args.meter.read_text())
@@ -163,6 +168,7 @@ def main() -> int:
             by_label[r[0]].append(r)
     cycles, execs = Counter(), Counter()
     per_label_role: dict[str, Counter] = defaultdict(Counter)
+    matched, matched_x, matched_next = Counter(), Counter(), Counter()
     total_cycles = 0.0
     for lab, rows in by_label.items():
         rows.sort(key=lambda r: r[1])
@@ -190,6 +196,13 @@ def main() -> int:
             est.append(r[4] * (W["insn"] + size * W["byte"] + reads * W["read"] +
                                writes * W["write"]) + tk * W["taken"])
         scale = meta["cycles"] / sum(est) if sum(est) else 0.0
+        for k, r in enumerate(rows):
+            for pat in args.match:
+                if pat.search(f"{r[2]} {r[3]}"):
+                    matched[pat.pattern] += est[k] * scale
+                    matched_x[pat.pattern] += r[4]
+                    if k + 1 < len(rows):
+                        matched_next[pat.pattern] += est[k + 1] * scale
         for r, role, e in zip(rows, roles, est):
             c = e * scale
             cycles[role] += c
@@ -205,6 +218,10 @@ def main() -> int:
     for role, c in cycles.most_common():
         print(f"{role:18} {execs[role]:>12,} {c:>14,.0f} {c / gen:>12.1%} "
               f"{c / d['guest_instructions']:>14.2f}")
+    for pat in args.match:
+        p = pat.pattern
+        print(f"match {p!r}: {matched_x[p]:,} execs, {matched[p]:,.0f} cycles ({matched[p] / gen:.2%}); "
+              f"+next {matched[p] + matched_next[p]:,.0f} ({(matched[p] + matched_next[p]) / gen:.2%})")
     if args.role:
         tops = sorted(per_label_role.items(), key=lambda kv: -kv[1][args.role])[:args.top]
         print(f"\nlabels by {args.role}:")

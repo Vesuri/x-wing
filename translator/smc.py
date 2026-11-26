@@ -195,7 +195,8 @@ def tables(label: str, first_ip: int, last_ip: int) -> list[str]:
     clear."""
     n = (span(first_ip, last_ip) + 3) & ~3
     return ["\tcnop\t0,4", f"{label}_rec:\tds.l\t{n}", "\tds.l\t1", f"{label}_cov:\tds.b\t{n}",
-            f"{label}_tmp:\tds.w\t{n // 4 + 1}", f"{label}_plant:\tds.w\t1"]
+            f"{label}_tmp:\tds.w\t{n // 4 + 1}", f"{label}_plant:\tds.w\t1",
+            f"{label}_lo:\tds.w\t1", f"{label}_hi:\tds.w\t1"]
 
 
 def expose(labels: list[str]) -> list[str]:
@@ -281,13 +282,28 @@ def cached(label: str, cs: str, first_ip: int, last_ip: int, window: tuple[int, 
              ".s0:\tmoveq #-1,d2", "\tbra .s1"]     # the planted RET lies before the entry
     lines += [f"{label}_xo:\tadd.w #{hx(first_ip)},d7", f"\tbra {label}_x",
               # a dropped cache: cleared when no segment reaches a region
-              f"{label}_reset:", *window_reset(label, window),
-              f"\tlea {label}_rec,a0", f"\tmove.w #{hx(n * 5 // 4)},d6",
-              ".c:\tclr.l (a0)+", "\tdbra d6,.c", "\tmoveq #-1,d6", f"\tmove.w #$ffff,{label}_plant",
-              f"\tbra {label}_go"]
-    lines += _decode(label, lin, last, mov, rel, rfixed)
+              f"{label}_reset:", *window_reset(label, window), *_clear(label, n),
+              "\tmoveq #-1,d6", f"\tmove.w #$ffff,{label}_plant", f"\tbra {label}_go"]
+    lines += _decode(label, lin, last, mov, rel, rfixed, n)
     lines += _hooks(label, lin, span(first_ip, last_ip))
     return lines
+
+
+def _clear(label: str, n: int) -> list[str]:
+    """Clear what the decodes wrote since the last clear: records and cover bytes
+    of the offsets from `_lo` up to `_hi` (`_decode`: `_lo` holds n - the lowest
+    offset, so both start at 0, nothing decoded), the cover bytes by whole longs.
+    Keeps every register but d6 and a0."""
+    return ["\tmovem.l d0-d1,-(sp)", f"\tmove.w #{hx(n)},d1", f"\tsub.w {label}_lo,d1",
+            f"\tmove.w {label}_hi,d0", "\tsub.w d1,d0", "\tble.s .cx",
+            f"\tlea {label}_rec,a0", "\tlea (a0,d1.w*4),a0", "\tbsr.s .cl",
+            f"\tmove.w {label}_hi,d0", "\taddq.w #3,d0", "\tlsr.w #2,d0", "\tlsr.w #2,d1",
+            "\tsub.w d1,d0", f"\tlea {label}_cov,a0", "\tlea (a0,d1.w*4),a0", "\tbsr.s .cl",
+            f".cx:\tclr.l {label}_lo", "\tmovem.l (sp)+,d0-d1", "\tbra.s .cz",
+            # d0 longs (> 0) from a0 up, eight at a time after the remainder
+            ".cl:\tmoveq #7,d6", "\tand.w d0,d6", "\tlsr.w #3,d0", "\tneg.w d6",
+            "\tjmp .ce(pc,d6.w*2)"] + [".cc:\tclr.l (a0)+"] + ["\tclr.l (a0)+"] * 7 + [
+            ".ce:\tdbra d0,.cc", "\trts", ".cz:"]
 
 
 def _fixed_checks(code: bytes, fixed: list[int], miss: str) -> list[str]:
@@ -305,7 +321,8 @@ def _fixed_checks(code: bytes, fixed: list[int], miss: str) -> list[str]:
     return out
 
 
-def _decode(label: str, lin: str, last: int, mov: bytes, rel: bytes, rfixed: list[int]) -> list[str]:
+def _decode(label: str, lin: str, last: int, mov: bytes, rel: bytes, rfixed: list[int],
+            n: int) -> list[str]:
     """Match cells from offset d7 (not covered) while each is a mov or reload
     cell starting by the bound whose bytes are not covered; then each new mov
     cell's run end, last first, and the runs of the cells before d7 that now
@@ -330,7 +347,10 @@ def _decode(label: str, lin: str, last: int, mov: bytes, rel: bytes, rfixed: lis
                "\tmove.w #$0101,(8,a1,d5.w)", "\tmoveq #-1,d0", f"\tmove.w {-w1 - 1}(a4),d0",
                "\tmove.l d0,(a2,d5.w*4)", f"\tmove.w {-w2 - 1}(a4),(6,a2,d5.w*4)",
                f"\tadd.w #{len(rel)},d5", "\tbra .dl",
-               ".de:\tcmpa.l a3,a5", "\tbeq.s .dx",
+               # the extent the next clear covers (_clear)
+               f".de:\tcmp.w {label}_hi,d5", "\tbls.s .eh", f"\tmove.w d5,{label}_hi",
+               f".eh:\tmove.w #{hx(n)},d6", "\tsub.w d7,d6", f"\tcmp.w {label}_lo,d6", "\tbls.s .el",
+               f"\tmove.w d6,{label}_lo", ".el:\tcmpa.l a3,a5", "\tbeq.s .dx",
                ".df:\tmove.w -(a5),d6", "\tbsr.s .chain", "\tcmpa.l a3,a5", "\tbne.s .df",
                "\tmove.w d7,d6",
                ".do:\tsubq.w #4,d6", "\tbmi.s .dx", "\ttst.l (a2,d6.w*4)", "\tble.s .dx",

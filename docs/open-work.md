@@ -62,12 +62,16 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
        and the cache in the state block about 8 bytes per hit, 4.5M (1.0%) (DERIVED from
        the cost model's weights and the meter's counts per site; every one of m17's 154
        sites always sees an EMS segment), before the larger loops' cost.
-   12. Smaller translator items, each priced with `tools/overhead_census.py` or
-       `tools/lowering_cost.py` first: the cell walk's reset (1.44%: 97 resets, each
-       clearing 7,711 longs); the reversed index address reused while its
-       register is unchanged (the address build is 10.9%); string flags through `G_FL` and
-       the DF test per string instruction; REP's fixed setup at short counts; near calls
-       and returns.
+   12. Smaller translator items, priced on step 11's m17 meter with
+       `tools/overhead_census.py --match` and the meter's forms (DERIVED; the owner's call
+       which, if any, to take): the DF test before each string instruction with its
+       branch, 0.60% of the generated model cycles (277,303 tests; six STD sites, so
+       dropping it needs DF proved clear at the site); the return check after each near
+       call, 0.9% (needs the callee's return proved); string flags through `G_FL`, part
+       of its 0.64% of stores and 0.37% of loads (SCASB and SCASW about a third of the
+       executions); REP's fixed setup at short counts, part of REP MOVSW's and REP
+       STOSW's 1.53% (MEASURED, the meter's forms). An index address that repeats the
+       one d7 holds is already dropped within a run (`translator/reuse.py`, R13).
    13. Hand natives (owner decision 2026-11-25, `docs/design.md`), each with its
        `annotations/hle.csv` row and oracle, the intro's first:
        - the intro's compare-and-copy, FRONTEND 1A5E:0119 (about 39% of the scene with
@@ -84,8 +88,9 @@ scenes (owner decision 2026-11-22, [DOS reference](dos-reference.md#sound-blaste
        `buildPalette` 1.0%) and C2P.
    15. The 68040 check and gate 7.
 
-   Steps 10 and 12 may bring the film to about 200 ms: the census puts about 28% of its
-   generated model cycles in translation overhead (DERIVED). 100 ms needs the natives.
+   The census puts about 28% of the film's generated model cycles in translation
+   overhead (DERIVED), but steps 10 and 12 together are priced at about 6% of m17; the
+   film's target needs the natives.
 2. Postponed (owner decision 2026-11-04) until P8 takes a donor; the survey found none for
    the film's hot code ([Macintosh donors](mac-donors.md)): make the Macintosh reference
    reach named milestones and map its 68k CODE.
